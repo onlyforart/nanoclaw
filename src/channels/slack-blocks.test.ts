@@ -59,8 +59,8 @@ describe('markdownToBlocks', () => {
     });
     const text = (blocks[0] as any).text.text;
     expect(text).toContain('```');
-    expect(text).toContain('Name');
-    expect(text).toContain('Value');
+    expect(text).toContain('NAME');
+    expect(text).toContain('VALUE');
   });
 
   it('preserves code blocks as-is', () => {
@@ -122,15 +122,16 @@ describe('splitIntoSections', () => {
 });
 
 describe('tableToCodeBlock', () => {
-  it('renders header row bold above code block with data rows inside', () => {
+  it('uppercases header row inside code block', () => {
     const table = '| Name | Value |\n|------|-------|\n| A | 1 |\n| BB | 22 |';
     const result = tableToCodeBlock(table);
-    // Header is bold, outside code block
-    expect(result).toMatch(/^\*Name/);
-    // Data rows inside code block
-    expect(result).toContain('```');
+    expect(result).toMatch(/^```\n/);
+    expect(result).toMatch(/\n```$/);
+    expect(result).toContain('NAME');
+    expect(result).toContain('VALUE');
+    // Data rows unchanged
     expect(result).toContain('BB');
-    // No separator row of dashes between header and data
+    // No separator row of dashes
     expect(result).not.toMatch(/^-+\s+-+$/m);
   });
 
@@ -139,9 +140,8 @@ describe('tableToCodeBlock', () => {
     const result = tableToCodeBlock(table);
     // No markdown-style separator (|---|---| or alignment markers)
     expect(result).not.toMatch(/[-:]{3,}/);
-    // Bold header + code block with data
     const lines = result.split('\n').filter((l) => l.trim());
-    expect(lines.length).toBe(4); // bold header, ```, data, ```
+    expect(lines.length).toBe(4); // ```, header, data, ```
   });
 });
 
