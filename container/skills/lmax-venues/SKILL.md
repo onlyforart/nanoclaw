@@ -18,7 +18,7 @@ A venue can belong to multiple categories. For example, "FIAT UAT" is both a FIA
 
 ## How to Check Prices
 
-Open the feed status page: `https://monitor-prod1.lmaxglobal.io/feedstatus`
+Open the feed status page: `https://monitor-prod1.lmaxglobal.io/feedstatus`. If that fails, try `https://monitor-prod2.lmaxglobal.io/feedstatus` - they produce the same output. 
 
 This page shows the state of price feeds for various trading venues (listed down the page, with names on the left) and for various instances of the price feed servers (columns, left to right).
 
@@ -36,7 +36,7 @@ Only report a venue as having an issue if it is **unexpectedly red**. Specifical
 - **Persistently orange** → not an error, but may be reported on
 - **Unexpectedly green** (e.g. during a maintenance window) → NOT an error, do not report
 - **UAT venues not pricing** → NOT an error, do not report (UAT venues may be stopped at any time)
-- **Any Digital PRX venue** (e.g. Digital PR11, Digital PR12, etc.) → disregard entirely, any status is expected
+- **Digital PRX** and **Digital PR11** → disregard entirely, any status is expected
 
 ## Trading Day
 
@@ -86,6 +86,6 @@ To check whether a venue should currently be showing live prices:
    - **Perps London**: Is it a biweekly Friday (14-day cycle from 13 Mar 2026) between 17:05 and 17:30? → maintenance
    - **FIAT venues** (excluding LD4 T1, SG1 T1, LD6 Global, LDN MTF): Is it between Friday 17:05 and Sunday 17:05? → maintenance
 4. If the venue is a **UAT** venue (name ends in "UAT"), it may be stopped at any time — this is never an error.
-5. If the venue is a **Digital PRX** venue (any venue matching "Digital PR*"), disregard — any status is expected.
+5. If the venue is **Digital PRX** or **Digital PR11**, disregard — any status is expected.
 6. If none of the maintenance windows apply, the venue is expected to be green. If it is red, this is an error and should be reported.
 7. If a venue is green during a maintenance window, this is NOT an error — do not report it.
