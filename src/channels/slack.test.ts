@@ -594,7 +594,9 @@ describe('SlackChannel', () => {
 
       expect(currentApp().client.chat.postMessage).toHaveBeenCalledWith({
         channel: 'D9876543210',
-        blocks: [{ type: 'section', text: { type: 'mrkdwn', text: 'DM message' } }],
+        blocks: [
+          { type: 'section', text: { type: 'mrkdwn', text: 'DM message' } },
+        ],
         text: 'DM message',
       });
     });
@@ -657,12 +659,16 @@ describe('SlackChannel', () => {
 
       expect(currentApp().client.chat.postMessage).toHaveBeenCalledWith({
         channel: 'C0123456789',
-        blocks: [{ type: 'section', text: { type: 'mrkdwn', text: 'First queued' } }],
+        blocks: [
+          { type: 'section', text: { type: 'mrkdwn', text: 'First queued' } },
+        ],
         text: 'First queued',
       });
       expect(currentApp().client.chat.postMessage).toHaveBeenCalledWith({
         channel: 'C0123456789',
-        blocks: [{ type: 'section', text: { type: 'mrkdwn', text: 'Second queued' } }],
+        blocks: [
+          { type: 'section', text: { type: 'mrkdwn', text: 'Second queued' } },
+        ],
         text: 'Second queued',
       });
     });
