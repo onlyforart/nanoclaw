@@ -5,7 +5,13 @@ import { CronExpressionParser } from 'cron-parser';
 
 import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { AvailableGroup } from './container-runner.js';
-import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
+import {
+  createTask,
+  deleteTask,
+  getTaskById,
+  updateRegisteredGroup,
+  updateTask,
+} from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
@@ -14,6 +20,10 @@ export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
+  updateGroup: (
+    jid: string,
+    updates: Partial<Pick<RegisteredGroup, 'model'>>,
+  ) => void;
   syncGroups: (force: boolean) => Promise<void>;
   getAvailableGroups: () => AvailableGroup[];
   writeGroupsSnapshot: (
@@ -161,10 +171,11 @@ export async function processTaskIpc(
     schedule_type?: string;
     schedule_value?: string;
     context_mode?: string;
+    model?: string;
     groupFolder?: string;
     chatJid?: string;
     targetJid?: string;
-    // For register_group
+    // For register_group / update_group
     jid?: string;
     name?: string;
     folder?: string;
@@ -262,12 +273,13 @@ export async function processTaskIpc(
           schedule_type: scheduleType,
           schedule_value: data.schedule_value,
           context_mode: contextMode,
+          model: data.model || null,
           next_run: nextRun,
           status: 'active',
           created_at: new Date().toISOString(),
         });
         logger.info(
-          { taskId, sourceGroup, targetFolder, contextMode },
+          { taskId, sourceGroup, targetFolder, contextMode, model: data.model },
           'Task created via IPC',
         );
       }
@@ -354,6 +366,8 @@ export async function processTaskIpc(
             | 'once';
         if (data.schedule_value !== undefined)
           updates.schedule_value = data.schedule_value;
+        if (data.model !== undefined)
+          updates.model = data.model || null;
 
         // Recompute next_run if schedule changed
         if (data.schedule_type || data.schedule_value) {
@@ -440,11 +454,42 @@ export async function processTaskIpc(
           added_at: new Date().toISOString(),
           containerConfig: data.containerConfig,
           requiresTrigger: data.requiresTrigger,
+          model: data.model || undefined,
         });
       } else {
         logger.warn(
           { data },
           'Invalid register_group request - missing required fields',
+        );
+      }
+      break;
+
+    case 'update_group':
+      // Only main group can update groups
+      if (!isMain) {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized update_group attempt blocked',
+        );
+        break;
+      }
+      if (data.jid) {
+        const group = registeredGroups[data.jid];
+        if (!group) {
+          logger.warn(
+            { jid: data.jid, sourceGroup },
+            'Group not found for update',
+          );
+          break;
+        }
+        const groupUpdates: Partial<Pick<RegisteredGroup, 'model'>> = {};
+        if (data.model !== undefined) {
+          groupUpdates.model = data.model || undefined;
+        }
+        deps.updateGroup(data.jid, groupUpdates);
+        logger.info(
+          { jid: data.jid, sourceGroup, updates: groupUpdates },
+          'Group updated via IPC',
         );
       }
       break;
