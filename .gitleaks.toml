@@ -1,0 +1,58 @@
+# Gitleaks configuration for NanoClaw
+# Extends the built-in rules (Slack tokens, Anthropic keys, AWS, etc.)
+# with custom rules for messaging platform identifiers.
+
+[extend]
+# Use all built-in gitleaks rules
+useDefault = true
+
+# Custom rules for messaging platform identifiers
+[[rules]]
+id = "whatsapp-phone-number"
+description = "WhatsApp phone number in JID format"
+regex = '''\d{10,15}@s\.whatsapp\.net'''
+tags = ["pii", "whatsapp"]
+
+[[rules]]
+id = "whatsapp-group-jid"
+description = "WhatsApp group JID"
+regex = '''\d{15,}@g\.us'''
+tags = ["pii", "whatsapp"]
+[rules.allowlist]
+# Allow the example JID used in upstream docs/code
+regexes = ['''120363336345536173@g\.us''']
+
+[[rules]]
+id = "whatsapp-lid"
+description = "WhatsApp LID identifier"
+regex = '''\d{10,}:\d+@lid'''
+tags = ["pii", "whatsapp"]
+
+[[rules]]
+id = "slack-user-id"
+description = "Slack user ID (real, not test fixtures)"
+# Slack user IDs: U followed by alphanumeric chars that must include digits
+regex = '''(?:^|[^A-Z0-9_])U[A-Z0-9]*[0-9][A-Z0-9]*(?:[^A-Z0-9_]|$)'''
+tags = ["pii", "slack"]
+[rules.allowlist]
+# Allow test fixtures and example IDs in docs/comments
+regexes = ['''U_\w+''', '''U12345''', '''U9[^A-Z0-9]''']
+
+[[rules]]
+id = "slack-channel-id"
+description = "Slack channel ID (real, not test fixtures)"
+# Slack channel IDs: C followed by alphanumeric chars that must include digits
+regex = '''(?:^|[^A-Z0-9_])C0[A-Z0-9]{7,10}(?:[^A-Z0-9_]|$)'''
+tags = ["pii", "slack"]
+
+# Global allowlist — paths and patterns that are safe to skip
+[allowlist]
+paths = [
+  '''\.env\.example$''',
+  '''docs/SPEC\.md$''',
+  '''\.test\.ts$''',
+  '''\.test\.js$''',
+  '''SLACK_SETUP\.md$''',
+  '''SKILL\.md$''',
+  '''repo-tokens/''',
+]
