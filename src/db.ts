@@ -93,6 +93,15 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  // Add model column if it doesn't exist (migration for existing DBs)
+  try {
+    database.exec(
+      `ALTER TABLE scheduled_tasks ADD COLUMN model TEXT DEFAULT NULL`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
   // Add is_bot_message column if it doesn't exist (migration for existing DBs)
   try {
     database.exec(
@@ -114,6 +123,15 @@ function createSchema(database: Database.Database): void {
     // Backfill: existing rows with folder = 'main' are the main group
     database.exec(
       `UPDATE registered_groups SET is_main = 1 WHERE folder = 'main'`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
+  // Add model column to registered_groups if it doesn't exist (migration for existing DBs)
+  try {
+    database.exec(
+      `ALTER TABLE registered_groups ADD COLUMN model TEXT DEFAULT NULL`,
     );
   } catch {
     /* column already exists */
@@ -368,8 +386,8 @@ export function createTask(
 ): void {
   db.prepare(
     `
-    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, next_run, status, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, model, next_run, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `,
   ).run(
     task.id,
@@ -379,6 +397,7 @@ export function createTask(
     task.schedule_type,
     task.schedule_value,
     task.context_mode || 'isolated',
+    task.model || null,
     task.next_run,
     task.status,
     task.created_at,
@@ -410,7 +429,12 @@ export function updateTask(
   updates: Partial<
     Pick<
       ScheduledTask,
-      'prompt' | 'schedule_type' | 'schedule_value' | 'next_run' | 'status'
+      | 'prompt'
+      | 'schedule_type'
+      | 'schedule_value'
+      | 'next_run'
+      | 'status'
+      | 'model'
     >
   >,
 ): void {
@@ -436,6 +460,10 @@ export function updateTask(
   if (updates.status !== undefined) {
     fields.push('status = ?');
     values.push(updates.status);
+  }
+  if (updates.model !== undefined) {
+    fields.push('model = ?');
+    values.push(updates.model);
   }
 
   if (fields.length === 0) return;
@@ -554,6 +582,7 @@ export function getRegisteredGroup(
         container_config: string | null;
         requires_trigger: number | null;
         is_main: number | null;
+        model: string | null;
       }
     | undefined;
   if (!row) return undefined;
@@ -576,6 +605,7 @@ export function getRegisteredGroup(
     requiresTrigger:
       row.requires_trigger === null ? undefined : row.requires_trigger === 1,
     isMain: row.is_main === 1 ? true : undefined,
+    model: row.model || undefined,
   };
 }
 
@@ -584,8 +614,8 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
     throw new Error(`Invalid group folder "${group.folder}" for JID ${jid}`);
   }
   db.prepare(
-    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main, model)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     jid,
     group.name,
@@ -595,6 +625,7 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
     group.containerConfig ? JSON.stringify(group.containerConfig) : null,
     group.requiresTrigger === undefined ? 1 : group.requiresTrigger ? 1 : 0,
     group.isMain ? 1 : 0,
+    group.model || null,
   );
 }
 
@@ -608,6 +639,7 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
     container_config: string | null;
     requires_trigger: number | null;
     is_main: number | null;
+    model: string | null;
   }>;
   const result: Record<string, RegisteredGroup> = {};
   for (const row of rows) {
@@ -629,9 +661,30 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
       requiresTrigger:
         row.requires_trigger === null ? undefined : row.requires_trigger === 1,
       isMain: row.is_main === 1 ? true : undefined,
+      model: row.model || undefined,
     };
   }
   return result;
+}
+
+export function updateRegisteredGroup(
+  jid: string,
+  updates: Partial<Pick<RegisteredGroup, 'model'>>,
+): void {
+  const fields: string[] = [];
+  const values: unknown[] = [];
+
+  if (updates.model !== undefined) {
+    fields.push('model = ?');
+    values.push(updates.model || null);
+  }
+
+  if (fields.length === 0) return;
+
+  values.push(jid);
+  db.prepare(
+    `UPDATE registered_groups SET ${fields.join(', ')} WHERE jid = ?`,
+  ).run(...values);
 }
 
 // --- JSON migration ---

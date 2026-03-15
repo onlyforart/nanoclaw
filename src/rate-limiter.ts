@@ -110,9 +110,7 @@ export class RateLimiter {
     // Handle 429
     if (statusCode === 429) {
       const retryAfter = get('retry-after');
-      const retryMs = retryAfter
-        ? parseFloat(retryAfter) * 1000
-        : 10_000; // default 10s if no header
+      const retryMs = retryAfter ? parseFloat(retryAfter) * 1000 : 10_000; // default 10s if no header
       this.state.retryAfter = Date.now() + retryMs;
 
       logger.warn(

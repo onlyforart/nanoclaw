@@ -66,15 +66,9 @@ server.tool(
   'schedule_task',
   `Schedule a recurring or one-time task. The task will run as a full agent with access to all tools. Returns the task ID for future reference. To modify an existing task, use update_task instead.
 
-CONTEXT MODE - Choose based on task type:
-\u2022 "group": Task runs in the group's conversation context, with access to chat history. Use for tasks that need context about ongoing discussions, user preferences, or recent interactions.
-\u2022 "isolated": Task runs in a fresh session with no conversation history. Use for independent tasks that don't need prior context. When using isolated mode, include all necessary context in the prompt itself.
-
-If unsure which mode to use, you can ask the user. Examples:
-- "Remind me about our discussion" \u2192 group (needs conversation context)
-- "Check the weather every morning" \u2192 isolated (self-contained task)
-- "Follow up on my request" \u2192 group (needs to know what was requested)
-- "Generate a daily report" \u2192 isolated (just needs instructions in prompt)
+CONTEXT MODE - Default is "isolated". Only use "group" if the user explicitly asks for conversation context or subagents.
+\u2022 "isolated" (default): Task runs in a fresh session with no conversation history. Include all necessary context in the prompt itself. This is faster and avoids unnecessary subagent orchestration.
+\u2022 "group": Task runs in the group's conversation context, with access to chat history and subagents. Only use when the user specifically requests it.
 
 MESSAGING BEHAVIOR - The task agent's output is sent to the user or group. It can also use send_message for immediate delivery, or wrap output in <internal> tags to suppress it. Include guidance in the prompt about whether the agent should:
 \u2022 Always send a message (e.g., reminders, daily briefings)
@@ -89,7 +83,8 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
     prompt: z.string().describe('What the agent should do when the task runs. For isolated mode, include all necessary context here.'),
     schedule_type: z.enum(['cron', 'interval', 'once']).describe('cron=recurring at specific times, interval=recurring every N ms, once=run once at specific time'),
     schedule_value: z.string().describe('cron: "*/5 * * * *" | interval: milliseconds like "300000" | once: local timestamp like "2026-02-01T15:30:00" (no Z suffix!)'),
-    context_mode: z.enum(['group', 'isolated']).default('group').describe('group=runs with chat history and memory, isolated=fresh session (include context in prompt)'),
+    context_mode: z.enum(['group', 'isolated']).default('isolated').describe('isolated=fresh session (default, faster), group=runs with chat history and subagents (only if user explicitly requests it)'),
+    model: z.enum(['haiku', 'sonnet', 'opus']).optional().describe('Claude model class to use. Always uses the latest version of that class. Defaults to the CLI default (sonnet) if omitted.'),
     target_group_jid: z.string().optional().describe('(Main group only) JID of the group to schedule the task for. Defaults to the current group.'),
   },
   async (args) => {
@@ -132,13 +127,14 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
 
     const taskId = `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-    const data = {
+    const data: Record<string, string | undefined> = {
       type: 'schedule_task',
       taskId,
       prompt: args.prompt,
       schedule_type: args.schedule_type,
       schedule_value: args.schedule_value,
-      context_mode: args.context_mode || 'group',
+      context_mode: args.context_mode || 'isolated',
+      model: args.model || undefined,
       targetJid,
       createdBy: groupFolder,
       timestamp: new Date().toISOString(),
@@ -255,6 +251,7 @@ server.tool(
     prompt: z.string().optional().describe('New prompt for the task'),
     schedule_type: z.enum(['cron', 'interval', 'once']).optional().describe('New schedule type'),
     schedule_value: z.string().optional().describe('New schedule value (see schedule_task for format)'),
+    model: z.enum(['haiku', 'sonnet', 'opus']).optional().describe('Claude model class to use. Always uses the latest version. Set to clear and use default.'),
   },
   async (args) => {
     // Validate schedule_value if provided
@@ -290,6 +287,7 @@ server.tool(
     if (args.prompt !== undefined) data.prompt = args.prompt;
     if (args.schedule_type !== undefined) data.schedule_type = args.schedule_type;
     if (args.schedule_value !== undefined) data.schedule_value = args.schedule_value;
+    if (args.model !== undefined) data.model = args.model || undefined;
 
     writeIpcFile(TASKS_DIR, data);
 
@@ -307,6 +305,7 @@ Use available_groups.json to find the JID for a group. The folder name must be c
     name: z.string().describe('Display name for the group'),
     folder: z.string().describe('Channel-prefixed folder name (e.g., "whatsapp_family-chat", "telegram_dev-team")'),
     trigger: z.string().describe('Trigger word (e.g., "@Andy")'),
+    model: z.enum(['haiku', 'sonnet', 'opus']).optional().describe('Claude model class to use for this group. Always uses the latest version. Defaults to sonnet if omitted.'),
   },
   async (args) => {
     if (!isMain) {
@@ -316,12 +315,13 @@ Use available_groups.json to find the JID for a group. The folder name must be c
       };
     }
 
-    const data = {
+    const data: Record<string, string | undefined> = {
       type: 'register_group',
       jid: args.jid,
       name: args.name,
       folder: args.folder,
       trigger: args.trigger,
+      model: args.model || undefined,
       timestamp: new Date().toISOString(),
     };
 
@@ -329,6 +329,36 @@ Use available_groups.json to find the JID for a group. The folder name must be c
 
     return {
       content: [{ type: 'text' as const, text: `Group "${args.name}" registered. It will start receiving messages immediately.` }],
+    };
+  },
+);
+
+server.tool(
+  'update_group',
+  'Update settings for a registered group. Main group only. Currently supports changing the model.',
+  {
+    jid: z.string().describe('The chat JID of the group to update'),
+    model: z.enum(['haiku', 'sonnet', 'opus']).optional().describe('Claude model class to use. Always uses the latest version. Omit to keep current value.'),
+  },
+  async (args) => {
+    if (!isMain) {
+      return {
+        content: [{ type: 'text' as const, text: 'Only the main group can update groups.' }],
+        isError: true,
+      };
+    }
+
+    const data: Record<string, string | undefined> = {
+      type: 'update_group',
+      jid: args.jid,
+      model: args.model || undefined,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [{ type: 'text' as const, text: `Group ${args.jid} update requested.` }],
     };
   },
 );

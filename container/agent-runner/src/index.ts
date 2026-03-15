@@ -27,6 +27,7 @@ interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   assistantName?: string;
+  model?: string;
 }
 
 interface ContainerOutput {
@@ -416,6 +417,7 @@ async function runQuery(
     prompt: stream,
     options: {
       cwd: '/workspace/group',
+      model: containerInput.model || undefined,
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
       resumeSessionAt: resumeAt,
@@ -496,7 +498,7 @@ async function main(): Promise<void> {
     const stdinData = await readStdin();
     containerInput = JSON.parse(stdinData);
     try { fs.unlinkSync('/tmp/input.json'); } catch { /* may not exist */ }
-    log(`Received input for group: ${containerInput.groupFolder}`);
+    log(`Received input for group: ${containerInput.groupFolder} (model: ${containerInput.model || 'default'}, scheduled: ${containerInput.isScheduledTask || false})`);
   } catch (err) {
     writeOutput({
       status: 'error',
