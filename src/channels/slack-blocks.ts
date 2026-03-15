@@ -52,7 +52,9 @@ export function markdownToBlocks(text: string): KnownBlock[] {
           },
         } as HeaderBlock);
       } else {
-        blocks.push(makeSectionBlock(`*${convertInlineFormatting(section.content)}*`));
+        blocks.push(
+          makeSectionBlock(`*${convertInlineFormatting(section.content)}*`),
+        );
       }
     } else if (section.type === 'table') {
       blocks.push(makeSectionBlock(tableToCodeBlock(section.content)));
@@ -158,7 +160,10 @@ export function splitIntoSections(text: string): Section[] {
 function isTableLine(line: string): boolean {
   if (!line) return false;
   const trimmed = line.trim();
-  return trimmed.includes('|') && (trimmed.startsWith('|') || /^\S+\s*\|/.test(trimmed));
+  return (
+    trimmed.includes('|') &&
+    (trimmed.startsWith('|') || /^\S+\s*\|/.test(trimmed))
+  );
 }
 
 /**
@@ -194,10 +199,11 @@ export function tableToCodeBlock(tableText: string): string {
     row.map((cell, c) => cell.padEnd(widths[c])).join('  '),
   );
 
-  // Add a separator after the header row
+  // Bold header row above the code block, data rows inside
   if (formatted.length > 1) {
-    const sep = widths.map((w) => '-'.repeat(w)).join('  ');
-    formatted.splice(1, 0, sep);
+    const header = `*${formatted[0].trimEnd()}*`;
+    const dataRows = formatted.slice(1).join('\n');
+    return `${header}\n\`\`\`\n${dataRows}\n\`\`\``;
   }
 
   return '```\n' + formatted.join('\n') + '\n```';

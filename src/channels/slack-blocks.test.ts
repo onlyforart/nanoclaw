@@ -71,14 +71,18 @@ describe('markdownToBlocks', () => {
   });
 
   it('handles mixed content', () => {
-    const md = '## Title\n\nSome text.\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\nMore text.';
+    const md =
+      '## Title\n\nSome text.\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\nMore text.';
     const blocks = markdownToBlocks(md);
     expect(blocks.length).toBeGreaterThanOrEqual(3);
     expect(blocks[0].type).toBe('header');
   });
 
   it('respects 50-block limit', () => {
-    const lines = Array.from({ length: 100 }, (_, i) => `## Heading ${i}\n\nPara ${i}`).join('\n\n');
+    const lines = Array.from(
+      { length: 100 },
+      (_, i) => `## Heading ${i}\n\nPara ${i}`,
+    ).join('\n\n');
     const blocks = markdownToBlocks(lines);
     expect(blocks.length).toBeLessThanOrEqual(50);
   });
@@ -88,8 +92,15 @@ describe('splitIntoSections', () => {
   it('separates headings from paragraphs', () => {
     const sections = splitIntoSections('## Title\n\nHello world');
     expect(sections).toHaveLength(2);
-    expect(sections[0]).toMatchObject({ type: 'heading', content: 'Title', level: 2 });
-    expect(sections[1]).toMatchObject({ type: 'paragraph', content: 'Hello world' });
+    expect(sections[0]).toMatchObject({
+      type: 'heading',
+      content: 'Title',
+      level: 2,
+    });
+    expect(sections[1]).toMatchObject({
+      type: 'paragraph',
+      content: 'Hello world',
+    });
   });
 
   it('detects tables', () => {
@@ -111,24 +122,26 @@ describe('splitIntoSections', () => {
 });
 
 describe('tableToCodeBlock', () => {
-  it('converts table to aligned monospace code block', () => {
+  it('renders header row bold above code block with data rows inside', () => {
     const table = '| Name | Value |\n|------|-------|\n| A | 1 |\n| BB | 22 |';
     const result = tableToCodeBlock(table);
-    expect(result).toMatch(/^```\n/);
-    expect(result).toMatch(/\n```$/);
-    // Separator rows should be stripped and replaced with dashes
-    expect(result).not.toContain('|');
-    expect(result).toContain('Name');
+    // Header is bold, outside code block
+    expect(result).toMatch(/^\*Name/);
+    // Data rows inside code block
+    expect(result).toContain('```');
     expect(result).toContain('BB');
+    // No separator row of dashes between header and data
+    expect(result).not.toMatch(/^-+\s+-+$/m);
   });
 
   it('strips markdown separator rows', () => {
     const table = '| H1 | H2 |\n|:---|---:|\n| a | b |';
     const result = tableToCodeBlock(table);
+    // No markdown-style separator (|---|---| or alignment markers)
     expect(result).not.toMatch(/[-:]{3,}/);
-    // Should have header, separator (dashes), and data row
+    // Bold header + code block with data
     const lines = result.split('\n').filter((l) => l.trim());
-    expect(lines.length).toBe(5); // ```, header, sep, data, ```
+    expect(lines.length).toBe(4); // bold header, ```, data, ```
   });
 });
 
