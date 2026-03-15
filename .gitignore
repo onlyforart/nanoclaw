@@ -22,6 +22,10 @@ groups/global/*
 *.keys.json
 .env
 
+# MCP servers
+mcp-servers/
+**/mcp-servers/
+
 # Temp files
 .tmp-*
 
