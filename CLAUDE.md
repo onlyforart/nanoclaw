@@ -50,6 +50,9 @@ launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist
 launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # restart
 
 # Linux (systemd)
+# IMPORTANT: XDG_RUNTIME_DIR must be set for systemctl --user to work
+# in non-login shells (e.g. Claude Code's bash environment)
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
 systemctl --user start nanoclaw
 systemctl --user stop nanoclaw
 systemctl --user restart nanoclaw
