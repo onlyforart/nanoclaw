@@ -389,6 +389,29 @@ async function runQuery(
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
 
+  // Discover additional MCP servers from host-mounted config
+  const additionalMcpServers: Record<string, { command: string; args: string[] }> = {};
+  const additionalMcpTools: string[] = [];
+  const mcpConfigPath = '/workspace/mcp-servers-config/config.json';
+  if (fs.existsSync(mcpConfigPath)) {
+    try {
+      const mcpConfig = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf-8'));
+      for (const [name, srv] of Object.entries(mcpConfig)) {
+        const server = srv as { command: string; args: string[]; tools: string[] };
+        additionalMcpServers[name] = {
+          command: server.command,
+          args: server.args,
+        };
+        for (const tool of server.tools || []) {
+          additionalMcpTools.push(`mcp__${name}__${tool}`);
+        }
+        log(`Loaded external MCP server: ${name} (${server.tools?.length || 0} tools)`);
+      }
+    } catch (err) {
+      log(`Failed to load MCP servers config: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   for await (const message of query({
     prompt: stream,
     options: {
@@ -407,7 +430,8 @@ async function runQuery(
         'TeamCreate', 'TeamDelete', 'SendMessage',
         'TodoWrite', 'ToolSearch', 'Skill',
         'NotebookEdit',
-        'mcp__nanoclaw__*'
+        'mcp__nanoclaw__*',
+        ...additionalMcpTools,
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -423,6 +447,7 @@ async function runQuery(
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
           },
         },
+        ...additionalMcpServers,
       },
       hooks: {
         PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],

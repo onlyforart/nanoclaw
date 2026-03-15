@@ -168,6 +168,27 @@ Key files:
 - `src/db.ts` - SQLite operations (messages, groups, sessions, state)
 - `groups/*/CLAUDE.md` - Per-group memory
 
+## External MCP Servers
+
+NanoClaw supports loading external MCP servers at runtime via `data/mcp-servers.json`. Because `data/` is gitignored, any MCP server configuration and build artefacts are excluded from commits and must be manually reinstalled after a fresh clone.
+
+To reinstall, clone the MCP server repository outside the project tree, build it, and create `data/mcp-servers.json` pointing to it:
+
+```json
+{
+  "servers": {
+    "server-name": {
+      "hostPath": "/path/to/mcp-server",
+      "command": "node",
+      "args": ["build/index.js"],
+      "tools": ["tool_name_1", "tool_name_2"]
+    }
+  }
+}
+```
+
+The container runner mounts each server read-only into the agent container and the agent-runner discovers them automatically.
+
 ## FAQ
 
 **Why Docker?**
