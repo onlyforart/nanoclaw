@@ -199,11 +199,9 @@ export function tableToCodeBlock(tableText: string): string {
     row.map((cell, c) => cell.padEnd(widths[c])).join('  '),
   );
 
-  // Bold header row above the code block, data rows inside
+  // Uppercase the header row to distinguish it from data rows
   if (formatted.length > 1) {
-    const header = `*${formatted[0].trimEnd()}*`;
-    const dataRows = formatted.slice(1).join('\n');
-    return `${header}\n\`\`\`\n${dataRows}\n\`\`\``;
+    formatted[0] = formatted[0].toUpperCase();
   }
 
   return '```\n' + formatted.join('\n') + '\n```';
