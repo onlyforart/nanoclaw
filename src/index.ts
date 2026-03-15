@@ -38,6 +38,7 @@ import {
   initDatabase,
   setRegisteredGroup,
   setRouterState,
+  updateRegisteredGroup,
   setSession,
   storeChatMetadata,
   storeMessage,
@@ -287,6 +288,7 @@ async function runAgent(
       schedule_value: t.schedule_value,
       status: t.status,
       next_run: t.next_run,
+      model: t.model,
     })),
   );
 
@@ -320,6 +322,7 @@ async function runAgent(
         chatJid,
         isMain,
         assistantName: ASSISTANT_NAME,
+        model: group.model || undefined,
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
@@ -622,6 +625,16 @@ async function main(): Promise<void> {
     },
     registeredGroups: () => registeredGroups,
     registerGroup,
+    updateGroup: (jid, updates) => {
+      const group = registeredGroups[jid];
+      if (!group) return;
+      if (updates.model !== undefined) {
+        group.model = updates.model;
+      }
+      updateRegisteredGroup(jid, updates);
+      setRegisteredGroup(jid, group);
+      logger.info({ jid, updates }, 'Group updated');
+    },
     syncGroups: async (force: boolean) => {
       await Promise.all(
         channels
