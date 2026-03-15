@@ -41,6 +41,7 @@ export interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   assistantName?: string;
+  model?: string;
 }
 
 export interface ContainerOutput {
@@ -216,15 +217,31 @@ function buildVolumeMounts(
   if (fs.existsSync(mcpConfigPath)) {
     try {
       const mcpConfig = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf-8'));
-      const containerMcpDir = path.join(DATA_DIR, 'sessions', group.folder, 'mcp-servers');
+      const containerMcpDir = path.join(
+        DATA_DIR,
+        'sessions',
+        group.folder,
+        'mcp-servers',
+      );
       fs.mkdirSync(containerMcpDir, { recursive: true });
 
-      const containerServers: Record<string, { command: string; args: string[]; tools: string[] }> = {};
+      const containerServers: Record<
+        string,
+        { command: string; args: string[]; tools: string[] }
+      > = {};
       for (const [name, srv] of Object.entries(mcpConfig.servers || {})) {
-        const server = srv as { hostPath: string; command: string; args: string[]; tools: string[] };
+        const server = srv as {
+          hostPath: string;
+          command: string;
+          args: string[];
+          tools: string[];
+        };
         const resolvedHostPath = path.resolve(server.hostPath);
         if (!fs.existsSync(resolvedHostPath)) {
-          logger.warn({ server: name, path: resolvedHostPath }, 'MCP server path not found, skipping');
+          logger.warn(
+            { server: name, path: resolvedHostPath },
+            'MCP server path not found, skipping',
+          );
           continue;
         }
         const containerPath = `/workspace/mcp-servers/${name}`;
@@ -235,7 +252,11 @@ function buildVolumeMounts(
         });
         containerServers[name] = {
           command: server.command,
-          args: server.args.map(a => a.replace(/^\.\//, `${containerPath}/`).replace(/^build\//, `${containerPath}/build/`)),
+          args: server.args.map((a) =>
+            a
+              .replace(/^\.\//, `${containerPath}/`)
+              .replace(/^build\//, `${containerPath}/build/`),
+          ),
           tools: server.tools || [],
         };
       }
@@ -712,6 +733,7 @@ export function writeTasksSnapshot(
     schedule_value: string;
     status: string;
     next_run: string | null;
+    model?: string | null;
   }>,
 ): void {
   // Write filtered tasks to the group's IPC directory
