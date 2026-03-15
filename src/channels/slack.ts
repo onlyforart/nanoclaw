@@ -6,16 +6,13 @@ import { updateChatName } from '../db.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
+import { markdownToSlackPayload } from './slack-blocks.js';
 import {
   Channel,
   OnInboundMessage,
   OnChatMetadata,
   RegisteredGroup,
 } from '../types.js';
-
-// Slack's chat.postMessage API limits text to ~4000 characters per call.
-// Messages exceeding this are split into sequential chunks.
-const MAX_MESSAGE_LENGTH = 4000;
 
 // The message subtypes we process. Bolt delivers all subtypes via app.event('message');
 // we filter to regular messages (GenericMessageEvent, subtype undefined) and bot messages
@@ -169,17 +166,11 @@ export class SlackChannel implements Channel {
     }
 
     try {
-      // Slack limits messages to ~4000 characters; split if needed
-      if (text.length <= MAX_MESSAGE_LENGTH) {
-        await this.app.client.chat.postMessage({ channel: channelId, text });
-      } else {
-        for (let i = 0; i < text.length; i += MAX_MESSAGE_LENGTH) {
-          await this.app.client.chat.postMessage({
-            channel: channelId,
-            text: text.slice(i, i + MAX_MESSAGE_LENGTH),
-          });
-        }
-      }
+      const payload = markdownToSlackPayload(text);
+      await this.app.client.chat.postMessage({
+        channel: channelId,
+        ...payload,
+      });
       logger.info({ jid, length: text.length }, 'Slack message sent');
     } catch (err) {
       this.outgoingQueue.push({ jid, text });
@@ -272,9 +263,10 @@ export class SlackChannel implements Channel {
       while (this.outgoingQueue.length > 0) {
         const item = this.outgoingQueue.shift()!;
         const channelId = item.jid.replace(/^slack:/, '');
+        const payload = markdownToSlackPayload(item.text);
         await this.app.client.chat.postMessage({
           channel: channelId,
-          text: item.text,
+          ...payload,
         });
         logger.info(
           { jid: item.jid, length: item.text.length },
