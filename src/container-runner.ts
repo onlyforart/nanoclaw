@@ -209,6 +209,57 @@ function buildVolumeMounts(
     mounts.push(...validatedMounts);
   }
 
+  // Mount external MCP servers defined in data/mcp-servers.json (gitignored).
+  // Each server's build directory is mounted read-only into the container.
+  // A container-side config is written so the agent-runner can discover them.
+  const mcpConfigPath = path.join(DATA_DIR, 'mcp-servers.json');
+  if (fs.existsSync(mcpConfigPath)) {
+    try {
+      const mcpConfig = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf-8'));
+      const containerMcpDir = path.join(DATA_DIR, 'sessions', group.folder, 'mcp-servers');
+      fs.mkdirSync(containerMcpDir, { recursive: true });
+
+      const containerServers: Record<string, { command: string; args: string[]; tools: string[] }> = {};
+      for (const [name, srv] of Object.entries(mcpConfig.servers || {})) {
+        const server = srv as { hostPath: string; command: string; args: string[]; tools: string[] };
+        const resolvedHostPath = path.resolve(server.hostPath);
+        if (!fs.existsSync(resolvedHostPath)) {
+          logger.warn({ server: name, path: resolvedHostPath }, 'MCP server path not found, skipping');
+          continue;
+        }
+        const containerPath = `/workspace/mcp-servers/${name}`;
+        mounts.push({
+          hostPath: resolvedHostPath,
+          containerPath,
+          readonly: true,
+        });
+        containerServers[name] = {
+          command: server.command,
+          args: server.args.map(a => a.replace(/^\.\//, `${containerPath}/`).replace(/^build\//, `${containerPath}/build/`)),
+          tools: server.tools || [],
+        };
+      }
+
+      if (Object.keys(containerServers).length > 0) {
+        fs.writeFileSync(
+          path.join(containerMcpDir, 'config.json'),
+          JSON.stringify(containerServers, null, 2),
+        );
+        mounts.push({
+          hostPath: containerMcpDir,
+          containerPath: '/workspace/mcp-servers-config',
+          readonly: true,
+        });
+        logger.info(
+          { servers: Object.keys(containerServers) },
+          'Mounting external MCP servers',
+        );
+      }
+    } catch (err) {
+      logger.error({ err }, 'Failed to load MCP servers config');
+    }
+  }
+
   return mounts;
 }
 
