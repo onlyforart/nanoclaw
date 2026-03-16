@@ -366,8 +366,7 @@ export async function processTaskIpc(
             | 'once';
         if (data.schedule_value !== undefined)
           updates.schedule_value = data.schedule_value;
-        if (data.model !== undefined)
-          updates.model = data.model || null;
+        if (data.model !== undefined) updates.model = data.model || null;
 
         // Recompute next_run if schedule changed
         if (data.schedule_type || data.schedule_value) {
