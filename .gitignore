@@ -38,5 +38,6 @@ mcp-servers/
 
 # Skills system (local per-installation state)
 .nanoclaw/
+container/skills/
 
 agents-sdk-docs
