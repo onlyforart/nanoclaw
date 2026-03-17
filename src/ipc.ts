@@ -172,6 +172,7 @@ export async function processTaskIpc(
     schedule_value?: string;
     context_mode?: string;
     model?: string;
+    timezone?: string;
     groupFolder?: string;
     chatJid?: string;
     targetJid?: string;
@@ -221,12 +222,13 @@ export async function processTaskIpc(
         }
 
         const scheduleType = data.schedule_type as 'cron' | 'interval' | 'once';
+        const taskTimezone = (data.timezone as string) || null;
 
         let nextRun: string | null = null;
         if (scheduleType === 'cron') {
           try {
             const interval = CronExpressionParser.parse(data.schedule_value, {
-              tz: TIMEZONE,
+              tz: taskTimezone || TIMEZONE,
             });
             nextRun = interval.next().toISOString();
           } catch {
@@ -274,6 +276,7 @@ export async function processTaskIpc(
           schedule_value: data.schedule_value,
           context_mode: contextMode,
           model: data.model || null,
+          timezone: taskTimezone,
           next_run: nextRun,
           status: 'active',
           created_at: new Date().toISOString(),
@@ -367,9 +370,11 @@ export async function processTaskIpc(
         if (data.schedule_value !== undefined)
           updates.schedule_value = data.schedule_value;
         if (data.model !== undefined) updates.model = data.model || null;
+        if (data.timezone !== undefined)
+          updates.timezone = data.timezone || null;
 
-        // Recompute next_run if schedule changed
-        if (data.schedule_type || data.schedule_value) {
+        // Recompute next_run if schedule or timezone changed
+        if (data.schedule_type || data.schedule_value || data.timezone !== undefined) {
           const updatedTask = {
             ...task,
             ...updates,
@@ -378,7 +383,7 @@ export async function processTaskIpc(
             try {
               const interval = CronExpressionParser.parse(
                 updatedTask.schedule_value,
-                { tz: TIMEZONE },
+                { tz: updatedTask.timezone || TIMEZONE },
               );
               updates.next_run = interval.next().toISOString();
             } catch {

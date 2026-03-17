@@ -286,6 +286,7 @@ async function runAgent(
       prompt: t.prompt,
       schedule_type: t.schedule_type,
       schedule_value: t.schedule_value,
+      timezone: t.timezone,
       status: t.status,
       next_run: t.next_run,
       model: t.model,

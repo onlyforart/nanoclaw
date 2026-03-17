@@ -760,6 +760,7 @@ export function writeTasksSnapshot(
     prompt: string;
     schedule_type: string;
     schedule_value: string;
+    timezone?: string | null;
     status: string;
     next_run: string | null;
     model?: string | null;

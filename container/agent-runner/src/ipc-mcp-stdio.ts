@@ -75,8 +75,10 @@ MESSAGING BEHAVIOR - The task agent's output is sent to the user or group. It ca
 \u2022 Only send a message when there's something to report (e.g., "notify me if...")
 \u2022 Never send a message (background maintenance tasks)
 
-SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
-\u2022 cron: Standard cron expression (e.g., "*/5 * * * *" for every 5 minutes, "0 9 * * *" for daily at 9am LOCAL time)
+TIMEZONE - Optional IANA timezone for this task (e.g., "Europe/London", "America/New_York", "Asia/Tokyo"). If omitted, uses the system default. Use this when the user specifies times in a particular timezone.
+
+SCHEDULE VALUE FORMAT (times are interpreted in the task's timezone):
+\u2022 cron: Standard cron expression (e.g., "*/5 * * * *" for every 5 minutes, "0 9 * * *" for daily at 9am)
 \u2022 interval: Milliseconds between runs (e.g., "300000" for 5 minutes, "3600000" for 1 hour)
 \u2022 once: Local time WITHOUT "Z" suffix (e.g., "2026-02-01T15:30:00"). Do NOT use UTC/Z suffix.`,
   {
@@ -85,6 +87,7 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
     schedule_value: z.string().describe('cron: "*/5 * * * *" | interval: milliseconds like "300000" | once: local timestamp like "2026-02-01T15:30:00" (no Z suffix!)'),
     context_mode: z.enum(['group', 'isolated']).default('isolated').describe('isolated=fresh session (default, faster), group=runs with chat history and subagents (only if user explicitly requests it)'),
     model: z.enum(['haiku', 'sonnet', 'opus']).optional().describe('Claude model class to use. Always uses the latest version of that class. Defaults to the CLI default (sonnet) if omitted.'),
+    timezone: z.string().optional().describe('IANA timezone for this task (e.g., "Europe/London", "America/New_York"). Cron and once times are interpreted in this timezone. Defaults to system timezone if omitted.'),
     target_group_jid: z.string().optional().describe('(Main group only) JID of the group to schedule the task for. Defaults to the current group.'),
   },
   async (args) => {
@@ -135,6 +138,7 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
       schedule_value: args.schedule_value,
       context_mode: args.context_mode || 'isolated',
       model: args.model || undefined,
+      timezone: args.timezone || undefined,
       targetJid,
       createdBy: groupFolder,
       timestamp: new Date().toISOString(),
@@ -172,8 +176,8 @@ server.tool(
 
       const formatted = tasks
         .map(
-          (t: { id: string; prompt: string; schedule_type: string; schedule_value: string; status: string; next_run: string }) =>
-            `- [${t.id}] ${t.prompt.slice(0, 50)}... (${t.schedule_type}: ${t.schedule_value}) - ${t.status}, next: ${t.next_run || 'N/A'}`,
+          (t: { id: string; prompt: string; schedule_type: string; schedule_value: string; timezone?: string; status: string; next_run: string }) =>
+            `- [${t.id}] ${t.prompt.slice(0, 50)}... (${t.schedule_type}: ${t.schedule_value}${t.timezone ? ` [${t.timezone}]` : ''}) - ${t.status}, next: ${t.next_run || 'N/A'}`,
         )
         .join('\n');
 
@@ -252,6 +256,7 @@ server.tool(
     schedule_type: z.enum(['cron', 'interval', 'once']).optional().describe('New schedule type'),
     schedule_value: z.string().optional().describe('New schedule value (see schedule_task for format)'),
     model: z.enum(['haiku', 'sonnet', 'opus']).optional().describe('Claude model class to use. Always uses the latest version. Set to clear and use default.'),
+    timezone: z.string().optional().describe('IANA timezone for this task (e.g., "Europe/London", "America/New_York"). Set to empty string to clear and use system default.'),
   },
   async (args) => {
     // Validate schedule_value if provided
@@ -288,6 +293,7 @@ server.tool(
     if (args.schedule_type !== undefined) data.schedule_type = args.schedule_type;
     if (args.schedule_value !== undefined) data.schedule_value = args.schedule_value;
     if (args.model !== undefined) data.model = args.model || undefined;
+    if (args.timezone !== undefined) data.timezone = args.timezone || undefined;
 
     writeIpcFile(TASKS_DIR, data);
 
