@@ -391,17 +391,18 @@ async function runQuery(
   }
 
   // Discover additional MCP servers from host-mounted config
-  const additionalMcpServers: Record<string, { command: string; args: string[] }> = {};
+  const additionalMcpServers: Record<string, { command: string; args: string[]; env?: Record<string, string> }> = {};
   const additionalMcpTools: string[] = [];
   const mcpConfigPath = '/workspace/mcp-servers-config/config.json';
   if (fs.existsSync(mcpConfigPath)) {
     try {
       const mcpConfig = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf-8'));
       for (const [name, srv] of Object.entries(mcpConfig)) {
-        const server = srv as { command: string; args: string[]; tools: string[] };
+        const server = srv as { command: string; args: string[]; tools: string[]; env?: Record<string, string> };
         additionalMcpServers[name] = {
           command: server.command,
           args: server.args,
+          ...(server.env && { env: server.env }),
         };
         for (const tool of server.tools || []) {
           additionalMcpTools.push(`mcp__${name}__${tool}`);
