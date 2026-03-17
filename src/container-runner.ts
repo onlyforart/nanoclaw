@@ -229,7 +229,12 @@ function buildVolumeMounts(
 
       const containerServers: Record<
         string,
-        { command: string; args: string[]; tools: string[]; env?: Record<string, string> }
+        {
+          command: string;
+          args: string[];
+          tools: string[];
+          env?: Record<string, string>;
+        }
       > = {};
       for (const [name, srv] of Object.entries(mcpConfig.servers || {})) {
         const server = srv as {
