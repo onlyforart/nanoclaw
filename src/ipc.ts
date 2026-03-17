@@ -374,7 +374,11 @@ export async function processTaskIpc(
           updates.timezone = data.timezone || null;
 
         // Recompute next_run if schedule or timezone changed
-        if (data.schedule_type || data.schedule_value || data.timezone !== undefined) {
+        if (
+          data.schedule_type ||
+          data.schedule_value ||
+          data.timezone !== undefined
+        ) {
           const updatedTask = {
             ...task,
             ...updates,
