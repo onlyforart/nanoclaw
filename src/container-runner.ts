@@ -4,6 +4,7 @@
  */
 import { ChildProcess, exec, spawn } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import {
@@ -26,6 +27,7 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
+import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
@@ -227,7 +229,7 @@ function buildVolumeMounts(
 
       const containerServers: Record<
         string,
-        { command: string; args: string[]; tools: string[] }
+        { command: string; args: string[]; tools: string[]; env?: Record<string, string> }
       > = {};
       for (const [name, srv] of Object.entries(mcpConfig.servers || {})) {
         const server = srv as {
@@ -235,6 +237,8 @@ function buildVolumeMounts(
           command: string;
           args: string[];
           tools: string[];
+          env?: string[];
+          awsAuth?: boolean;
         };
         const resolvedHostPath = path.resolve(server.hostPath);
         if (!fs.existsSync(resolvedHostPath)) {
@@ -250,6 +254,38 @@ function buildVolumeMounts(
           containerPath,
           readonly: true,
         });
+        // Mount host ~/.aws/ read-only so the MCP server can use AWS credentials
+        if (server.awsAuth) {
+          const awsDir = path.join(os.homedir(), '.aws');
+          if (fs.existsSync(awsDir)) {
+            mounts.push({
+              hostPath: awsDir,
+              containerPath: '/home/node/.aws',
+              readonly: true,
+            });
+          } else {
+            logger.warn(
+              { server: name },
+              'awsAuth enabled but ~/.aws/ not found on host',
+            );
+          }
+        }
+        // Resolve whitelisted env vars from .env file
+        const resolvedEnv: Record<string, string> = {};
+        if (server.env) {
+          const envValues = readEnvFile(server.env);
+          for (const varName of server.env) {
+            if (envValues[varName]) {
+              resolvedEnv[varName] = envValues[varName];
+            } else {
+              logger.warn(
+                { server: name, envVar: varName },
+                'Whitelisted env var not found in .env, skipping',
+              );
+            }
+          }
+        }
+
         containerServers[name] = {
           command: server.command,
           args: server.args.map((a) =>
@@ -258,6 +294,7 @@ function buildVolumeMounts(
               .replace(/^build\//, `${containerPath}/build/`),
           ),
           tools: server.tools || [],
+          ...(Object.keys(resolvedEnv).length > 0 && { env: resolvedEnv }),
         };
       }
 
