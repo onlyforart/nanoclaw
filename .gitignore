@@ -36,8 +36,10 @@ mcp-servers/
 .idea/
 .vscode/
 
-# Skills system (local per-installation state)
+# Skills system — ignore all by default (copied from other repos per-install),
+# then whitelist skills that are part of this repo.
 .nanoclaw/
-container/skills/
+container/skills/*
+!container/skills/agent-browser/
 
 agents-sdk-docs
