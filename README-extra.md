@@ -56,6 +56,23 @@ There is also a `data/nanoclaw.db` — this is **unused/legacy**. Ignore it.
 
 Log level is controlled by the `LOG_LEVEL` environment variable (default: `info`).
 
+### Container Session Logs
+
+Each container run writes a log file to the group's own `logs/` directory:
+
+```
+groups/{name}/logs/container-{ISO-timestamp}.log
+```
+
+For example: `groups/slack_main/logs/container-2026-03-15T14-43-06-227Z.log`
+
+Each log file contains:
+
+- **Always:** timestamp, group name, duration, exit code, mount list, input summary
+- **On error or when `LOG_LEVEL=debug`:** full stdin, stdout, stderr, and container args
+
+These are the primary place to look when debugging a specific agent invocation. Find the relevant group folder and sort by timestamp to locate the run you care about.
+
 ### Per-Session Runtime State
 
 Each group's container session generates runtime state under `data/sessions/{groupName}/`:
