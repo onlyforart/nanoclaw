@@ -22,7 +22,7 @@ export interface IpcDeps {
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   updateGroup: (
     jid: string,
-    updates: Partial<Pick<RegisteredGroup, 'model'>>,
+    updates: Partial<Pick<RegisteredGroup, 'model' | 'maxToolRounds' | 'timeoutMs'>>,
   ) => void;
   syncGroups: (force: boolean) => Promise<void>;
   getAvailableGroups: () => AvailableGroup[];
@@ -183,6 +183,8 @@ export async function processTaskIpc(
     trigger?: string;
     requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
+    maxToolRounds?: number;
+    timeoutMs?: number;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -277,6 +279,8 @@ export async function processTaskIpc(
           context_mode: contextMode,
           model: data.model || null,
           timezone: taskTimezone,
+          maxToolRounds: data.maxToolRounds ?? null,
+          timeoutMs: data.timeoutMs ?? null,
           next_run: nextRun,
           status: 'active',
           created_at: new Date().toISOString(),
@@ -372,6 +376,10 @@ export async function processTaskIpc(
         if (data.model !== undefined) updates.model = data.model || null;
         if (data.timezone !== undefined)
           updates.timezone = data.timezone || null;
+        if (data.maxToolRounds !== undefined)
+          updates.maxToolRounds = data.maxToolRounds ?? null;
+        if (data.timeoutMs !== undefined)
+          updates.timeoutMs = data.timeoutMs ?? null;
 
         // Recompute next_run if schedule or timezone changed
         if (
@@ -463,6 +471,8 @@ export async function processTaskIpc(
           containerConfig: data.containerConfig,
           requiresTrigger: data.requiresTrigger,
           model: data.model || undefined,
+          maxToolRounds: data.maxToolRounds,
+          timeoutMs: data.timeoutMs,
         });
       } else {
         logger.warn(
@@ -490,9 +500,17 @@ export async function processTaskIpc(
           );
           break;
         }
-        const groupUpdates: Partial<Pick<RegisteredGroup, 'model'>> = {};
+        const groupUpdates: Partial<
+          Pick<RegisteredGroup, 'model' | 'maxToolRounds' | 'timeoutMs'>
+        > = {};
         if (data.model !== undefined) {
           groupUpdates.model = data.model || undefined;
+        }
+        if (data.maxToolRounds !== undefined) {
+          groupUpdates.maxToolRounds = data.maxToolRounds;
+        }
+        if (data.timeoutMs !== undefined) {
+          groupUpdates.timeoutMs = data.timeoutMs;
         }
         deps.updateGroup(data.jid, groupUpdates);
         logger.info(

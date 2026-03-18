@@ -324,6 +324,8 @@ async function runAgent(
         isMain,
         assistantName: ASSISTANT_NAME,
         model: group.model || undefined,
+        maxToolRounds: group.maxToolRounds,
+        timeoutMs: group.timeoutMs,
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),

@@ -8,10 +8,12 @@ import {
   getAllRegisteredGroups,
   getMessagesSince,
   getNewMessages,
+  getRegisteredGroup,
   getTaskById,
   setRegisteredGroup,
   storeChatMetadata,
   storeMessage,
+  updateRegisteredGroup,
   updateTask,
 } from './db.js';
 
@@ -480,5 +482,138 @@ describe('registered group isMain', () => {
     const group = groups['group@g.us'];
     expect(group).toBeDefined();
     expect(group.isMain).toBeUndefined();
+  });
+});
+
+// --- Per-group/task configurable limits (maxToolRounds, timeoutMs) ---
+
+describe('registered group maxToolRounds and timeoutMs', () => {
+  it('stores and retrieves maxToolRounds and timeoutMs', () => {
+    setRegisteredGroup('group@g.us', {
+      name: 'Test Group',
+      folder: 'whatsapp_test',
+      trigger: '@Andy',
+      added_at: '2024-01-01T00:00:00.000Z',
+      maxToolRounds: 5,
+      timeoutMs: 60_000,
+    });
+
+    const group = getRegisteredGroup('group@g.us');
+    expect(group).toBeDefined();
+    expect(group!.maxToolRounds).toBe(5);
+    expect(group!.timeoutMs).toBe(60_000);
+  });
+
+  it('returns undefined for NULL maxToolRounds and timeoutMs', () => {
+    setRegisteredGroup('group@g.us', {
+      name: 'Test Group',
+      folder: 'whatsapp_test',
+      trigger: '@Andy',
+      added_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    const group = getRegisteredGroup('group@g.us');
+    expect(group).toBeDefined();
+    expect(group!.maxToolRounds).toBeUndefined();
+    expect(group!.timeoutMs).toBeUndefined();
+  });
+
+  it('round-trips through getAllRegisteredGroups', () => {
+    setRegisteredGroup('group@g.us', {
+      name: 'Test Group',
+      folder: 'whatsapp_test',
+      trigger: '@Andy',
+      added_at: '2024-01-01T00:00:00.000Z',
+      maxToolRounds: 10,
+      timeoutMs: 120_000,
+    });
+
+    const groups = getAllRegisteredGroups();
+    const group = groups['group@g.us'];
+    expect(group.maxToolRounds).toBe(10);
+    expect(group.timeoutMs).toBe(120_000);
+  });
+
+  it('updates maxToolRounds and timeoutMs via updateRegisteredGroup', () => {
+    setRegisteredGroup('group@g.us', {
+      name: 'Test Group',
+      folder: 'whatsapp_test',
+      trigger: '@Andy',
+      added_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    updateRegisteredGroup('group@g.us', {
+      maxToolRounds: 15,
+      timeoutMs: 90_000,
+    });
+
+    const group = getRegisteredGroup('group@g.us');
+    expect(group!.maxToolRounds).toBe(15);
+    expect(group!.timeoutMs).toBe(90_000);
+  });
+});
+
+describe('task maxToolRounds and timeoutMs', () => {
+  it('stores and retrieves maxToolRounds and timeoutMs on tasks', () => {
+    createTask({
+      id: 'task-limits-1',
+      group_folder: 'main',
+      chat_jid: 'group@g.us',
+      prompt: 'test limits',
+      schedule_type: 'once',
+      schedule_value: '2024-06-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      maxToolRounds: 20,
+      timeoutMs: 600_000,
+      next_run: '2024-06-01T00:00:00.000Z',
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    const task = getTaskById('task-limits-1');
+    expect(task).toBeDefined();
+    expect(task!.maxToolRounds).toBe(20);
+    expect(task!.timeoutMs).toBe(600_000);
+  });
+
+  it('defaults maxToolRounds and timeoutMs to null', () => {
+    createTask({
+      id: 'task-limits-2',
+      group_folder: 'main',
+      chat_jid: 'group@g.us',
+      prompt: 'no limits',
+      schedule_type: 'once',
+      schedule_value: '2024-06-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: null,
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    const task = getTaskById('task-limits-2');
+    expect(task).toBeDefined();
+    expect(task!.maxToolRounds).toBeNull();
+    expect(task!.timeoutMs).toBeNull();
+  });
+
+  it('updates maxToolRounds and timeoutMs via updateTask', () => {
+    createTask({
+      id: 'task-limits-3',
+      group_folder: 'main',
+      chat_jid: 'group@g.us',
+      prompt: 'update me',
+      schedule_type: 'once',
+      schedule_value: '2024-06-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: null,
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    updateTask('task-limits-3', { maxToolRounds: 8, timeoutMs: 120_000 });
+
+    const task = getTaskById('task-limits-3');
+    expect(task!.maxToolRounds).toBe(8);
+    expect(task!.timeoutMs).toBe(120_000);
   });
 });

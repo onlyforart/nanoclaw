@@ -1,0 +1,209 @@
+/**
+ * Ollama Chat Engine
+ *
+ * Core chat loop extracted from ollama-mcp-stdio.ts for reuse in direct mode.
+ * Sends messages to Ollama, handles tool calls by delegating to the provided
+ * executeTool callback, and loops until the model produces a final text response
+ * or limits are reached.
+ */
+
+import { Ollama } from 'ollama';
+import type { Message, Tool } from 'ollama';
+
+export interface OllamaChatOptions {
+  host: string;
+  model: string;
+  systemPrompt?: string;
+  maxIterations: number;
+  timeoutMs: number;
+  tools: Tool[];
+  toolNameMap: Map<string, { mcpTool: string; serverName: string }>;
+  executeTool: (mcpToolName: string, args: Record<string, unknown>) => Promise<string>;
+  /** Called with status updates (e.g. "Calling model...", "Executing tool X...") */
+  onStatus?: (status: string) => void;
+}
+
+export interface OllamaChatResult {
+  response: string;
+  iterations: number;
+  timedOut: boolean;
+  maxIterationsReached: boolean;
+}
+
+function log(msg: string): void {
+  console.error(`[ollama-engine] ${msg}`);
+}
+
+/**
+ * Resolve a short model name against the list of installed models.
+ * Prefers exact match (before the tag), then prefix match.
+ * Returns the original name if no match is found (Ollama will error).
+ */
+export function resolveOllamaModel(
+  requested: string,
+  installedModels: string[],
+): string {
+  // Strip tag from installed names for matching (e.g. "mistral-small3.2:latest" -> "mistral-small3.2")
+  const nameOnly = (m: string) => m.split(':')[0];
+
+  // Exact match on name part
+  const exact = installedModels.find((m) => nameOnly(m) === requested);
+  if (exact) return exact;
+
+  // Prefix match: "mistral" matches "mistral-small3.2:latest"
+  const prefix = installedModels.find((m) => nameOnly(m).startsWith(requested));
+  if (prefix) return prefix;
+
+  return requested;
+}
+
+export async function runOllamaChat(
+  userMessage: string,
+  options: OllamaChatOptions,
+): Promise<OllamaChatResult> {
+  const {
+    host,
+    model,
+    systemPrompt,
+    maxIterations,
+    timeoutMs,
+    tools,
+    toolNameMap,
+    executeTool,
+    onStatus,
+  } = options;
+
+  const ollama = new Ollama({ host });
+  const startTime = Date.now();
+
+  // Resolve model name against installed models
+  let resolvedModel = model;
+  try {
+    const listResponse = await ollama.list();
+    const installed = listResponse.models.map((m) => m.name);
+    resolvedModel = resolveOllamaModel(model, installed);
+    if (resolvedModel !== model) {
+      log(`Resolved model "${model}" -> "${resolvedModel}"`);
+    }
+  } catch (err) {
+    log(`Could not list models for resolution: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  const messages: Message[] = [];
+
+  // System prompt
+  if (systemPrompt) {
+    messages.push({ role: 'system', content: systemPrompt });
+  }
+
+  // If tools are available, add a tool-usage instruction
+  if (tools.length > 0) {
+    const toolList = tools
+      .map((t) => `- ${t.function.name}: ${t.function.description}`)
+      .join('\n');
+    messages.push({
+      role: 'system',
+      content: `You have tool-calling capabilities. When the user asks you to check, query, or look up anything, you MUST call the appropriate tool. Never say you don't have access to tools — you do. Use them.\n\nAvailable tools:\n${toolList}`,
+    });
+  }
+
+  messages.push({ role: 'user', content: userMessage });
+
+  let iterations = 0;
+
+  while (true) {
+    // Check timeout
+    if (Date.now() - startTime > timeoutMs) {
+      const lastContent = messages
+        .filter((m) => m.role === 'assistant' && m.content)
+        .pop()?.content || 'Timeout reached with no final response.';
+      return {
+        response: lastContent,
+        iterations,
+        timedOut: true,
+        maxIterationsReached: false,
+      };
+    }
+
+    // Check iteration limit
+    if (iterations >= maxIterations) {
+      const lastContent = messages
+        .filter((m) => m.role === 'assistant' && m.content)
+        .pop()?.content || 'Max iterations reached with no final response.';
+      return {
+        response: lastContent,
+        iterations,
+        timedOut: false,
+        maxIterationsReached: true,
+      };
+    }
+
+    iterations++;
+    onStatus?.(`Calling ${resolvedModel} (round ${iterations})...`);
+    log(`Calling ${resolvedModel} (round ${iterations}/${maxIterations})`);
+
+    // Use streaming to avoid Node's 300s undici headers timeout.
+    // With stream:false, Ollama doesn't send HTTP headers until the full
+    // response is generated, which can exceed 300s for large models on CPU.
+    // Streaming sends headers immediately and tokens incrementally.
+    const stream = await ollama.chat({
+      model: resolvedModel,
+      messages,
+      ...(tools.length > 0 && { tools }),
+      stream: true,
+    });
+
+    let content = '';
+    let toolCalls: Array<{ function: { name: string; arguments: Record<string, unknown> } }> = [];
+    for await (const chunk of stream) {
+      if (chunk.message.content) {
+        content += chunk.message.content;
+      }
+      if (chunk.message.tool_calls?.length) {
+        toolCalls = chunk.message.tool_calls;
+      }
+    }
+
+    const response = {
+      message: {
+        role: 'assistant' as const,
+        content,
+        tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+      },
+    };
+
+    messages.push(response.message);
+
+    // No tool calls — final response
+    if (!response.message.tool_calls?.length) {
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+      const content = response.message.content || '';
+      log(`Done: ${resolvedModel} | ${elapsed}s | ${iterations} round(s) | ${content.length} chars`);
+      return {
+        response: content,
+        iterations,
+        timedOut: false,
+        maxIterationsReached: false,
+      };
+    }
+
+    // Execute tool calls
+    for (const tc of response.message.tool_calls) {
+      const ollamaName = tc.function.name;
+      const mapping = toolNameMap.get(ollamaName);
+      const mcpName = mapping?.mcpTool ?? ollamaName;
+
+      log(`  Tool call: ${ollamaName} -> ${mcpName}`);
+      onStatus?.(`Executing tool: ${ollamaName}...`);
+
+      try {
+        const result = await executeTool(mcpName, tc.function.arguments as Record<string, unknown>);
+        messages.push({ role: 'tool', content: result });
+      } catch (err) {
+        const errMsg = `Tool execution failed: ${err instanceof Error ? err.message : String(err)}`;
+        log(`  ${errMsg}`);
+        messages.push({ role: 'tool', content: errMsg });
+      }
+    }
+  }
+}

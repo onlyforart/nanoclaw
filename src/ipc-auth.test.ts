@@ -7,6 +7,7 @@ import {
   getRegisteredGroup,
   getTaskById,
   setRegisteredGroup,
+  updateRegisteredGroup,
 } from './db.js';
 import { processTaskIpc, IpcDeps } from './ipc.js';
 import { RegisteredGroup } from './types.js';
@@ -59,7 +60,9 @@ beforeEach(() => {
       setRegisteredGroup(jid, group);
       // Mock the fs.mkdirSync that registerGroup does
     },
-    updateGroup: () => {},
+    updateGroup: (jid, updates) => {
+      updateRegisteredGroup(jid, updates);
+    },
     syncGroups: async () => {},
     getAvailableGroups: () => [],
     writeGroupsSnapshot: () => {},
@@ -675,5 +678,97 @@ describe('register_group success', () => {
     );
 
     expect(getRegisteredGroup('partial@g.us')).toBeUndefined();
+  });
+});
+
+// --- maxToolRounds and timeoutMs in IPC ---
+
+describe('schedule_task with maxToolRounds and timeoutMs', () => {
+  it('passes maxToolRounds and timeoutMs through to created task', async () => {
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'limits task',
+        schedule_type: 'once',
+        schedule_value: '2025-06-01T00:00:00',
+        targetJid: 'other@g.us',
+        maxToolRounds: 5,
+        timeoutMs: 120_000,
+      },
+      'whatsapp_main',
+      true,
+      deps,
+    );
+
+    const tasks = getAllTasks();
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].maxToolRounds).toBe(5);
+    expect(tasks[0].timeoutMs).toBe(120_000);
+  });
+
+  it('defaults maxToolRounds and timeoutMs to null when not provided', async () => {
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'no limits',
+        schedule_type: 'once',
+        schedule_value: '2025-06-01T00:00:00',
+        targetJid: 'other@g.us',
+      },
+      'whatsapp_main',
+      true,
+      deps,
+    );
+
+    const tasks = getAllTasks();
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].maxToolRounds).toBeNull();
+    expect(tasks[0].timeoutMs).toBeNull();
+  });
+});
+
+describe('register_group with maxToolRounds and timeoutMs', () => {
+  it('passes maxToolRounds and timeoutMs through to registered group', async () => {
+    await processTaskIpc(
+      {
+        type: 'register_group',
+        jid: 'new@g.us',
+        name: 'New Group',
+        folder: 'new-group',
+        trigger: '@Andy',
+        model: 'ollama:qwen3',
+        maxToolRounds: 15,
+        timeoutMs: 60_000,
+      },
+      'whatsapp_main',
+      true,
+      deps,
+    );
+
+    const group = getRegisteredGroup('new@g.us');
+    expect(group).toBeDefined();
+    expect(group!.maxToolRounds).toBe(15);
+    expect(group!.timeoutMs).toBe(60_000);
+  });
+});
+
+describe('update_group with maxToolRounds and timeoutMs', () => {
+  it('updates maxToolRounds and timeoutMs on a group', async () => {
+    await processTaskIpc(
+      {
+        type: 'update_group',
+        jid: 'other@g.us',
+        maxToolRounds: 8,
+        timeoutMs: 90_000,
+      },
+      'whatsapp_main',
+      true,
+      deps,
+    );
+
+    const group = getRegisteredGroup('other@g.us');
+    expect(group).toBeDefined();
+    expect(group!.maxToolRounds).toBe(8);
+    expect(group!.timeoutMs).toBe(90_000);
   });
 });

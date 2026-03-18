@@ -182,6 +182,8 @@ async function runTask(
         isScheduledTask: true,
         assistantName: ASSISTANT_NAME,
         model: task.model || undefined,
+        maxToolRounds: task.maxToolRounds ?? group.maxToolRounds,
+        timeoutMs: task.timeoutMs ?? group.timeoutMs,
       },
       (proc, containerName) =>
         deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),

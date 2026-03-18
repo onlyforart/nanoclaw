@@ -40,7 +40,9 @@ export interface RegisteredGroup {
   containerConfig?: ContainerConfig;
   requiresTrigger?: boolean; // Default: true for groups, false for solo chats
   isMain?: boolean; // True for the main control group (no trigger, elevated privileges)
-  model?: string; // Claude model alias (e.g. 'haiku', 'sonnet', 'opus'). Defaults to CLI default.
+  model?: string; // Model string (e.g. 'haiku', 'sonnet', 'opus', 'ollama:qwen3'). Defaults to CLI default.
+  maxToolRounds?: number; // Max tool-calling rounds. NULL = use backend default.
+  timeoutMs?: number; // Per-invocation timeout in ms. NULL = use backend default.
 }
 
 export interface NewMessage {
@@ -64,6 +66,8 @@ export interface ScheduledTask {
   context_mode: 'group' | 'isolated';
   model?: string | null;
   timezone?: string | null;
+  maxToolRounds?: number | null;
+  timeoutMs?: number | null;
   next_run: string | null;
   last_run: string | null;
   last_result: string | null;
