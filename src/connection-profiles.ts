@@ -1,11 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
-import {
-  CONTAINER_TIMEOUT,
-  DATA_DIR,
-  IDLE_TIMEOUT,
-} from './config.js';
+import { CONTAINER_TIMEOUT, DATA_DIR, IDLE_TIMEOUT } from './config.js';
 import { readEnvFile } from './env.js';
 
 export interface ConnectionProfile {
@@ -81,7 +77,9 @@ export function resolveProfile(
 
     const defaults = config.ollama ?? {};
     const maxToolRounds =
-      overrides?.maxToolRounds ?? defaults.maxToolRounds ?? HARDCODED_OLLAMA.maxToolRounds;
+      overrides?.maxToolRounds ??
+      defaults.maxToolRounds ??
+      HARDCODED_OLLAMA.maxToolRounds;
     const timeoutMs =
       overrides?.timeoutMs ?? defaults.timeoutMs ?? HARDCODED_OLLAMA.timeoutMs;
 
@@ -98,7 +96,9 @@ export function resolveProfile(
 
   const defaults = config.claude ?? {};
   const maxToolRounds =
-    overrides?.maxToolRounds ?? defaults.maxToolRounds ?? HARDCODED_CLAUDE.maxToolRounds;
+    overrides?.maxToolRounds ??
+    defaults.maxToolRounds ??
+    HARDCODED_CLAUDE.maxToolRounds;
   const timeoutMs =
     overrides?.timeoutMs ?? defaults.timeoutMs ?? HARDCODED_CLAUDE.timeoutMs;
 

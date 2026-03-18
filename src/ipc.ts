@@ -22,7 +22,9 @@ export interface IpcDeps {
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   updateGroup: (
     jid: string,
-    updates: Partial<Pick<RegisteredGroup, 'model' | 'maxToolRounds' | 'timeoutMs'>>,
+    updates: Partial<
+      Pick<RegisteredGroup, 'model' | 'maxToolRounds' | 'timeoutMs'>
+    >,
   ) => void;
   syncGroups: (force: boolean) => Promise<void>;
   getAvailableGroups: () => AvailableGroup[];

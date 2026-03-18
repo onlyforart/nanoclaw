@@ -91,7 +91,10 @@ describe('resolveProfile', () => {
     });
 
     it('applies per-group/task overrides over defaults', () => {
-      const profile = resolveProfile('sonnet', { timeoutMs: 60_000, maxToolRounds: 5 });
+      const profile = resolveProfile('sonnet', {
+        timeoutMs: 60_000,
+        maxToolRounds: 5,
+      });
       expect(profile.timeoutMs).toBe(60_000);
       expect(profile.containerTimeoutMs).toBe(60_000);
       expect(profile.maxToolRounds).toBe(5);
