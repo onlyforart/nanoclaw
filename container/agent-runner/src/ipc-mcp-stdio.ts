@@ -86,8 +86,10 @@ SCHEDULE VALUE FORMAT (times are interpreted in the task's timezone):
     schedule_type: z.enum(['cron', 'interval', 'once']).describe('cron=recurring at specific times, interval=recurring every N ms, once=run once at specific time'),
     schedule_value: z.string().describe('cron: "*/5 * * * *" | interval: milliseconds like "300000" | once: local timestamp like "2026-02-01T15:30:00" (no Z suffix!)'),
     context_mode: z.enum(['group', 'isolated']).default('isolated').describe('isolated=fresh session (default, faster), group=runs with chat history and subagents (only if user explicitly requests it)'),
-    model: z.enum(['haiku', 'sonnet', 'opus']).optional().describe('Claude model class to use. Always uses the latest version of that class. Defaults to the CLI default (sonnet) if omitted.'),
+    model: z.string().optional().describe('Model to use. Claude aliases: "haiku", "sonnet", "opus". Ollama: "ollama:modelname" or "ollama-remote:modelname". Defaults to sonnet if omitted.'),
     timezone: z.string().optional().describe('IANA timezone for this task (e.g., "Europe/London", "America/New_York"). Cron and once times are interpreted in this timezone. Defaults to system timezone if omitted.'),
+    max_tool_rounds: z.number().int().positive().optional().describe('Maximum tool-calling rounds per invocation. Defaults to backend default (unlimited for Claude, 10 for Ollama).'),
+    timeout_ms: z.number().int().positive().optional().describe('Per-invocation timeout in milliseconds. Defaults to backend default (30min for Claude, 5min for Ollama).'),
     target_group_jid: z.string().optional().describe('(Main group only) JID of the group to schedule the task for. Defaults to the current group.'),
   },
   async (args) => {
@@ -130,7 +132,7 @@ SCHEDULE VALUE FORMAT (times are interpreted in the task's timezone):
 
     const taskId = `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-    const data: Record<string, string | undefined> = {
+    const data: Record<string, string | number | undefined> = {
       type: 'schedule_task',
       taskId,
       prompt: args.prompt,
@@ -139,6 +141,8 @@ SCHEDULE VALUE FORMAT (times are interpreted in the task's timezone):
       context_mode: args.context_mode || 'isolated',
       model: args.model || undefined,
       timezone: args.timezone || undefined,
+      maxToolRounds: args.max_tool_rounds,
+      timeoutMs: args.timeout_ms,
       targetJid,
       createdBy: groupFolder,
       timestamp: new Date().toISOString(),
@@ -255,8 +259,10 @@ server.tool(
     prompt: z.string().optional().describe('New prompt for the task'),
     schedule_type: z.enum(['cron', 'interval', 'once']).optional().describe('New schedule type'),
     schedule_value: z.string().optional().describe('New schedule value (see schedule_task for format)'),
-    model: z.enum(['haiku', 'sonnet', 'opus']).optional().describe('Claude model class to use. Always uses the latest version. Set to clear and use default.'),
+    model: z.string().optional().describe('Model to use. Claude aliases: "haiku", "sonnet", "opus". Ollama: "ollama:modelname" or "ollama-remote:modelname". Omit to keep current value.'),
     timezone: z.string().optional().describe('IANA timezone for this task (e.g., "Europe/London", "America/New_York"). Set to empty string to clear and use system default.'),
+    max_tool_rounds: z.number().int().positive().optional().describe('Maximum tool-calling rounds. Omit to keep current value.'),
+    timeout_ms: z.number().int().positive().optional().describe('Per-invocation timeout in milliseconds. Omit to keep current value.'),
   },
   async (args) => {
     // Validate schedule_value if provided
@@ -282,7 +288,7 @@ server.tool(
       }
     }
 
-    const data: Record<string, string | undefined> = {
+    const data: Record<string, string | number | undefined> = {
       type: 'update_task',
       taskId: args.task_id,
       groupFolder,
@@ -294,6 +300,8 @@ server.tool(
     if (args.schedule_value !== undefined) data.schedule_value = args.schedule_value;
     if (args.model !== undefined) data.model = args.model || undefined;
     if (args.timezone !== undefined) data.timezone = args.timezone || undefined;
+    if (args.max_tool_rounds !== undefined) data.maxToolRounds = args.max_tool_rounds;
+    if (args.timeout_ms !== undefined) data.timeoutMs = args.timeout_ms;
 
     writeIpcFile(TASKS_DIR, data);
 
@@ -311,7 +319,9 @@ Use available_groups.json to find the JID for a group. The folder name must be c
     name: z.string().describe('Display name for the group'),
     folder: z.string().describe('Channel-prefixed folder name (e.g., "whatsapp_family-chat", "telegram_dev-team")'),
     trigger: z.string().describe('Trigger word (e.g., "@Andy")'),
-    model: z.enum(['haiku', 'sonnet', 'opus']).optional().describe('Claude model class to use for this group. Always uses the latest version. Defaults to sonnet if omitted.'),
+    model: z.string().optional().describe('Model to use. Claude aliases: "haiku", "sonnet", "opus". Ollama: "ollama:modelname" or "ollama-remote:modelname". Defaults to sonnet if omitted.'),
+    max_tool_rounds: z.number().int().positive().optional().describe('Maximum tool-calling rounds per invocation. Defaults to backend default.'),
+    timeout_ms: z.number().int().positive().optional().describe('Per-invocation timeout in milliseconds. Defaults to backend default.'),
   },
   async (args) => {
     if (!isMain) {
@@ -321,13 +331,15 @@ Use available_groups.json to find the JID for a group. The folder name must be c
       };
     }
 
-    const data: Record<string, string | undefined> = {
+    const data: Record<string, string | number | undefined> = {
       type: 'register_group',
       jid: args.jid,
       name: args.name,
       folder: args.folder,
       trigger: args.trigger,
       model: args.model || undefined,
+      maxToolRounds: args.max_tool_rounds,
+      timeoutMs: args.timeout_ms,
       timestamp: new Date().toISOString(),
     };
 
@@ -341,10 +353,12 @@ Use available_groups.json to find the JID for a group. The folder name must be c
 
 server.tool(
   'update_group',
-  'Update settings for a registered group. Main group only. Currently supports changing the model.',
+  'Update settings for a registered group. Main group only. Supports model, max_tool_rounds, and timeout_ms.',
   {
     jid: z.string().describe('The chat JID of the group to update'),
-    model: z.enum(['haiku', 'sonnet', 'opus']).optional().describe('Claude model class to use. Always uses the latest version. Omit to keep current value.'),
+    model: z.string().optional().describe('Model to use. Claude aliases: "haiku", "sonnet", "opus". Ollama: "ollama:modelname" or "ollama-remote:modelname". Omit to keep current value.'),
+    max_tool_rounds: z.number().int().positive().optional().describe('Maximum tool-calling rounds per invocation. Omit to keep current value.'),
+    timeout_ms: z.number().int().positive().optional().describe('Per-invocation timeout in milliseconds. Omit to keep current value.'),
   },
   async (args) => {
     if (!isMain) {
@@ -354,10 +368,12 @@ server.tool(
       };
     }
 
-    const data: Record<string, string | undefined> = {
+    const data: Record<string, string | number | undefined> = {
       type: 'update_group',
       jid: args.jid,
       model: args.model || undefined,
+      maxToolRounds: args.max_tool_rounds,
+      timeoutMs: args.timeout_ms,
       timestamp: new Date().toISOString(),
     };
 

@@ -18,6 +18,9 @@ import fs from 'fs';
 import path from 'path';
 import { query, HookCallback, PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
+import { runOllamaChat } from './ollama-chat-engine.js';
+import { McpToolExecutor, McpServerConfig } from './mcp-tool-executor.js';
+import { buildOllamaSystemPrompt } from './ollama-system-prompt.js';
 
 interface ContainerInput {
   prompt: string;
@@ -28,6 +31,8 @@ interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   model?: string;
+  maxToolRounds?: number;
+  timeoutMs?: number;
 }
 
 interface ContainerOutput {
@@ -497,6 +502,122 @@ async function runQuery(
   return { newSessionId, lastAssistantUuid, closedDuringQuery };
 }
 
+/**
+ * Run Ollama direct mode — bypass Claude SDK entirely.
+ * Spawns MCP server processes directly and drives Ollama with tool calling.
+ */
+async function runOllamaDirectMode(containerInput: ContainerInput): Promise<void> {
+  const model = containerInput.model!;
+  const colonIdx = model.indexOf(':');
+  const prefix = model.slice(0, colonIdx);
+  const ollamaModel = model.slice(colonIdx + 1);
+
+  const host = prefix === 'ollama-remote'
+    ? process.env.OLLAMA_REMOTE_HOST || 'http://localhost:11434'
+    : process.env.OLLAMA_HOST || 'http://host.docker.internal:11434';
+
+  log(`Ollama direct mode: model=${ollamaModel} host=${host}`);
+
+  // Load MCP server config
+  const mcpConfigPath = '/workspace/mcp-servers-config/config.json';
+  let mcpConfig: Record<string, McpServerConfig> = {};
+  if (fs.existsSync(mcpConfigPath)) {
+    try {
+      mcpConfig = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf-8'));
+    } catch (err) {
+      log(`Failed to load MCP config: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // Add the nanoclaw IPC server
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const ipcServerPath = path.join(__dirname, 'ipc-mcp-stdio.js');
+  mcpConfig['nanoclaw'] = {
+    command: 'node',
+    args: [ipcServerPath],
+    tools: ['send_message', 'schedule_task', 'list_tasks', 'pause_task', 'resume_task', 'cancel_task', 'update_task', 'register_group', 'update_group', 'list_groups'],
+    env: {
+      NANOCLAW_CHAT_JID: containerInput.chatJid,
+      NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
+      NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+    },
+  };
+
+  // Initialize MCP tool executor
+  const executor = new McpToolExecutor();
+  try {
+    await executor.initialize(mcpConfig);
+  } catch (err) {
+    log(`MCP executor init failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  const systemPrompt = buildOllamaSystemPrompt(containerInput);
+
+  // Build prompt
+  let prompt = containerInput.prompt;
+  if (containerInput.isScheduledTask) {
+    prompt = `[SCHEDULED TASK - The following message was sent automatically and is not coming directly from the user or group.]\n\n${prompt}`;
+  }
+
+  // Drain any pending IPC messages
+  fs.mkdirSync(IPC_INPUT_DIR, { recursive: true });
+  try { fs.unlinkSync(IPC_INPUT_CLOSE_SENTINEL); } catch { /* ignore */ }
+  const pending = drainIpcInput();
+  if (pending.length > 0) {
+    prompt += '\n' + pending.join('\n');
+  }
+
+  // Query loop: run chat → wait for IPC → repeat
+  try {
+    while (true) {
+      log(`Starting Ollama chat (model: ${ollamaModel})...`);
+
+      const result = await runOllamaChat(prompt, {
+        host,
+        model: ollamaModel,
+        systemPrompt,
+        maxIterations: containerInput.maxToolRounds || 10,
+        timeoutMs: containerInput.timeoutMs || 300_000,
+        tools: executor.getOllamaTools(),
+        toolNameMap: executor.getToolNameMap(),
+        executeTool: (name, args) => executor.callTool(name, args),
+      });
+
+      const meta = result.timedOut ? ' [timeout]'
+        : result.maxIterationsReached ? ' [max iterations]'
+        : '';
+
+      writeOutput({
+        status: 'success',
+        result: result.response || null,
+      });
+
+      if (meta) {
+        log(`Chat ended${meta} after ${result.iterations} round(s)`);
+      }
+
+      // Check for _close sentinel
+      if (shouldClose()) {
+        log('Close sentinel received, exiting');
+        break;
+      }
+
+      // Wait for next IPC message or close
+      log('Ollama chat done, waiting for next IPC message...');
+      const nextMessage = await waitForIpcMessage();
+      if (nextMessage === null) {
+        log('Close sentinel received, exiting');
+        break;
+      }
+
+      log(`Got new message (${nextMessage.length} chars), starting new chat`);
+      prompt = nextMessage;
+    }
+  } finally {
+    await executor.close();
+  }
+}
+
 async function main(): Promise<void> {
   let containerInput: ContainerInput;
 
@@ -512,6 +633,12 @@ async function main(): Promise<void> {
       error: `Failed to parse input: ${err instanceof Error ? err.message : String(err)}`
     });
     process.exit(1);
+  }
+
+  // Ollama direct mode: bypass Claude SDK entirely
+  if (containerInput.model?.startsWith('ollama:') || containerInput.model?.startsWith('ollama-remote:')) {
+    await runOllamaDirectMode(containerInput);
+    return;
   }
 
   // Credentials are injected by the host's credential proxy via ANTHROPIC_BASE_URL.

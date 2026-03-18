@@ -20,8 +20,8 @@ Compared to upstream `main`, this fork includes:
 - **Slack channel** (merged from `slack` remote)
 - **WhatsApp channel** (merged from `whatsapp` remote)
 - **External MCP server support** — domain-specific tools loaded from `data/mcp-servers.json`, mounted into containers at runtime
-- **Ollama integration** — local model inference with full MCP tool-calling (see below)
-- **Per-task and per-group model selection**
+- **Ollama integration** — local model inference with full MCP tool-calling, plus direct mode that bypasses Claude entirely (see below)
+- **Per-task and per-group model selection** with configurable tool-round limits and timeouts
 - **Per-task timezone support**
 - **Credential proxy rate limiting**
 - **Agent teams disabled** (to reduce token usage)
@@ -102,13 +102,19 @@ Each group has an isolated workspace under `groups/{name}/`:
 
 ```
 groups/
-├── global/CLAUDE.md       # Shared memory for all groups
-├── main/CLAUDE.md         # Admin / main channel
-├── slack_main/CLAUDE.md   # Slack channel group
-└── whatsapp_main/CLAUDE.md # WhatsApp channel group
+├── global/
+│   ├── CLAUDE.md           # Shared memory for all groups (Claude backend)
+│   └── OLLAMA.md           # Shared memory for all groups (Ollama backend, optional)
+├── main/CLAUDE.md          # Admin / main channel
+├── slack_main/CLAUDE.md    # Slack channel group
+└── whatsapp_main/
+    ├── CLAUDE.md           # WhatsApp group memory (Claude backend)
+    └── OLLAMA.md           # WhatsApp group memory (Ollama backend, optional)
 ```
 
 Group folders are mounted read-write into the container at `/workspace/group/`. The project root is mounted read-only at `/workspace/project/`. The global folder is mounted read-only at `/workspace/global/`.
+
+**Ollama memory files:** When a group uses Ollama direct mode, the agent runner reads `OLLAMA.md` for its system prompt. If no `OLLAMA.md` exists, it falls back to `CLAUDE.md`. This allows groups to have different instructions per backend. The root-level `CLAUDE.md` is for Claude Code (this CLI tool) and is never read by either agent backend.
 
 ### Environment and Secrets
 
@@ -118,41 +124,111 @@ Group folders are mounted read-write into the container at `/workspace/group/`. 
 
 ## Ollama Integration
 
-The Ollama connector lets local models (running via [Ollama](https://ollama.com)) use the same MCP tools available to the Claude agent. This is useful for scheduled tasks that can run cheaply on a local model instead of calling the Anthropic API.
+Ollama models can be used in two modes:
 
-### How It Works
+1. **Delegated mode** — Claude invokes Ollama via MCP tools (`ollama_chat`). Claude is still the primary agent; Ollama runs as a sub-tool.
+2. **Direct mode** — Ollama runs as the primary agent, bypassing the Claude SDK entirely. No Anthropic API calls are made.
+
+### Model String Convention
+
+The `model` field on groups and tasks selects the backend:
+
+| Model string | Backend | Example |
+|--------------|---------|---------|
+| `haiku`, `sonnet`, `opus` | Claude (existing) | `sonnet` |
+| `ollama:modelname` | Ollama direct (local) | `ollama:qwen3` |
+| `ollama-remote:modelname` | Ollama direct (remote) | `ollama-remote:mistral` |
+
+Set via IPC: `@Andy set this group to use ollama:qwen3`
+
+Model names are resolved against installed models at runtime — short names like `mistral` or `qwen3` will match installed variants like `mistral-small3.2:latest` or `qwen3:14b` (exact match preferred, then prefix match).
+
+### Delegated Mode (Ollama under Claude)
 
 ```
 Claude Agent (in container)
   └─ calls ollama_chat / ollama_list_models via MCP
        └─ ollama-mcp-stdio.ts (MCP server, runs inside container)
             ├─ Reads /workspace/mcp-servers-config/config.json
-            ├─ Connects to each configured MCP server as a client
             ├─ Converts MCP tool schemas to Ollama tool format
             ├─ Sends chat request to Ollama with tools attached
             ├─ Handles tool-call loop (Ollama calls tool → result → Ollama)
             └─ Returns final text response (or tool calls for Claude to execute)
 ```
 
+### Direct Mode (Ollama as primary agent)
+
+```
+Agent Runner (in container)
+  ├─ Detects ollama: or ollama-remote: model prefix
+  ├─ Skips Claude SDK entirely (no Anthropic API calls)
+  ├─ Spawns MCP server processes (nanoclaw IPC, external servers)
+  ├─ Builds system prompt from OLLAMA.md (or CLAUDE.md fallback)
+  ├─ Runs ollama-chat-engine loop with tool calling
+  └─ Outputs results in same format as Claude path
+```
+
+In direct mode:
+- No Anthropic credentials are passed to the container
+- No persistent sessions (each invocation is a fresh conversation)
+- Shorter default timeouts (5 min vs 30 min for Claude)
+- `OLLAMA.md` files are used for system prompt (falling back to `CLAUDE.md`)
+- Streaming mode is used for Ollama API calls (avoids Node's 300s HTTP headers timeout for slow CPU inference)
+- `OLLAMA_HOST` and `OLLAMA_REMOTE_HOST` env vars are forwarded to the container
+
 ### Key Files
 
 | File | Purpose |
 |------|---------|
-| `container/agent-runner/src/ollama-mcp-stdio.ts` | MCP server exposing `ollama_chat` and `ollama_list_models` |
-| `docs/OLLAMA-MCP-INTEGRATION.md` | Full design spec and architecture decisions |
-| `scripts/ollama-watch.sh` | Desktop notification watcher for Ollama activity (macOS) |
+| `container/agent-runner/src/ollama-chat-engine.ts` | Core chat loop with tool calling for direct mode |
+| `container/agent-runner/src/mcp-tool-executor.ts` | MCP client that spawns server processes for direct mode |
+| `container/agent-runner/src/ollama-system-prompt.ts` | System prompt builder (reads OLLAMA.md / CLAUDE.md) |
+| `container/agent-runner/src/ollama-mcp-stdio.ts` | MCP server for delegated mode (`ollama_chat` tool) |
+| `src/connection-profiles.ts` | Model string parsing and backend-specific defaults |
+| `data/backend-defaults.json` | Installation-specific default limits per backend |
+| `docs/OLLAMA-DIRECT-MODE.md` | Design spec for direct mode |
+| `docs/OLLAMA-MCP-INTEGRATION.md` | Design spec for delegated mode |
 | `data/mcp-servers.json` | Host-side MCP server definitions (tools, paths, env vars) |
 
 ### Configuration
 
-- `OLLAMA_HOST` in `.env` controls the Ollama server URL (default: `http://host.docker.internal:11434` so containers can reach the host)
+- `OLLAMA_HOST` in `.env` — local Ollama server URL (default: `http://host.docker.internal:11434`)
+- `OLLAMA_REMOTE_HOST` in `.env` — remote Ollama server URL (for `ollama-remote:` prefix)
+- `data/backend-defaults.json` — per-backend default limits (see below)
 - MCP servers are defined in `data/mcp-servers.json` with their host paths, commands, tool lists, and optional skill files
 - At container launch, `src/container-runner.ts` resolves host paths into container-side config and mounts MCP server directories read-only
 
-### Limits
+### Configurable Limits
 
-- Max 10 tool-calling rounds per `ollama_chat` invocation
-- 5-minute total timeout per invocation
+Limits can be set at three levels (most specific wins):
+
+1. **Per-task** — `maxToolRounds` and `timeoutMs` on individual scheduled tasks
+2. **Per-group** — `maxToolRounds` and `timeoutMs` on registered groups
+3. **Per-backend** — `data/backend-defaults.json` (installation-specific)
+4. **Hardcoded** — built-in fallbacks
+
+Example `data/backend-defaults.json`:
+
+```json
+{
+  "claude": {
+    "maxToolRounds": 0,
+    "timeoutMs": 1800000
+  },
+  "ollama": {
+    "maxToolRounds": 10,
+    "timeoutMs": 300000
+  }
+}
+```
+
+`maxToolRounds: 0` means unlimited (SDK manages). For Ollama, the default is 10 rounds.
+
+### Limits (legacy defaults)
+
+- Max 10 tool-calling rounds per Ollama invocation (configurable)
+- 5-minute timeout per Ollama invocation (configurable)
+- 30-minute timeout per Claude invocation (configurable)
 - Status written to `data/ipc/{group}/ollama_status.json` in real time
 
 ## External MCP Servers

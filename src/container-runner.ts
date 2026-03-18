@@ -27,6 +27,7 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
+import { isOllamaModel } from './connection-profiles.js';
 import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
@@ -44,6 +45,8 @@ export interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   model?: string;
+  maxToolRounds?: number;
+  timeoutMs?: number;
 }
 
 export interface ContainerOutput {
@@ -472,27 +475,38 @@ async function buildVolumeMounts(
 function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
+  model?: string,
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
 
-  // Route API traffic through the credential proxy (containers never see real secrets)
-  args.push(
-    '-e',
-    `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
-  );
+  // Pass Ollama env vars (used by both delegated and direct mode)
+  const ollamaEnvKeys = ['OLLAMA_HOST', 'OLLAMA_REMOTE_HOST'];
+  const ollamaEnv = readEnvFile(ollamaEnvKeys);
+  for (const key of ollamaEnvKeys) {
+    if (ollamaEnv[key]) {
+      args.push('-e', `${key}=${ollamaEnv[key]}`);
+    }
+  }
 
-  // Mirror the host's auth method with a placeholder value.
-  // API key mode: SDK sends x-api-key, proxy replaces with real key.
-  // OAuth mode:   SDK exchanges placeholder token for temp API key,
-  //               proxy injects real OAuth token on that exchange request.
-  const authMode = detectAuthMode();
-  if (authMode === 'api-key') {
-    args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
+  if (isOllamaModel(model)) {
+    // Ollama direct mode: no Anthropic credentials needed.
   } else {
-    args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+    // Claude mode: route API traffic through the credential proxy
+    args.push(
+      '-e',
+      `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
+    );
+
+    // Mirror the host's auth method with a placeholder value.
+    const authMode = detectAuthMode();
+    if (authMode === 'api-key') {
+      args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
+    } else {
+      args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+    }
   }
 
   // Runtime-specific args for host gateway resolution
@@ -535,7 +549,7 @@ export async function runContainerAgent(
   const mounts = await buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  const containerArgs = buildContainerArgs(mounts, containerName);
+  const containerArgs = buildContainerArgs(mounts, containerName, input.model);
 
   logger.debug(
     {
@@ -664,7 +678,7 @@ export async function runContainerAgent(
 
     let timedOut = false;
     let hadStreamingOutput = false;
-    const configTimeout = group.containerConfig?.timeout || CONTAINER_TIMEOUT;
+    const configTimeout = input.timeoutMs || group.containerConfig?.timeout || CONTAINER_TIMEOUT;
     // Grace period: hard timeout must be at least IDLE_TIMEOUT + 30s so the
     // graceful _close sentinel has time to trigger before the hard kill fires.
     const timeoutMs = Math.max(configTimeout, IDLE_TIMEOUT + 30_000);
