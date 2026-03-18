@@ -59,10 +59,119 @@ interface VolumeMount {
   readonly: boolean;
 }
 
-function buildVolumeMounts(
+/**
+ * Briefly spawn an MCP server to discover its tool schemas via JSON-RPC.
+ * Uses newline-delimited JSON-RPC over stdio to avoid adding SDK dependency.
+ */
+function discoverToolSchemas(
+  command: string,
+  args: string[],
+  cwd: string,
+  env?: Record<string, string>,
+): Promise<
+  Array<{ name: string; description?: string; inputSchema: unknown }>
+> {
+  return new Promise((resolve) => {
+    // Resolve 'node' to the current process executable to handle nvm/non-standard PATH
+    const resolvedCommand = command === 'node' ? process.execPath : command;
+    const proc = spawn(resolvedCommand, args, {
+      cwd,
+      env: { ...process.env, ...(env || {}) },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    let buffer = '';
+    let initialized = false;
+    const timeout = setTimeout(() => {
+      proc.kill();
+      resolve([]);
+    }, 10_000);
+
+    function sendJsonRpc(msg: unknown): void {
+      proc.stdin!.write(JSON.stringify(msg) + '\n');
+    }
+
+    proc.stdout!.on('data', (chunk: Buffer) => {
+      buffer += chunk.toString();
+      // Parse newline-delimited JSON messages
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || ''; // Keep incomplete last line in buffer
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        let msg: { id?: number; result?: { tools?: unknown[] } };
+        try {
+          msg = JSON.parse(trimmed);
+        } catch {
+          continue;
+        }
+        if (!initialized && msg.id === 1) {
+          initialized = true;
+          sendJsonRpc({ jsonrpc: '2.0', method: 'notifications/initialized' });
+          sendJsonRpc({
+            jsonrpc: '2.0',
+            id: 2,
+            method: 'tools/list',
+            params: {},
+          });
+        } else if (msg.id === 2) {
+          clearTimeout(timeout);
+          proc.kill();
+          resolve(
+            (msg.result?.tools || []) as Array<{
+              name: string;
+              description?: string;
+              inputSchema: unknown;
+            }>,
+          );
+        }
+      }
+    });
+
+    proc.stderr!.on('data', (chunk: Buffer) => {
+      logger.debug(
+        { stderr: chunk.toString().trim() },
+        'MCP server stderr during schema discovery',
+      );
+    });
+
+    proc.on('error', (err) => {
+      logger.warn(
+        { err: err.message },
+        'MCP server process error during schema discovery',
+      );
+      clearTimeout(timeout);
+      resolve([]);
+    });
+    proc.on('exit', (code) => {
+      if (!initialized) {
+        logger.warn(
+          { code },
+          'MCP server exited before schema discovery completed',
+        );
+        clearTimeout(timeout);
+        resolve([]);
+      }
+    });
+
+    // Send initialize request
+    sendJsonRpc({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        clientInfo: { name: 'nanoclaw-schema-discovery', version: '1.0.0' },
+      },
+    });
+  });
+}
+
+async function buildVolumeMounts(
   group: RegisteredGroup,
   isMain: boolean,
-): VolumeMount[] {
+): Promise<VolumeMount[]> {
   const mounts: VolumeMount[] = [];
   const projectRoot = process.cwd();
   const groupDir = resolveGroupFolderPath(group.folder);
@@ -215,6 +324,8 @@ function buildVolumeMounts(
   // Mount external MCP servers defined in data/mcp-servers.json (gitignored).
   // Each server's build directory is mounted read-only into the container.
   // A container-side config is written so the agent-runner can discover them.
+  // Tool schemas are discovered at setup time so the Ollama MCP server can
+  // pass them to Ollama without spawning duplicate MCP server processes.
   const mcpConfigPath = path.join(DATA_DIR, 'mcp-servers.json');
   if (fs.existsSync(mcpConfigPath)) {
     try {
@@ -234,6 +345,12 @@ function buildVolumeMounts(
           args: string[];
           tools: string[];
           env?: Record<string, string>;
+          skill?: string;
+          toolSchemas?: Array<{
+            name: string;
+            description?: string;
+            inputSchema: unknown;
+          }>;
         }
       > = {};
       for (const [name, srv] of Object.entries(mcpConfig.servers || {})) {
@@ -244,6 +361,7 @@ function buildVolumeMounts(
           tools: string[];
           env?: string[];
           awsAuth?: boolean;
+          skill?: string;
         };
         const resolvedHostPath = path.resolve(server.hostPath);
         if (!fs.existsSync(resolvedHostPath)) {
@@ -291,6 +409,29 @@ function buildVolumeMounts(
           }
         }
 
+        // Discover tool schemas by briefly spawning the server on the host
+        let toolSchemas: Array<{
+          name: string;
+          description?: string;
+          inputSchema: unknown;
+        }> = [];
+        try {
+          toolSchemas = await discoverToolSchemas(
+            server.command,
+            server.args,
+            resolvedHostPath,
+            resolvedEnv,
+          );
+          if (toolSchemas.length > 0) {
+            logger.info(
+              { server: name, tools: toolSchemas.map((t) => t.name) },
+              'Discovered MCP tool schemas',
+            );
+          }
+        } catch (err) {
+          logger.warn({ server: name, err }, 'Failed to discover tool schemas');
+        }
+
         containerServers[name] = {
           command: server.command,
           args: server.args.map((a) =>
@@ -300,6 +441,8 @@ function buildVolumeMounts(
           ),
           tools: server.tools || [],
           ...(Object.keys(resolvedEnv).length > 0 && { env: resolvedEnv }),
+          ...(server.skill && { skill: server.skill }),
+          ...(toolSchemas.length > 0 && { toolSchemas }),
         };
       }
 
@@ -389,7 +532,7 @@ export async function runContainerAgent(
   const groupDir = resolveGroupFolderPath(group.folder);
   fs.mkdirSync(groupDir, { recursive: true });
 
-  const mounts = buildVolumeMounts(group, input.isMain);
+  const mounts = await buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
   const containerArgs = buildContainerArgs(mounts, containerName);
