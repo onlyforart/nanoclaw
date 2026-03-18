@@ -18,7 +18,6 @@ vi.mock('./config.js', () => ({
   TIMEZONE: 'America/Los_Angeles',
 }));
 
-
 // Mock logger
 vi.mock('./logger.js', () => ({
   logger: {
@@ -73,7 +72,7 @@ function createFakeProcess() {
   const origWrite = stdin.write.bind(stdin);
   stdin.write = ((chunk: string | Buffer, ...rest: unknown[]) => {
     stdinData.push(typeof chunk === 'string' ? chunk : chunk.toString());
-    return origWrite(chunk, ...rest as []);
+    return origWrite(chunk, ...(rest as []));
   }) as typeof stdin.write;
 
   const proc = new EventEmitter() as EventEmitter & {
@@ -252,11 +251,7 @@ describe('Ollama direct mode container args', () => {
       model: 'ollama:qwen3',
     };
 
-    const resultPromise = runContainerAgent(
-      testGroup,
-      ollamaInput,
-      () => {},
-    );
+    const resultPromise = runContainerAgent(testGroup, ollamaInput, () => {});
 
     // Let it start
     await vi.advanceTimersByTimeAsync(10);

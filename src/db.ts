@@ -458,9 +458,7 @@ export function getTaskById(id: string): ScheduledTask | undefined {
 
 export function getTasksForGroup(groupFolder: string): ScheduledTask[] {
   return db
-    .prepare(
-      `${TASK_SELECT} WHERE group_folder = ? ORDER BY created_at DESC`,
-    )
+    .prepare(`${TASK_SELECT} WHERE group_folder = ? ORDER BY created_at DESC`)
     .all(groupFolder) as ScheduledTask[];
 }
 
