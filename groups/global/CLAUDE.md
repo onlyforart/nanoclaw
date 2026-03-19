@@ -49,7 +49,9 @@ When you learn something important:
 
 ## Message Formatting
 
-NEVER use markdown. Only use WhatsApp/Telegram formatting:
+These formatting rules apply to WhatsApp and Telegram channels ONLY. Other channels (e.g. Slack) may override these rules in their per-group CLAUDE.md.
+
+For WhatsApp/Telegram, NEVER use markdown. Only use their native formatting:
 - *single asterisks* for bold (NEVER **double asterisks**)
 - _underscores_ for italic
 - • bullet points
