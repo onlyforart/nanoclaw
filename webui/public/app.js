@@ -346,10 +346,8 @@ const AppGlobalPrompts = {
         <!-- Channel override tabs -->
         <div v-for="(content, channel) in channelOverrides" :key="channel"
           v-show="activeTab === channel">
-          <div class="flex items-center justify-between mb-3">
+          <div class="mb-3">
             <p class="text-sm text-gray-400">System prompt override for <span class="font-mono font-medium text-gray-300">{{ channel }}_*</span> groups. Appended after the global prompt.</p>
-            <button @click="removeOverride(channel)"
-              class="text-xs text-red-400 hover:text-red-300 transition-colors">Remove channel</button>
           </div>
           <div class="mb-6">
             <label class="block text-sm font-medium mb-2 font-mono">{{ channel.toUpperCase() }}.md</label>
@@ -402,11 +400,6 @@ const AppGlobalPrompts = {
       activeTab.value = ch;
     };
 
-    const removeOverride = (channel) => {
-      delete channelOverrides[channel];
-      activeTab.value = 'global';
-    };
-
     const save = async () => {
       saving.value = true;
       try {
@@ -423,7 +416,7 @@ const AppGlobalPrompts = {
       saving.value = false;
     };
 
-    return { claude, ollama, channelOverrides, newChannel, activeTab, tabs, loading, saving, save, addOverride, removeOverride };
+    return { claude, ollama, channelOverrides, newChannel, activeTab, tabs, loading, saving, save, addOverride };
   },
 };
 
