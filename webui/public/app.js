@@ -312,20 +312,52 @@ const AppDashboard = {
 const AppGlobalPrompts = {
   template: `
     <div>
-      <h2 class="text-2xl font-bold mb-6">Global Prompts</h2>
+      <div class="flex items-center justify-between mb-6">
+        <h2 class="text-2xl font-bold">Global Prompts</h2>
+        <div class="flex items-center gap-2">
+          <input v-model="newChannel" type="text" placeholder="channel name"
+            @keydown.enter="addOverride"
+            class="w-32 px-2 py-1.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
+          <button @click="addOverride" :disabled="!newChannel.trim()"
+            class="px-3 py-1.5 bg-gray-600 hover:bg-gray-500 disabled:opacity-30 text-white rounded text-sm font-medium transition-colors">
+            Add Channel
+          </button>
+        </div>
+      </div>
 
       <div v-if="loading" class="text-gray-400 text-sm">Loading...</div>
       <div v-else>
-        <div class="mb-6">
-          <label class="block text-sm font-medium mb-2">CLAUDE.md</label>
-          <textarea v-model="claude"
-            class="w-full h-72 px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 font-mono text-sm leading-relaxed resize-y focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"></textarea>
+        <tab-bar :tabs="tabs" :active="activeTab" @select="activeTab = $event" />
+
+        <!-- Global tab -->
+        <div v-if="activeTab === 'global'">
+          <div class="mb-6">
+            <label class="block text-sm font-medium mb-2">CLAUDE.md</label>
+            <textarea v-model="claude"
+              class="w-full h-72 px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 font-mono text-sm leading-relaxed resize-y focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"></textarea>
+          </div>
+          <div class="mb-6">
+            <label class="block text-sm font-medium mb-2">OLLAMA.md</label>
+            <textarea v-model="ollama"
+              class="w-full h-48 px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 font-mono text-sm leading-relaxed resize-y focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"></textarea>
+          </div>
         </div>
-        <div class="mb-6">
-          <label class="block text-sm font-medium mb-2">OLLAMA.md</label>
-          <textarea v-model="ollama"
-            class="w-full h-48 px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 font-mono text-sm leading-relaxed resize-y focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"></textarea>
+
+        <!-- Channel override tabs -->
+        <div v-for="(content, channel) in channelOverrides" :key="channel"
+          v-show="activeTab === channel">
+          <div class="flex items-center justify-between mb-3">
+            <p class="text-sm text-gray-400">System prompt override for <span class="font-mono font-medium text-gray-300">{{ channel }}_*</span> groups. Appended after the global prompt.</p>
+            <button @click="removeOverride(channel)"
+              class="text-xs text-red-400 hover:text-red-300 transition-colors">Remove channel</button>
+          </div>
+          <div class="mb-6">
+            <label class="block text-sm font-medium mb-2 font-mono">{{ channel.toUpperCase() }}.md</label>
+            <textarea v-model="channelOverrides[channel]"
+              class="w-full h-72 px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 font-mono text-sm leading-relaxed resize-y focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"></textarea>
+          </div>
         </div>
+
         <button @click="save" :disabled="saving"
           class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors">
           {{ saving ? 'Saving...' : 'Save' }}
@@ -336,31 +368,62 @@ const AppGlobalPrompts = {
   setup() {
     const claude = ref('');
     const ollama = ref('');
+    const channelOverrides = Vue.reactive({});
+    const newChannel = ref('');
+    const activeTab = ref('global');
     const loading = ref(true);
     const saving = ref(false);
+
+    const tabs = computed(() => {
+      const t = [{ key: 'global', label: 'Global' }];
+      for (const ch of Object.keys(channelOverrides).sort()) {
+        t.push({ key: ch, label: ch.charAt(0).toUpperCase() + ch.slice(1) });
+      }
+      return t;
+    });
 
     onMounted(async () => {
       try {
         const data = await api('/prompts/global');
         claude.value = data.claude;
         ollama.value = data.ollama || '';
+        if (data.channelOverrides) {
+          Object.assign(channelOverrides, data.channelOverrides);
+        }
       } catch (e) { showToast(e.message, 'error'); }
       loading.value = false;
     });
+
+    const addOverride = () => {
+      const ch = newChannel.value.trim().toLowerCase().replace(/[^a-z]/g, '');
+      if (!ch || channelOverrides[ch] !== undefined) return;
+      channelOverrides[ch] = '';
+      newChannel.value = '';
+      activeTab.value = ch;
+    };
+
+    const removeOverride = (channel) => {
+      delete channelOverrides[channel];
+      activeTab.value = 'global';
+    };
 
     const save = async () => {
       saving.value = true;
       try {
         await api('/prompts/global', {
           method: 'PUT',
-          body: { claude: claude.value, ollama: ollama.value || undefined },
+          body: {
+            claude: claude.value,
+            ollama: ollama.value || undefined,
+            channelOverrides,
+          },
         });
         showToast('Global prompts saved');
       } catch (e) { showToast(e.message, 'error'); }
       saving.value = false;
     };
 
-    return { claude, ollama, loading, saving, save };
+    return { claude, ollama, channelOverrides, newChannel, activeTab, tabs, loading, saving, save, addOverride, removeOverride };
   },
 };
 

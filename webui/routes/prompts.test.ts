@@ -82,6 +82,62 @@ describe('handlePutGlobalPrompts', () => {
     expect(result.claude).toBe('c');
     expect(result.ollama).toBe('o');
   });
+
+  it('writes channel overrides', () => {
+    handlePutGlobalPrompts(groupsDir, { channelOverrides: { slack: '# Slack formatting' } });
+
+    expect(fs.readFileSync(path.join(groupsDir, 'global', 'SLACK.md'), 'utf-8')).toBe('# Slack formatting');
+  });
+
+  it('removes channel override when content is empty', () => {
+    fs.writeFileSync(path.join(groupsDir, 'global', 'SLACK.md'), 'old', 'utf-8');
+
+    handlePutGlobalPrompts(groupsDir, { channelOverrides: { slack: '' } });
+
+    expect(fs.existsSync(path.join(groupsDir, 'global', 'SLACK.md'))).toBe(false);
+  });
+
+  it('returns channel overrides in response', () => {
+    fs.writeFileSync(path.join(groupsDir, 'global', 'SLACK.md'), '# Slack', 'utf-8');
+    fs.writeFileSync(path.join(groupsDir, 'global', 'TELEGRAM.md'), '# Telegram', 'utf-8');
+
+    const result = handlePutGlobalPrompts(groupsDir, { claude: 'c' });
+    expect(result.channelOverrides).toEqual({ slack: '# Slack', telegram: '# Telegram' });
+  });
+
+  it('ignores reserved file names in channel overrides', () => {
+    handlePutGlobalPrompts(groupsDir, { channelOverrides: { claude: 'hack', ollama: 'hack' } });
+
+    // CLAUDE.md and OLLAMA.md should not be overwritten via channelOverrides
+    expect(fs.existsSync(path.join(groupsDir, 'global', 'CLAUDE.md'))).toBe(false);
+  });
+});
+
+// --- Global prompts: channel overrides in GET ---
+
+describe('handleGetGlobalPrompts channel overrides', () => {
+  it('returns channel overrides from global directory', () => {
+    fs.writeFileSync(path.join(groupsDir, 'global', 'CLAUDE.md'), '# Global', 'utf-8');
+    fs.writeFileSync(path.join(groupsDir, 'global', 'SLACK.md'), '# Slack', 'utf-8');
+
+    const result = handleGetGlobalPrompts(groupsDir);
+    expect(result.channelOverrides).toEqual({ slack: '# Slack' });
+  });
+
+  it('excludes CLAUDE.md and OLLAMA.md from channel overrides', () => {
+    fs.writeFileSync(path.join(groupsDir, 'global', 'CLAUDE.md'), '# C', 'utf-8');
+    fs.writeFileSync(path.join(groupsDir, 'global', 'OLLAMA.md'), '# O', 'utf-8');
+
+    const result = handleGetGlobalPrompts(groupsDir);
+    expect(result.channelOverrides).toEqual({});
+  });
+
+  it('returns empty overrides when no channel files exist', () => {
+    fs.writeFileSync(path.join(groupsDir, 'global', 'CLAUDE.md'), '# C', 'utf-8');
+
+    const result = handleGetGlobalPrompts(groupsDir);
+    expect(result.channelOverrides).toEqual({});
+  });
 });
 
 // --- Group prompts ---
