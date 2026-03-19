@@ -129,17 +129,21 @@ export class McpToolExecutor {
 
     log(`Calling tool: ${mcpToolName} with args: ${JSON.stringify(args).slice(0, 200)}`);
 
+    const callStart = Date.now();
     const result = await server.client.callTool({
       name: toolName,
       arguments: args,
     });
+    const callMs = Date.now() - callStart;
 
     // Extract text content from the MCP result
     const textParts = (result.content as Array<{ type: string; text?: string }>)
       .filter((c) => c.type === 'text' && c.text)
       .map((c) => c.text!);
 
-    return textParts.join('\n') || '(no output)';
+    const output = textParts.join('\n') || '(no output)';
+    log(`Tool ${mcpToolName} completed in ${(callMs / 1000).toFixed(1)}s (${output.length} chars)`);
+    return output;
   }
 
   /** Get all tools in Ollama format for passing to ollama.chat(). */
