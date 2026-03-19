@@ -12,6 +12,7 @@ interface PromptInput {
   assistantName?: string;
   isMain: boolean;
   isScheduledTask?: boolean;
+  groupFolder?: string;
 }
 
 /**
@@ -48,6 +49,18 @@ export function buildOllamaSystemPrompt(input: PromptInput): string {
     const globalMemory = readMemoryFile('/workspace/global');
     if (globalMemory) {
       parts.push('## Shared Memory\n' + globalMemory);
+    }
+  }
+
+  // Channel-specific overrides from /workspace/global/{CHANNEL}.md
+  // e.g. slack_main → SLACK.md, telegram_dev → TELEGRAM.md
+  if (input.groupFolder) {
+    const channelPrefix = input.groupFolder.split('_')[0]?.toUpperCase();
+    if (channelPrefix) {
+      const channelMdPath = `/workspace/global/${channelPrefix}.md`;
+      if (fs.existsSync(channelMdPath)) {
+        parts.push('## Channel Overrides\n' + fs.readFileSync(channelMdPath, 'utf-8'));
+      }
     }
   }
 
