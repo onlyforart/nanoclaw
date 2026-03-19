@@ -284,6 +284,137 @@ systemctl --user restart nanoclaw
 
 The `XDG_RUNTIME_DIR` export is required in non-login shells (e.g., when running from Claude Code's bash environment).
 
+## Web UI
+
+A lightweight web-based management interface, delivered as a skill branch (`skill/web-ui`) and merged into this fork. The full spec and implementation plan are in [docs/WEB-UI.md](docs/WEB-UI.md). The overall container and credential security model is documented in [docs/SECURITY.md](docs/SECURITY.md).
+
+### What it does
+
+The web UI lets you view and edit groups, system prompts, scheduled tasks, and live container status from a browser. It is a **separate process** from the main NanoClaw orchestrator — you can start, stop, or restart it without affecting message processing.
+
+| Page | Purpose |
+|------|---------|
+| Dashboard | Health status, active containers (auto-refreshes), all groups |
+| Global Prompts | Edit `groups/global/CLAUDE.md` and `OLLAMA.md` |
+| Group Detail | Settings (model, limits), prompt editor, task list |
+| Task Detail | Prompt editor, schedule/model/timezone settings, run history |
+
+The UI is read/write for configuration (prompts, model selection, task schedules) but **view-only for containers** — it cannot start or stop agent containers.
+
+### Architecture
+
+```
+┌──────────────┐  mTLS  ┌──────────────────────┐
+│   Browser    │───────▶│  nanoclaw-webui       │
+│  (+ client   │◀───────│  (Node.js, port 3100) │
+│   cert)      │        └──────────┬───────────┘
+└──────────────┘                   │
+                     ┌─────────────┼─────────────┐
+                     │             │             │
+               ┌─────▼─────┐ ┌────▼────┐ ┌──────▼──────┐
+               │  SQLite    │ │  Files  │ │  Docker CLI │
+               │ messages.db│ │ groups/ │ │  docker ps  │
+               └───────────┘ └─────────┘ └─────────────┘
+
+Completely separate from the main orchestrator process.
+Shares the same SQLite DB and groups/ filesystem.
+```
+
+The web UI reads and writes the same `store/messages.db` database and `groups/` filesystem as the orchestrator. SQLite WAL mode handles concurrent access; the UI sets a 5-second busy timeout to handle brief write contention gracefully.
+
+### Security model
+
+The web UI uses **mutual TLS (mTLS)** — both the server and the client must present certificates signed by the same private CA. This is the sole authentication mechanism, and it operates at the TLS layer, below HTTP.
+
+**What this means in practice:**
+
+- **Connections without a valid client certificate are rejected at the TLS handshake.** No HTTP request is ever processed, no error page is served, no endpoint is reachable. The browser simply fails to connect.
+- **Safe to expose on LAN or WAN.** Security does not depend on localhost binding or network firewalls. Only devices with an issued client certificate can connect, regardless of network exposure. (The default bind address is `127.0.0.1`; set `WEBUI_BIND=0.0.0.0` to listen on all interfaces.)
+- **No passwords, no API keys, no session tokens.** Authentication is handled entirely by the TLS handshake. There are no login forms, no bearer tokens, and no cookies to steal.
+- **CSRF is blocked by two independent layers.** The server sets no `Access-Control-Allow-Origin` header, so browsers send a CORS preflight for non-simple methods (`PATCH`, `PUT`). The preflight itself must complete a TLS handshake requiring the client certificate — which browsers won't attach to cross-origin preflights. Even if a future browser bug bypassed this, the mTLS requirement still blocks the request.
+
+**What the web UI never sees:**
+
+- API keys (Anthropic, OpenAI, Slack, etc.)
+- OAuth tokens or WhatsApp session credentials
+- The credential proxy or any container secrets
+- The `.env` file (except for `WEBUI_*` and `ASSISTANT_NAME` variables)
+
+The web UI has no mechanism to read, forward, or leak credentials, because it simply does not load them.
+
+**Additional hardening:**
+
+| Protection | Detail |
+|------------|--------|
+| Private key permissions | All auto-generated keys are mode `0600`; startup warns on overly permissive files |
+| Path traversal (API) | Group folder names validated via `isValidGroupFolder()` regex before any file I/O |
+| Path traversal (static) | `path.resolve()` + `startsWith()` check against the `public/` root |
+| Request body limit | 1 MB maximum; larger payloads receive `413 Payload Too Large` |
+| SQL injection | All queries use parameterized statements |
+| No container control | View-only for running containers; cannot start, stop, or exec into them |
+| No message history | Messages contain personal data and are not exposed through the UI |
+
+### Certificate management
+
+On first startup, the server auto-generates a complete PKI under `data/tls/`:
+
+```
+data/tls/
+├── ca-cert.pem            # Self-signed CA (10-year lifetime)
+├── ca-key.pem             # CA private key (mode 0600)
+├── server-cert.pem        # Server cert, signed by CA (1 year, auto-renews)
+├── server-key.pem         # Server private key (mode 0600)
+└── clients/
+    ├── default-cert.pem   # Default client cert (1 year)
+    ├── default-key.pem    # Client private key
+    ├── default.p12        # PKCS#12 for Linux/Firefox (password: nanoclaw)
+    └── default-nopass.p12 # PKCS#12 for macOS (empty password)
+```
+
+The server certificate includes SANs for `localhost`, `127.0.0.1`, the machine hostname, and all non-loopback IPv4 addresses (for LAN access). Server certs auto-renew on expiry without affecting client trust. Users can supply their own certificates via `WEBUI_TLS_CA`, `WEBUI_TLS_CERT`, and `WEBUI_TLS_KEY` environment variables.
+
+To add a client certificate for a new device:
+
+```bash
+./webui/scripts/add-client.sh phone
+# → data/tls/clients/phone.p12 (password: nanoclaw)
+# → data/tls/clients/phone-nopass.p12 (macOS)
+```
+
+### Key files
+
+| File | Purpose |
+|------|---------|
+| `webui/start.ts` | Entry point: reads config, loads mTLS, starts server |
+| `webui/server.ts` | HTTPS server, route dispatch, static file serving |
+| `webui/tls.ts` | Certificate generation, renewal, validation |
+| `webui/router.ts` | Hand-rolled path matching, JSON body parser (~150 LOC) |
+| `webui/db.ts` | SQLite access (groups, tasks, task runs) |
+| `webui/routes/` | Route handlers (groups, prompts, tasks, containers) |
+| `webui/public/` | Vue 3 + TailwindCSS frontend (CDN, no build step) |
+| `webui/scripts/` | `add-client.sh`, `install-service.sh`, `uninstall-service.sh` |
+| `docs/WEB-UI.md` | Full specification and implementation plan |
+| `docs/SECURITY.md` | Overall NanoClaw security model |
+
+### Running the web UI
+
+```bash
+npm run build:webui   # Compile TypeScript + copy frontend assets
+npm run webui:dev     # Development with hot reload (tsx)
+node dist/webui/start.js  # Production
+
+# Service management (Linux)
+./webui/scripts/install-service.sh
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
+systemctl --user start nanoclaw-webui
+```
+
+### Technology choices
+
+- **No new npm dependencies.** Uses Node built-ins (`https`, `fs`, `crypto`, `child_process`), plus `better-sqlite3`, `cron-parser`, and `pino` (already installed).
+- **No framework.** Hand-rolled router (~150 LOC) instead of Express. The API surface is small (7 route patterns).
+- **No frontend build step.** Vue 3 and TailwindCSS loaded from CDN. The frontend is vanilla HTML/CSS/JS.
+
 ## Troubleshooting
 
 ### Ollama direct mode: `fetch failed` / `ECONNREFUSED`
