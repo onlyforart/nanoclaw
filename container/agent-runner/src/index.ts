@@ -379,6 +379,17 @@ async function runQuery(
     globalClaudeMd = fs.readFileSync(globalClaudeMdPath, 'utf-8');
   }
 
+  // Load channel-specific overrides from /workspace/global/{CHANNEL}.md
+  // e.g. slack_main → SLACK.md, telegram_dev → TELEGRAM.md
+  const channelPrefix = containerInput.groupFolder.split('_')[0]?.toUpperCase();
+  if (channelPrefix) {
+    const channelMdPath = `/workspace/global/${channelPrefix}.md`;
+    if (fs.existsSync(channelMdPath)) {
+      const channelMd = fs.readFileSync(channelMdPath, 'utf-8');
+      globalClaudeMd = globalClaudeMd ? `${globalClaudeMd}\n\n${channelMd}` : channelMd;
+    }
+  }
+
   // Discover additional directories mounted at /workspace/extra/*
   // These are passed to the SDK so their CLAUDE.md files are loaded automatically
   const extraDirs: string[] = [];
