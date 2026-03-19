@@ -17,7 +17,7 @@
     "auth": "tsx src/whatsapp-auth.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "build:webui": "tsc -p webui/tsconfig.json && cp -r webui/public dist/webui/public",
+    "build:webui": "tsc -p webui/tsconfig.json && rm -rf dist/webui/public && cp -r webui/public dist/webui/public",
     "webui": "node dist/webui/start.js",
     "webui:dev": "tsx webui/start.ts"
   },
