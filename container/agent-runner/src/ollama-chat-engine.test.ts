@@ -18,6 +18,15 @@ beforeEach(() => {
   mockChat.mockReset();
 });
 
+/** Wrap a chat response as a single-chunk async iterable (mimics stream: true) */
+function streamOf(response: { message: { role: string; content: string | null; tool_calls?: unknown[] } }) {
+  return {
+    async *[Symbol.asyncIterator]() {
+      yield response;
+    },
+  };
+}
+
 function baseOptions(overrides?: Partial<Parameters<typeof runOllamaChat>[1]>) {
   return {
     host: 'http://localhost:11434',
@@ -33,9 +42,9 @@ function baseOptions(overrides?: Partial<Parameters<typeof runOllamaChat>[1]>) {
 
 describe('runOllamaChat', () => {
   it('returns text response when model produces no tool calls', async () => {
-    mockChat.mockResolvedValueOnce({
+    mockChat.mockResolvedValueOnce(streamOf({
       message: { role: 'assistant', content: 'Hello there!', tool_calls: [] },
-    });
+    }));
 
     const result = await runOllamaChat('Hi', baseOptions());
 
@@ -46,9 +55,9 @@ describe('runOllamaChat', () => {
   });
 
   it('passes model to Ollama chat call', async () => {
-    mockChat.mockResolvedValueOnce({
+    mockChat.mockResolvedValueOnce(streamOf({
       message: { role: 'assistant', content: 'ok' },
-    });
+    }));
 
     await runOllamaChat('test', baseOptions({ model: 'mistral' }));
 
@@ -58,9 +67,9 @@ describe('runOllamaChat', () => {
   });
 
   it('includes system prompt in messages when provided', async () => {
-    mockChat.mockResolvedValueOnce({
+    mockChat.mockResolvedValueOnce(streamOf({
       message: { role: 'assistant', content: 'ok' },
-    });
+    }));
 
     await runOllamaChat('test', baseOptions({
       systemPrompt: 'You are a pirate.',
@@ -83,9 +92,9 @@ describe('runOllamaChat', () => {
       },
     }];
 
-    mockChat.mockResolvedValueOnce({
+    mockChat.mockResolvedValueOnce(streamOf({
       message: { role: 'assistant', content: 'done' },
-    });
+    }));
 
     await runOllamaChat('test', baseOptions({ tools }));
 
@@ -106,7 +115,7 @@ describe('runOllamaChat', () => {
     ]);
 
     // First call: model wants to call a tool
-    mockChat.mockResolvedValueOnce({
+    mockChat.mockResolvedValueOnce(streamOf({
       message: {
         role: 'assistant',
         content: '',
@@ -114,12 +123,12 @@ describe('runOllamaChat', () => {
           { function: { name: 'server__my_tool', arguments: { query: 'test' } } },
         ],
       },
-    });
+    }));
 
     // Second call: model produces final response
-    mockChat.mockResolvedValueOnce({
+    mockChat.mockResolvedValueOnce(streamOf({
       message: { role: 'assistant', content: 'Here is the answer.' },
-    });
+    }));
 
     const result = await runOllamaChat('look up test', baseOptions({
       toolNameMap,
@@ -135,7 +144,7 @@ describe('runOllamaChat', () => {
     const executeTool = vi.fn().mockRejectedValue(new Error('connection refused'));
 
     // Model calls a tool
-    mockChat.mockResolvedValueOnce({
+    mockChat.mockResolvedValueOnce(streamOf({
       message: {
         role: 'assistant',
         content: '',
@@ -143,12 +152,12 @@ describe('runOllamaChat', () => {
           { function: { name: 'broken_tool', arguments: {} } },
         ],
       },
-    });
+    }));
 
     // Model receives error and produces a response
-    mockChat.mockResolvedValueOnce({
+    mockChat.mockResolvedValueOnce(streamOf({
       message: { role: 'assistant', content: 'Sorry, the tool failed.' },
-    });
+    }));
 
     const result = await runOllamaChat('do something', baseOptions({ executeTool }));
 
@@ -164,7 +173,7 @@ describe('runOllamaChat', () => {
 
   it('stops at maxIterations limit', async () => {
     // Model keeps calling tools forever
-    mockChat.mockResolvedValue({
+    mockChat.mockResolvedValue(streamOf({
       message: {
         role: 'assistant',
         content: 'thinking...',
@@ -172,7 +181,7 @@ describe('runOllamaChat', () => {
           { function: { name: 'some_tool', arguments: {} } },
         ],
       },
-    });
+    }));
 
     const executeTool = vi.fn().mockResolvedValue('ok');
 
@@ -198,13 +207,13 @@ describe('runOllamaChat', () => {
       if (callCount === 1) {
         vi.setSystemTime(realDateNow() + 400_000);
       }
-      return {
+      return streamOf({
         message: {
           role: 'assistant',
           content: 'partial',
           tool_calls: [{ function: { name: 'tool', arguments: {} } }],
         },
-      };
+      });
     });
 
     const executeTool = vi.fn().mockResolvedValue('ok');
@@ -221,9 +230,9 @@ describe('runOllamaChat', () => {
   });
 
   it('returns empty string when model produces null content', async () => {
-    mockChat.mockResolvedValueOnce({
+    mockChat.mockResolvedValueOnce(streamOf({
       message: { role: 'assistant', content: null },
-    });
+    }));
 
     const result = await runOllamaChat('test', baseOptions());
     expect(result.response).toBe('');
@@ -232,13 +241,106 @@ describe('runOllamaChat', () => {
   it('calls onStatus callback during execution', async () => {
     const onStatus = vi.fn();
 
-    mockChat.mockResolvedValueOnce({
+    mockChat.mockResolvedValueOnce(streamOf({
       message: { role: 'assistant', content: 'done' },
-    });
+    }));
 
     await runOllamaChat('test', baseOptions({ onStatus }));
 
     expect(onStatus).toHaveBeenCalledWith(expect.stringContaining('qwen3'));
+  });
+
+  describe('argument normalization', () => {
+    it('passes object arguments directly to executeTool', async () => {
+      const executeTool = vi.fn().mockResolvedValue('ok');
+      const toolNameMap = new Map([
+        ['srv__tool', { mcpTool: 'mcp__srv__tool', serverName: 'srv' }],
+      ]);
+
+      mockChat.mockResolvedValueOnce(streamOf({
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            { function: { name: 'srv__tool', arguments: { cluster: 'staging', count: 3 } } },
+          ],
+        },
+      }));
+      mockChat.mockResolvedValueOnce(streamOf({
+        message: { role: 'assistant', content: 'done' },
+      }));
+
+      await runOllamaChat('test', baseOptions({ executeTool, toolNameMap }));
+
+      expect(executeTool).toHaveBeenCalledWith('mcp__srv__tool', { cluster: 'staging', count: 3 });
+    });
+
+    it('parses string arguments (double-encoded JSON from model)', async () => {
+      const executeTool = vi.fn().mockResolvedValue('ok');
+      const toolNameMap = new Map([
+        ['srv__tool', { mcpTool: 'mcp__srv__tool', serverName: 'srv' }],
+      ]);
+
+      mockChat.mockResolvedValueOnce(streamOf({
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            // Model returned arguments as a JSON string instead of an object
+            { function: { name: 'srv__tool', arguments: '{"cluster":"staging","namespace":"test"}' } },
+          ],
+        },
+      }));
+      mockChat.mockResolvedValueOnce(streamOf({
+        message: { role: 'assistant', content: 'done' },
+      }));
+
+      await runOllamaChat('test', baseOptions({ executeTool, toolNameMap }));
+
+      expect(executeTool).toHaveBeenCalledWith('mcp__srv__tool', { cluster: 'staging', namespace: 'test' });
+    });
+
+    it('falls back to empty object for unparseable string arguments', async () => {
+      const executeTool = vi.fn().mockResolvedValue('ok');
+
+      mockChat.mockResolvedValueOnce(streamOf({
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            { function: { name: 'some_tool', arguments: 'not valid json{' } },
+          ],
+        },
+      }));
+      mockChat.mockResolvedValueOnce(streamOf({
+        message: { role: 'assistant', content: 'done' },
+      }));
+
+      await runOllamaChat('test', baseOptions({ executeTool }));
+
+      expect(executeTool).toHaveBeenCalledWith('some_tool', {});
+    });
+
+    it('falls back to empty object for null/undefined arguments', async () => {
+      const executeTool = vi.fn().mockResolvedValue('ok');
+
+      mockChat.mockResolvedValueOnce(streamOf({
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            { function: { name: 'some_tool', arguments: null } },
+          ],
+        },
+      }));
+      mockChat.mockResolvedValueOnce(streamOf({
+        message: { role: 'assistant', content: 'done' },
+      }));
+
+      await runOllamaChat('test', baseOptions({ executeTool }));
+
+      expect(executeTool).toHaveBeenCalledWith('some_tool', {});
+    });
   });
 });
 

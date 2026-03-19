@@ -146,6 +146,7 @@ export async function runOllamaChat(
     // With stream:false, Ollama doesn't send HTTP headers until the full
     // response is generated, which can exceed 300s for large models on CPU.
     // Streaming sends headers immediately and tokens incrementally.
+    const inferenceStart = Date.now();
     const stream = await ollama.chat({
       model: resolvedModel,
       messages,
@@ -163,6 +164,8 @@ export async function runOllamaChat(
         toolCalls = chunk.message.tool_calls;
       }
     }
+    const inferenceMs = Date.now() - inferenceStart;
+    log(`  Model inference: ${(inferenceMs / 1000).toFixed(1)}s`);
 
     const response = {
       message: {
@@ -193,15 +196,39 @@ export async function runOllamaChat(
       const mapping = toolNameMap.get(ollamaName);
       const mcpName = mapping?.mcpTool ?? ollamaName;
 
-      log(`  Tool call: ${ollamaName} -> ${mcpName}`);
+      // Normalize arguments: some models return a JSON string instead of an object.
+      // Cast to unknown because Ollama's types say { [key: string]: any } but
+      // models can return strings at runtime.
+      let args: Record<string, unknown>;
+      const rawArgs: unknown = tc.function.arguments;
+      if (typeof rawArgs === 'string') {
+        try {
+          args = JSON.parse(rawArgs);
+          log(`  Tool call: ${ollamaName} -> ${mcpName} (parsed string args)`);
+        } catch {
+          log(`  Tool call: ${ollamaName} -> ${mcpName} (WARNING: args is unparseable string: ${rawArgs.slice(0, 200)})`);
+          args = {};
+        }
+      } else if (rawArgs && typeof rawArgs === 'object') {
+        args = rawArgs as Record<string, unknown>;
+        log(`  Tool call: ${ollamaName} -> ${mcpName}`);
+      } else {
+        log(`  Tool call: ${ollamaName} -> ${mcpName} (WARNING: args is ${typeof rawArgs}: ${String(rawArgs).slice(0, 200)})`);
+        args = {};
+      }
+      log(`  Args: ${JSON.stringify(args).slice(0, 500)}`);
       onStatus?.(`Executing tool: ${ollamaName}...`);
 
+      const toolStart = Date.now();
       try {
-        const result = await executeTool(mcpName, tc.function.arguments as Record<string, unknown>);
+        const result = await executeTool(mcpName, args);
+        const toolMs = Date.now() - toolStart;
+        log(`  Tool executed: ${ollamaName} in ${(toolMs / 1000).toFixed(1)}s`);
         messages.push({ role: 'tool', content: result });
       } catch (err) {
+        const toolMs = Date.now() - toolStart;
         const errMsg = `Tool execution failed: ${err instanceof Error ? err.message : String(err)}`;
-        log(`  ${errMsg}`);
+        log(`  ${errMsg} (after ${(toolMs / 1000).toFixed(1)}s)`);
         messages.push({ role: 'tool', content: errMsg });
       }
     }

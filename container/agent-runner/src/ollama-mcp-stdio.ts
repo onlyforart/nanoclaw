@@ -56,6 +56,15 @@ function log(msg: string): void {
   console.error(`[OLLAMA] ${msg}`);
 }
 
+/** Normalize tool call arguments — some models return a JSON string instead of an object */
+function normalizeArgs(raw: unknown): Record<string, unknown> {
+  if (typeof raw === 'string') {
+    try { return JSON.parse(raw); } catch { return {}; }
+  }
+  if (raw && typeof raw === 'object') return raw as Record<string, unknown>;
+  return {};
+}
+
 function writeStatus(status: string, detail?: string): void {
   try {
     const data = { status, detail, timestamp: new Date().toISOString() };
@@ -280,7 +289,7 @@ server.tool(
           const mapping = toolNameMap.get(ollamaName);
           return {
             mcpTool: mapping?.mcpTool ?? ollamaName,
-            arguments: tc.function.arguments,
+            arguments: normalizeArgs(tc.function.arguments),
           };
         });
 
@@ -395,7 +404,7 @@ server.tool(
           const mapping = toolNameMap.get(ollamaName);
           return {
             mcpTool: mapping?.mcpTool ?? ollamaName,
-            arguments: tc.function.arguments,
+            arguments: normalizeArgs(tc.function.arguments),
           };
         });
 

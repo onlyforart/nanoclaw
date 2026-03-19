@@ -283,3 +283,19 @@ systemctl --user restart nanoclaw
 ```
 
 The `XDG_RUNTIME_DIR` export is required in non-login shells (e.g., when running from Claude Code's bash environment).
+
+## Troubleshooting
+
+### Ollama direct mode: `fetch failed` / `ECONNREFUSED`
+
+If an Ollama direct mode invocation fails immediately with `ECONNREFUSED 172.17.0.1:11434` or `fetch failed`, Ollama is not running. The container resolves `host.docker.internal` to the Docker bridge IP, so if Ollama isn't listening, the connection is refused.
+
+```bash
+# Check status
+systemctl status ollama
+
+# Start it (requires sudo — it's a system service, not a user service)
+sudo systemctl start ollama
+```
+
+Ollama does not auto-restart after being stopped. After any host reboot or manual stop, you must start it again before using `ollama:` model prefixes.
