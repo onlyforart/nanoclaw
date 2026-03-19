@@ -1,0 +1,11 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "../dist/webui",
+    "declaration": false,
+    "declarationMap": false
+  },
+  "include": ["./**/*"],
+  "exclude": ["public"]
+}

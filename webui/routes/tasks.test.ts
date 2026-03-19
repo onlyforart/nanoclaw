@@ -1,0 +1,139 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import Database from 'better-sqlite3';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+
+import { initDb, closeDb } from '../db.js';
+import { handleGetGroupTasks, handleGetTask, handlePatchTask, handleGetTaskRuns } from './tasks.js';
+
+let tmpDir: string;
+
+beforeEach(() => {
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'webui-tasks-test-'));
+  const dbPath = path.join(tmpDir, 'messages.db');
+
+  const db = new Database(dbPath);
+  db.exec(`
+    CREATE TABLE scheduled_tasks (
+      id TEXT PRIMARY KEY, group_folder TEXT NOT NULL, chat_jid TEXT NOT NULL,
+      prompt TEXT NOT NULL, schedule_type TEXT NOT NULL, schedule_value TEXT NOT NULL,
+      next_run TEXT, last_run TEXT, last_result TEXT, status TEXT DEFAULT 'active',
+      created_at TEXT NOT NULL, context_mode TEXT DEFAULT 'isolated',
+      model TEXT DEFAULT NULL, timezone TEXT DEFAULT NULL,
+      max_tool_rounds INTEGER DEFAULT NULL, timeout_ms INTEGER DEFAULT NULL
+    );
+    CREATE TABLE task_run_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL,
+      run_at TEXT NOT NULL, duration_ms INTEGER NOT NULL, status TEXT NOT NULL,
+      result TEXT, error TEXT
+    );
+  `);
+
+  db.prepare(`INSERT INTO scheduled_tasks VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, NULL, NULL)`).run(
+    'task-1', 'slack_main', 'slack@main', 'Daily standup', 'cron', '0 9 * * 1-5',
+    '2024-06-03T09:00:00.000Z', 'active', '2024-01-01T00:00:00.000Z', 'group', 'sonnet', 'America/New_York',
+  );
+  db.prepare(`INSERT INTO scheduled_tasks VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, NULL, NULL, NULL, NULL)`).run(
+    'task-2', 'slack_main', 'slack@main', 'Weekly digest', 'cron', '0 8 * * 5',
+    '2024-06-07T08:00:00.000Z', 'paused', '2024-02-01T00:00:00.000Z', 'isolated',
+  );
+
+  db.prepare(`INSERT INTO task_run_logs (task_id, run_at, duration_ms, status, result, error) VALUES (?, ?, ?, ?, ?, ?)`).run(
+    'task-1', '2024-06-02T09:00:00.000Z', 4500, 'success', 'Done', null,
+  );
+  db.close();
+  initDb(dbPath);
+});
+
+afterEach(() => {
+  closeDb();
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+describe('handleGetGroupTasks', () => {
+  it('returns tasks in camelCase', () => {
+    const tasks = handleGetGroupTasks('slack_main');
+    expect(tasks).toHaveLength(2);
+    const t = tasks[0];
+    expect(t.id).toBe('task-1');
+    expect(t.scheduleType).toBe('cron');
+    expect(t.scheduleValue).toBe('0 9 * * 1-5');
+    expect(t.contextMode).toBe('group');
+    expect(t.nextRun).toBe('2024-06-03T09:00:00.000Z');
+    expect(t.createdAt).toBe('2024-01-01T00:00:00.000Z');
+    // snake_case should not leak
+    expect((t as any).schedule_type).toBeUndefined();
+    expect((t as any).context_mode).toBeUndefined();
+    expect((t as any).next_run).toBeUndefined();
+    expect((t as any).created_at).toBeUndefined();
+  });
+});
+
+describe('handleGetTask', () => {
+  it('returns a task in camelCase', () => {
+    const t = handleGetTask('task-1');
+    expect(t).not.toBeNull();
+    expect(t!.prompt).toBe('Daily standup');
+    expect(t!.scheduleType).toBe('cron');
+  });
+
+  it('returns null for non-existent task', () => {
+    expect(handleGetTask('nonexistent')).toBeNull();
+  });
+});
+
+describe('handlePatchTask', () => {
+  it('updates prompt and returns camelCase result', () => {
+    const t = handlePatchTask('task-1', { prompt: 'Updated standup' });
+    expect(t).not.toBeNull();
+    expect(t!.prompt).toBe('Updated standup');
+  });
+
+  it('maps camelCase input to snake_case for DB', () => {
+    const t = handlePatchTask('task-1', {
+      scheduleType: 'once',
+      scheduleValue: '2025-01-01T00:00:00Z',
+      maxToolRounds: 5,
+      timeoutMs: 60000,
+    });
+    expect(t).not.toBeNull();
+    expect(t!.scheduleType).toBe('once');
+    expect(t!.scheduleValue).toBe('2025-01-01T00:00:00Z');
+    expect(t!.maxToolRounds).toBe(5);
+    expect(t!.timeoutMs).toBe(60000);
+  });
+
+  it('does not allow contextMode to be updated', () => {
+    const t = handlePatchTask('task-1', { contextMode: 'isolated' } as any);
+    expect(t).not.toBeNull();
+    // Should still be 'group' — contextMode is read-only
+    expect(t!.contextMode).toBe('group');
+  });
+
+  it('returns null for non-existent task', () => {
+    expect(handlePatchTask('nonexistent', { prompt: 'x' })).toBeNull();
+  });
+});
+
+describe('handleGetTaskRuns', () => {
+  it('returns runs in camelCase', () => {
+    const runs = handleGetTaskRuns('task-1');
+    expect(runs).toHaveLength(1);
+    expect(runs[0].runAt).toBe('2024-06-02T09:00:00.000Z');
+    expect(runs[0].durationMs).toBe(4500);
+    expect(runs[0].status).toBe('success');
+    expect((runs[0] as any).run_at).toBeUndefined();
+    expect((runs[0] as any).duration_ms).toBeUndefined();
+  });
+
+  it('respects limit', () => {
+    const runs = handleGetTaskRuns('task-1', 0);
+    // limit 0 means nothing returned
+    expect(runs).toHaveLength(0);
+  });
+
+  it('returns empty for task with no runs', () => {
+    expect(handleGetTaskRuns('task-2')).toEqual([]);
+  });
+});

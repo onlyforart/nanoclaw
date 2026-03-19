@@ -16,7 +16,10 @@
     "setup": "tsx setup/index.ts",
     "auth": "tsx src/whatsapp-auth.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "build:webui": "tsc -p webui/tsconfig.json && cp -r webui/public dist/webui/public",
+    "webui": "node dist/webui/start.js",
+    "webui:dev": "tsx webui/start.ts"
   },
   "dependencies": {
     "better-sqlite3": "^11.8.1",
