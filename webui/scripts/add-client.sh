@@ -49,6 +49,7 @@ openssl x509 -req -in "$CSR" \
   -days 365 -sha256 \
   -out "$CLIENT_CERT" 2>/dev/null
 
+# Standard .p12 with password (for Linux/Firefox)
 # Try -legacy first (OpenSSL 3.x), fall back without
 if ! openssl pkcs12 -export -legacy \
   -out "$CLIENT_P12" \
@@ -60,11 +61,24 @@ if ! openssl pkcs12 -export -legacy \
     -certfile "$CA_CERT" -passout pass:nanoclaw 2>/dev/null
 fi
 
+# Passwordless .p12 for macOS (avoids repeated Keychain prompts)
+CLIENT_P12_NOPASS="$CLIENTS_DIR/${NAME}-nopass.p12"
+if ! openssl pkcs12 -export -legacy \
+  -out "$CLIENT_P12_NOPASS" \
+  -inkey "$CLIENT_KEY" -in "$CLIENT_CERT" \
+  -certfile "$CA_CERT" -passout pass: 2>/dev/null; then
+  openssl pkcs12 -export \
+    -out "$CLIENT_P12_NOPASS" \
+    -inkey "$CLIENT_KEY" -in "$CLIENT_CERT" \
+    -certfile "$CA_CERT" -passout pass: 2>/dev/null
+fi
+
 rm -f "$CSR"
 
 echo ""
 echo "Client certificate generated:"
-echo "  File: $CLIENT_P12"
-echo "  Password: nanoclaw"
 echo ""
-echo "Import this .p12 file into your browser's certificate store."
+echo "  macOS: Import $CLIENT_P12_NOPASS into LOGIN keychain (not System)"
+echo "         Leave password blank. Set to 'Always Trust'."
+echo ""
+echo "  Linux/Firefox: Import $CLIENT_P12 (password: nanoclaw)"

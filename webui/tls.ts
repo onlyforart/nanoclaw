@@ -91,13 +91,27 @@ function generateServerCert(tlsDir: string): void {
 
   const hostname = os.hostname();
 
+  // Collect all non-loopback IPv4 addresses for SAN
+  const lanIps: string[] = [];
+  const interfaces = os.networkInterfaces();
+  for (const addrs of Object.values(interfaces)) {
+    if (!addrs) continue;
+    for (const addr of addrs) {
+      if (addr.family === 'IPv4' && !addr.internal) {
+        lanIps.push(`IP:${addr.address}`);
+      }
+    }
+  }
+
+  const san = ['DNS:localhost', 'IP:127.0.0.1', `DNS:${hostname}`, ...lanIps].join(',');
+
   logger.info('Generating server certificate...');
   execSync(`openssl genrsa -out "${serverKey}" 2048`, { stdio: 'pipe' });
   setKeyPerms(serverKey);
 
   execSync(
     `openssl req -new -key "${serverKey}" -subj "/CN=nanoclaw-webui" ` +
-      `-addext "subjectAltName=DNS:localhost,IP:127.0.0.1,DNS:${hostname}" ` +
+      `-addext "subjectAltName=${san}" ` +
       `-out "${csrPath}"`,
     { stdio: 'pipe' },
   );
@@ -142,6 +156,7 @@ function generateDefaultClient(tlsDir: string): void {
     { stdio: 'pipe' },
   );
 
+  // Standard .p12 with password (for Linux/Firefox)
   // Try with -legacy first (OpenSSL 3.x), fall back without
   try {
     execSync(
@@ -155,6 +170,24 @@ function generateDefaultClient(tlsDir: string): void {
       `openssl pkcs12 -export -out "${clientP12}" ` +
         `-inkey "${clientKey}" -in "${clientCert}" ` +
         `-certfile "${caCert}" -passout pass:nanoclaw`,
+      { stdio: 'pipe' },
+    );
+  }
+
+  // Passwordless .p12 for macOS (avoids repeated Keychain prompts)
+  const clientP12NoPass = clientP12.replace('.p12', '-nopass.p12');
+  try {
+    execSync(
+      `openssl pkcs12 -export -legacy -out "${clientP12NoPass}" ` +
+        `-inkey "${clientKey}" -in "${clientCert}" ` +
+        `-certfile "${caCert}" -passout pass:`,
+      { stdio: 'pipe' },
+    );
+  } catch {
+    execSync(
+      `openssl pkcs12 -export -out "${clientP12NoPass}" ` +
+        `-inkey "${clientKey}" -in "${clientCert}" ` +
+        `-certfile "${caCert}" -passout pass:`,
       { stdio: 'pipe' },
     );
   }
@@ -246,13 +279,26 @@ export function loadOrGenerateTls(
   }
 
   if (firstRun) {
+    const clientP12NoPass = clientP12.replace('.p12', '-nopass.p12');
+    // Also generate DER format CA cert for macOS
+    const caCer = caCert.replace('.pem', '.cer');
+    try {
+      execSync(`openssl x509 -in "${caCert}" -outform der -out "${caCer}"`, { stdio: 'pipe' });
+    } catch {
+      // ignore — PEM still works on Linux
+    }
+
     logger.info('=== First-run certificate setup complete ===');
-    logger.info(`Client certificate (.p12): ${clientP12}`);
-    logger.info('Import password: nanoclaw');
     logger.info('');
-    logger.info('Browser setup:');
-    logger.info(`1. Import CA cert as trusted authority: ${caCert}`);
-    logger.info(`2. Import client cert (.p12): ${clientP12} (password: nanoclaw)`);
+    logger.info('Browser setup (macOS):');
+    logger.info(`  1. Import CA cert into login keychain: ${caCer}`);
+    logger.info('     Then set to "Always Trust" in Keychain Access > Get Info > Trust');
+    logger.info(`  2. Import client cert into LOGIN keychain (not System): ${clientP12NoPass}`);
+    logger.info('     Leave password blank. Then set to "Always Trust".');
+    logger.info('');
+    logger.info('Browser setup (Linux/Firefox):');
+    logger.info(`  1. Import CA cert as trusted authority: ${caCert}`);
+    logger.info(`  2. Import client cert: ${clientP12} (password: nanoclaw)`);
   }
 
   return {

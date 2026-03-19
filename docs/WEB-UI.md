@@ -207,14 +207,16 @@ All three must be set together. The CA is used to verify client certificates. Cl
 Two things must be imported into the browser:
 
 1. **CA certificate** (`data/tls/ca-cert.pem`) — so the browser trusts the server certificate without warnings.
+   - **macOS**: Convert to DER format first (`openssl x509 -in data/tls/ca-cert.pem -outform der -out data/tls/ca-cert.cer`), then double-click the `.cer` file, add to **login** keychain, then mark as "Always Trust" for SSL
    - **Linux/Chrome**: Settings > Privacy and Security > Security > Manage certificates > Authorities > Import
-   - **macOS**: Double-click the `.pem`, add to login keychain, then mark as "Always Trust" for SSL
    - **Firefox**: Settings > Privacy & Security > View Certificates > Authorities > Import
 
-2. **Client certificate** (`data/tls/clients/<name>.p12`) — so the browser can authenticate to the server.
-   - **Linux/Chrome**: Settings > Privacy and Security > Security > Manage certificates > Your Certificates > Import (password: `nanoclaw`)
-   - **macOS**: Double-click the `.p12`, import into login keychain (password: `nanoclaw`)
-   - **Firefox**: Settings > Privacy & Security > View Certificates > Your Certificates > Import (password: `nanoclaw`)
+2. **Client certificate** — so the browser can authenticate to the server. A passwordless `.p12` is generated alongside the standard one to avoid repeated macOS Keychain prompts.
+   - **macOS**: Import `data/tls/clients/<name>-nopass.p12` into the **login** keychain (not System — importing into System causes repeated keychain password prompts). Leave the password field blank. After importing, find the certificate in Keychain Access, Get Info > Trust > set to "Always Trust".
+   - **Linux/Chrome**: Settings > Privacy and Security > Security > Manage certificates > Your Certificates > Import `<name>.p12` (password: `nanoclaw`)
+   - **Firefox**: Settings > Privacy & Security > View Certificates > Your Certificates > Import `<name>.p12` (password: `nanoclaw`)
+
+**macOS troubleshooting**: if Safari or Chrome repeatedly prompts for your keychain password when accessing the web UI, the client certificate was likely imported into the System keychain instead of the login keychain. Delete it from System, then re-import the `-nopass.p12` into the login keychain.
 
 After importing both, the browser connects without warnings and the server accepts the connection. The install script prints these instructions on first install.
 
