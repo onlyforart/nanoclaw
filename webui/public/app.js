@@ -294,10 +294,17 @@ const AppDashboard = {
       try { containers.value = await api('/containers'); } catch {}
     };
 
-    onMounted(async () => {
+    const fetchHealth = async () => {
       try { health.value = await api('/health'); } catch {}
-      await fetchContainers();
-      interval = setInterval(fetchContainers, 5000);
+    };
+
+    const fetchAll = async () => {
+      await Promise.all([fetchHealth(), fetchContainers()]);
+    };
+
+    onMounted(async () => {
+      await fetchAll();
+      interval = setInterval(fetchAll, 5000);
     });
 
     onUnmounted(() => { if (interval) clearInterval(interval); });
@@ -422,7 +429,7 @@ const AppGlobalPrompts = {
 
 // Group Detail (Tabbed)
 const AppGroupDetail = {
-  props: ['folder'],
+  props: ['folder', 'initialTab'],
   template: `
     <div>
       <!-- Header -->
@@ -516,7 +523,8 @@ const AppGroupDetail = {
     const ollama = ref('');
     const loading = ref(true);
     const saving = ref(false);
-    const activeTab = ref('settings');
+    const activeTab = ref(props.initialTab || 'settings');
+    let taskInterval = null;
 
     const form = Vue.reactive({ model: '', maxToolRounds: null, timeoutMs: null });
 
@@ -525,6 +533,10 @@ const AppGroupDetail = {
       { key: 'prompts', label: 'Prompts' },
       { key: 'tasks', label: 'Tasks', count: tasks.value.length },
     ]);
+
+    const fetchTasks = async () => {
+      try { tasks.value = await api(`/groups/${props.folder}/tasks`); } catch {}
+    };
 
     onMounted(async () => {
       try {
@@ -542,7 +554,10 @@ const AppGroupDetail = {
         tasks.value = t;
       } catch (e) { showToast(e.message, 'error'); }
       loading.value = false;
+      taskInterval = setInterval(fetchTasks, 10000);
     });
+
+    onUnmounted(() => { if (taskInterval) clearInterval(taskInterval); });
 
     const saveSettings = async () => {
       saving.value = true;
@@ -581,7 +596,7 @@ const AppTaskDetail = {
   template: `
     <div>
       <!-- Back link -->
-      <a v-if="task" :href="'#/groups/' + task.groupFolder" class="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 mb-4 transition-colors">
+      <a v-if="task" :href="'#/groups/' + task.groupFolder + '?tab=tasks'" class="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 mb-4 transition-colors">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons.back}</svg>
         Back to group
       </a>
@@ -772,7 +787,7 @@ const app = createApp({
         <div class="max-w-4xl">
           <app-dashboard v-if="route.view === 'dashboard'" :groups="groups" />
           <app-global-prompts v-if="route.view === 'global-prompts'" />
-          <app-group-detail v-if="route.view === 'group-detail'" :folder="route.folder" :key="route.folder" />
+          <app-group-detail v-if="route.view === 'group-detail'" :folder="route.folder" :initial-tab="route.tab" :key="route.folder + (route.tab || '')" />
           <app-task-detail v-if="route.view === 'task-detail'" :task-id="route.id" :key="route.id" />
           <div v-if="route.view === 'not-found'" class="text-center py-20 text-gray-400">
             <p class="text-lg">Page not found</p>
@@ -790,12 +805,13 @@ const app = createApp({
     const darkMode = ref(document.documentElement.classList.contains('dark'));
 
     const route = computed(() => {
-      const h = currentHash.value;
-      if (h === '/') return { view: 'dashboard' };
-      if (h === '/prompts/global') return { view: 'global-prompts' };
-      const gm = h.match(/^\/groups\/([^/]+)$/);
-      if (gm) return { view: 'group-detail', folder: gm[1] };
-      const tm = h.match(/^\/tasks\/([^/]+)$/);
+      const [path, qs] = currentHash.value.split('?');
+      const params = new URLSearchParams(qs || '');
+      if (path === '/') return { view: 'dashboard' };
+      if (path === '/prompts/global') return { view: 'global-prompts' };
+      const gm = path.match(/^\/groups\/([^/]+)$/);
+      if (gm) return { view: 'group-detail', folder: gm[1], tab: params.get('tab') };
+      const tm = path.match(/^\/tasks\/([^/]+)$/);
       if (tm) return { view: 'task-detail', id: tm[1] };
       return { view: 'not-found' };
     });
