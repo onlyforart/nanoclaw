@@ -9,6 +9,7 @@ import {
 
 interface TaskResponse {
   id: string;
+  groupFolder: string;
   prompt: string;
   scheduleType: string;
   scheduleValue: string;
@@ -35,6 +36,7 @@ interface TaskRunResponse {
 function formatTask(row: TaskRow): TaskResponse {
   return {
     id: row.id,
+    groupFolder: row.group_folder,
     prompt: row.prompt,
     scheduleType: row.schedule_type,
     scheduleValue: row.schedule_value,
