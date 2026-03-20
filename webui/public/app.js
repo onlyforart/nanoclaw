@@ -710,6 +710,7 @@ const AppTaskDetail = {
     const loading = ref(true);
     const saving = ref(false);
     const activeTab = ref('prompt');
+    let runsInterval = null;
 
     const form = Vue.reactive({
       scheduleType: '', scheduleValue: '', model: '', timezone: '',
@@ -721,6 +722,10 @@ const AppTaskDetail = {
       { key: 'settings', label: 'Settings' },
       { key: 'runs', label: 'Run History', count: runs.value.length },
     ]);
+
+    const fetchRuns = async () => {
+      try { runs.value = await api(`/tasks/${props.taskId}/runs?limit=20`); } catch {}
+    };
 
     onMounted(async () => {
       try {
@@ -740,7 +745,10 @@ const AppTaskDetail = {
         runs.value = r;
       } catch (e) { showToast(e.message, 'error'); }
       loading.value = false;
+      runsInterval = setInterval(fetchRuns, 10000);
     });
+
+    onUnmounted(() => { if (runsInterval) clearInterval(runsInterval); });
 
     const save = async () => {
       saving.value = true;
