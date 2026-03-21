@@ -85,34 +85,81 @@ describe('handleGetTask', () => {
 
 describe('handlePatchTask', () => {
   it('updates prompt and returns camelCase result', () => {
-    const t = handlePatchTask('task-1', { prompt: 'Updated standup' });
-    expect(t).not.toBeNull();
-    expect(t!.prompt).toBe('Updated standup');
+    const result = handlePatchTask('task-1', { prompt: 'Updated standup' });
+    expect('task' in result).toBe(true);
+    if ('task' in result) {
+      expect(result.task.prompt).toBe('Updated standup');
+    }
   });
 
   it('maps camelCase input to snake_case for DB', () => {
-    const t = handlePatchTask('task-1', {
+    const result = handlePatchTask('task-1', {
       scheduleType: 'once',
       scheduleValue: '2025-01-01T00:00:00Z',
       maxToolRounds: 5,
       timeoutMs: 60000,
     });
-    expect(t).not.toBeNull();
-    expect(t!.scheduleType).toBe('once');
-    expect(t!.scheduleValue).toBe('2025-01-01T00:00:00Z');
-    expect(t!.maxToolRounds).toBe(5);
-    expect(t!.timeoutMs).toBe(60000);
+    expect('task' in result).toBe(true);
+    if ('task' in result) {
+      expect(result.task.scheduleType).toBe('once');
+      expect(result.task.scheduleValue).toBe('2025-01-01T00:00:00Z');
+      expect(result.task.maxToolRounds).toBe(5);
+      expect(result.task.timeoutMs).toBe(60000);
+    }
   });
 
   it('does not allow contextMode to be updated', () => {
-    const t = handlePatchTask('task-1', { contextMode: 'isolated' } as any);
-    expect(t).not.toBeNull();
-    // Should still be 'group' — contextMode is read-only
-    expect(t!.contextMode).toBe('group');
+    const result = handlePatchTask('task-1', { contextMode: 'isolated' } as any);
+    expect('task' in result).toBe(true);
+    if ('task' in result) {
+      // Should still be 'group' — contextMode is read-only
+      expect(result.task.contextMode).toBe('group');
+    }
   });
 
-  it('returns null for non-existent task', () => {
-    expect(handlePatchTask('nonexistent', { prompt: 'x' })).toBeNull();
+  it('returns error for non-existent task', () => {
+    const result = handlePatchTask('nonexistent', { prompt: 'x' });
+    expect('error' in result).toBe(true);
+  });
+
+  it('recomputes next_run when schedule value changes', () => {
+    const result = handlePatchTask('task-1', { scheduleValue: '30 12 * * *' });
+    expect('task' in result).toBe(true);
+    if ('task' in result) {
+      expect(result.task.nextRun).toBeTruthy();
+      // next_run should be different from the original seed value
+      expect(result.task.nextRun).not.toBe('2024-06-03T09:00:00.000Z');
+    }
+  });
+
+  it('recomputes next_run when schedule type changes', () => {
+    const result = handlePatchTask('task-1', {
+      scheduleType: 'interval',
+      scheduleValue: '3600000',
+    });
+    expect('task' in result).toBe(true);
+    if ('task' in result) {
+      expect(result.task.nextRun).toBeTruthy();
+      const nextRun = new Date(result.task.nextRun!).getTime();
+      expect(nextRun).toBeGreaterThan(Date.now());
+    }
+  });
+
+  it('returns error for invalid cron expression', () => {
+    const result = handlePatchTask('task-1', { scheduleValue: 'bad cron' });
+    expect('error' in result).toBe(true);
+    if ('error' in result) {
+      expect(result.error).toBeTruthy();
+    }
+  });
+
+  it('recomputes next_run when timezone changes', () => {
+    const result = handlePatchTask('task-1', { timezone: 'Europe/London' });
+    expect('task' in result).toBe(true);
+    if ('task' in result) {
+      expect(result.task.timezone).toBe('Europe/London');
+      expect(result.task.nextRun).toBeTruthy();
+    }
   });
 });
 

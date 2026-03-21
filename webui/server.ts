@@ -148,8 +148,8 @@ export function createApp(groupsDir: string, publicDir?: string): http.Server {
       handler: async (params, req) => {
         const body = (await parseJsonBody(req)) as any;
         const result = handlePatchTask(params.id, body);
-        if (!result) throw new HttpError(404, 'Task not found');
-        return result;
+        if ('error' in result) throw new HttpError(400, result.error);
+        return result.task;
       },
     },
     {

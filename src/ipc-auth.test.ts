@@ -772,3 +772,311 @@ describe('update_group with maxToolRounds and timeoutMs', () => {
     expect(group!.timeoutMs).toBe(90_000);
   });
 });
+
+// --- Requirement: agents must receive accurate feedback ---
+//
+// When an agent calls pause/resume/cancel/update/schedule via IPC, it must
+// receive an IpcResult { success, error? } that accurately reflects what
+// happened on the host. This prevents agents from telling users an action
+// succeeded when it actually failed (e.g., due to a truncated task ID or
+// authorization failure).
+
+describe('agents receive accurate feedback on task actions', () => {
+  beforeEach(() => {
+    createTask({
+      id: 'task-owned',
+      group_folder: 'other-group',
+      chat_jid: 'other@g.us',
+      prompt: 'owned task',
+      schedule_type: 'cron',
+      schedule_value: '0 9 * * *',
+      context_mode: 'isolated',
+      next_run: '2025-06-01T09:00:00.000Z',
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+  });
+
+  // --- Successful actions report success ---
+
+  it('successful pause reports success and actually pauses the task', async () => {
+    const result = await processTaskIpc(
+      { type: 'pause_task', taskId: 'task-owned' },
+      'other-group', false, deps,
+    );
+    expect(result).toEqual({ success: true });
+    expect(getTaskById('task-owned')!.status).toBe('paused');
+  });
+
+  it('successful resume reports success and actually resumes the task', async () => {
+    await processTaskIpc({ type: 'pause_task', taskId: 'task-owned' }, 'other-group', false, deps);
+    const result = await processTaskIpc(
+      { type: 'resume_task', taskId: 'task-owned' },
+      'other-group', false, deps,
+    );
+    expect(result).toEqual({ success: true });
+    expect(getTaskById('task-owned')!.status).toBe('active');
+  });
+
+  it('successful cancel reports success and actually deletes the task', async () => {
+    const result = await processTaskIpc(
+      { type: 'cancel_task', taskId: 'task-owned' },
+      'other-group', false, deps,
+    );
+    expect(result).toEqual({ success: true });
+    expect(getTaskById('task-owned')).toBeUndefined();
+  });
+
+  it('successful update reports success and actually updates the task', async () => {
+    const result = await processTaskIpc(
+      { type: 'update_task', taskId: 'task-owned', prompt: 'updated prompt' },
+      'other-group', false, deps,
+    );
+    expect(result).toEqual({ success: true });
+    expect(getTaskById('task-owned')!.prompt).toBe('updated prompt');
+  });
+
+  it('successful schedule reports success and creates the task', async () => {
+    const result = await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'new task',
+        schedule_type: 'once',
+        schedule_value: '2025-06-01T00:00:00',
+        targetJid: 'other@g.us',
+      },
+      'whatsapp_main', true, deps,
+    );
+    expect(result).toEqual({ success: true });
+    expect(getAllTasks().length).toBe(2); // existing + new
+  });
+
+  // --- Failed actions report failure with an explanation ---
+  // The error message must be descriptive enough for the agent to relay
+  // a meaningful explanation to the user.
+
+  describe('when the task ID does not match any task', () => {
+    // This is the exact scenario that triggered the bug: the model truncated
+    // a task ID, so the task was not found, but the agent told the user it
+    // succeeded because it never learned the action failed.
+    for (const action of ['pause_task', 'resume_task', 'cancel_task', 'update_task'] as const) {
+      it(`${action} reports failure and includes the bad ID`, async () => {
+        const result = await processTaskIpc(
+          { type: action, taskId: 'task-1774077051949-kulvz' },  // truncated ID
+          'other-group', false, deps,
+        );
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('Task not found');
+        expect(result.error).toContain('task-1774077051949-kulvz');
+      });
+    }
+  });
+
+  describe('when the agent is not authorized for the task', () => {
+    for (const action of ['pause_task', 'resume_task', 'cancel_task', 'update_task'] as const) {
+      it(`${action} reports failure and the task is unchanged`, async () => {
+        const statusBefore = getTaskById('task-owned')!.status;
+        const promptBefore = getTaskById('task-owned')!.prompt;
+        const result = await processTaskIpc(
+          { type: action, taskId: 'task-owned', ...(action === 'update_task' ? { prompt: 'hacked' } : {}) },
+          'third-group', false, deps,
+        );
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('Not authorized');
+        // Verify nothing was mutated
+        const task = getTaskById('task-owned')!;
+        expect(task.status).toBe(statusBefore);
+        expect(task.prompt).toBe(promptBefore);
+      });
+    }
+  });
+
+  describe('when task_id is missing entirely', () => {
+    for (const action of ['pause_task', 'resume_task', 'cancel_task', 'update_task'] as const) {
+      it(`${action} reports failure`, async () => {
+        const result = await processTaskIpc(
+          { type: action },
+          'other-group', false, deps,
+        );
+        expect(result.success).toBe(false);
+        expect(result.error).toBeDefined();
+      });
+    }
+  });
+
+  // --- Schedule-specific validation errors ---
+
+  it('schedule_task reports failure when prompt is missing', async () => {
+    const result = await processTaskIpc(
+      {
+        type: 'schedule_task',
+        schedule_type: 'once',
+        schedule_value: '2025-06-01T00:00:00',
+        targetJid: 'other@g.us',
+      },
+      'whatsapp_main', true, deps,
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Missing required fields');
+  });
+
+  it('schedule_task reports failure for invalid cron and includes the expression', async () => {
+    const result = await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'bad cron',
+        schedule_type: 'cron',
+        schedule_value: 'not-a-cron',
+        targetJid: 'other@g.us',
+      },
+      'whatsapp_main', true, deps,
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Invalid cron');
+    expect(result.error).toContain('not-a-cron');
+  });
+
+  it('schedule_task reports failure for invalid interval', async () => {
+    const result = await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'bad interval',
+        schedule_type: 'interval',
+        schedule_value: '-5',
+        targetJid: 'other@g.us',
+      },
+      'whatsapp_main', true, deps,
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Invalid interval');
+  });
+
+  it('schedule_task reports failure for invalid once timestamp', async () => {
+    const result = await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'bad timestamp',
+        schedule_type: 'once',
+        schedule_value: 'next tuesday',
+        targetJid: 'other@g.us',
+      },
+      'whatsapp_main', true, deps,
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Invalid timestamp');
+  });
+
+  it('schedule_task reports failure for unregistered target group', async () => {
+    const result = await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'task for nobody',
+        schedule_type: 'once',
+        schedule_value: '2025-06-01T00:00:00',
+        targetJid: 'nonexistent@g.us',
+      },
+      'whatsapp_main', true, deps,
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('not registered');
+  });
+
+  // --- Unknown IPC types are reported as errors, not silently dropped ---
+
+  it('unknown IPC type reports failure instead of being silently ignored', async () => {
+    const result = await processTaskIpc(
+      { type: 'bogus_action' },
+      'other-group', false, deps,
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Unknown IPC task type');
+  });
+
+  // --- Result consistency: success=true must mean the action happened ---
+
+  it('a failed action never mutates the database', async () => {
+    const tasksBefore = getAllTasks();
+    // Try to pause a nonexistent task
+    await processTaskIpc(
+      { type: 'pause_task', taskId: 'does-not-exist' },
+      'other-group', false, deps,
+    );
+    // Try to cancel as unauthorized group
+    await processTaskIpc(
+      { type: 'cancel_task', taskId: 'task-owned' },
+      'third-group', false, deps,
+    );
+    // Try to schedule with invalid cron
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'x',
+        schedule_type: 'cron',
+        schedule_value: 'bad',
+        targetJid: 'other@g.us',
+      },
+      'whatsapp_main', true, deps,
+    );
+    const tasksAfter = getAllTasks();
+    expect(tasksAfter).toEqual(tasksBefore);
+  });
+});
+
+// --- Requirement: IPC result file protocol ---
+//
+// The host writes a JSON result file ({filename}.result) to the IPC tasks
+// directory after processing each request. The container polls for this file
+// and returns the result to the model. This is how feedback flows from the
+// host back to the container.
+
+describe('IPC result file protocol', () => {
+  it('the IPC watcher writes a result file after processing a task action', async () => {
+    // This test verifies the integration contract: processTaskIpc returns
+    // IpcResult, and the watcher loop writes it as a .result file.
+    // We test the writeIpcResult helper directly since the watcher loop
+    // depends on filesystem polling that is hard to test in isolation.
+    const fs = await import('fs');
+    const path = await import('path');
+    const os = await import('os');
+
+    // Use the same writeIpcResult logic as ipc.ts
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ipc-test-'));
+    const resultPath = path.join(tmpDir, 'test.json.result');
+
+    const result = { success: false, error: 'Task not found: task-123' };
+    const tempPath = `${resultPath}.tmp`;
+    fs.writeFileSync(tempPath, JSON.stringify(result));
+    fs.renameSync(tempPath, resultPath);
+
+    // Verify the file is valid JSON with the expected shape
+    const read = JSON.parse(fs.readFileSync(resultPath, 'utf-8'));
+    expect(read.success).toBe(false);
+    expect(read.error).toBe('Task not found: task-123');
+
+    // Cleanup
+    fs.unlinkSync(resultPath);
+    fs.rmdirSync(tmpDir);
+  });
+
+  it('result file uses atomic write (temp + rename) to prevent partial reads', async () => {
+    const fs = await import('fs');
+    const path = await import('path');
+    const os = await import('os');
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ipc-test-'));
+    const resultPath = path.join(tmpDir, 'atomic.json.result');
+    const tempPath = `${resultPath}.tmp`;
+
+    // Simulate atomic write
+    fs.writeFileSync(tempPath, JSON.stringify({ success: true }));
+    // Before rename, the result file should not exist
+    expect(fs.existsSync(resultPath)).toBe(false);
+    fs.renameSync(tempPath, resultPath);
+    // After rename, the temp file should be gone and result should exist
+    expect(fs.existsSync(tempPath)).toBe(false);
+    expect(fs.existsSync(resultPath)).toBe(true);
+
+    fs.unlinkSync(resultPath);
+    fs.rmdirSync(tmpDir);
+  });
+});

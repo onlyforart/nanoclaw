@@ -628,13 +628,22 @@ const AppTaskDetail = {
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
               <div>
                 <label class="block text-sm font-medium mb-1">Schedule Type</label>
-                <input v-model="form.scheduleType" type="text"
+                <select v-model="form.scheduleType"
                   class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
+                  <option value="cron">cron</option>
+                  <option value="interval">interval</option>
+                  <option value="once">once</option>
+                </select>
               </div>
               <div>
                 <label class="block text-sm font-medium mb-1">Schedule Value</label>
                 <input v-model="form.scheduleValue" type="text"
-                  class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 font-mono text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
+                  :class="['w-full px-3 py-2 rounded-lg border font-mono text-sm focus:ring-2 focus:border-blue-500 outline-none transition',
+                    scheduleError ? 'border-red-400 dark:border-red-500 focus:ring-red-500' : 'border-gray-300 dark:border-gray-600 focus:ring-blue-500',
+                    'bg-white dark:bg-gray-800']"
+                  :placeholder="form.scheduleType === 'cron' ? '*/15 * * * *' : form.scheduleType === 'interval' ? '300000' : '2026-06-01T09:00:00'">
+                <p v-if="scheduleError" class="mt-1 text-xs text-red-500">{{ scheduleError }}</p>
+                <p v-else-if="scheduleHint" class="mt-1 text-xs text-gray-400">{{ scheduleHint }}</p>
               </div>
             </div>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
@@ -669,7 +678,7 @@ const AppTaskDetail = {
                 <option value="paused">Paused</option>
               </select>
             </div>
-            <button @click="save" :disabled="saving"
+            <button @click="save" :disabled="saving || !!scheduleError"
               class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors">
               {{ saving ? 'Saving...' : 'Save Settings' }}
             </button>
@@ -723,6 +732,57 @@ const AppTaskDetail = {
       { key: 'runs', label: 'Run History', count: runs.value.length },
     ]);
 
+    const scheduleError = computed(() => {
+      const v = form.scheduleValue.trim();
+      if (!v) return '';
+      if (form.scheduleType === 'cron') {
+        const fields = v.split(/\s+/);
+        if (fields.length !== 5) return `Cron requires exactly 5 fields (minute hour day month weekday), got ${fields.length}`;
+        // Basic field validation
+        const ranges = [
+          { name: 'minute', min: 0, max: 59 },
+          { name: 'hour', min: 0, max: 23 },
+          { name: 'day', min: 1, max: 31 },
+          { name: 'month', min: 1, max: 12 },
+          { name: 'weekday', min: 0, max: 7 },
+        ];
+        for (let i = 0; i < 5; i++) {
+          const field = fields[i];
+          if (field === '*') continue;
+          // Allow */N, N-M, N,M,... patterns
+          if (/^(\*\/\d+|\d+(-\d+)?(\/\d+)?(,\d+(-\d+)?(\/\d+)?)*)$/.test(field)) continue;
+          return `Invalid ${ranges[i].name} field: "${field}"`;
+        }
+        return '';
+      }
+      if (form.scheduleType === 'interval') {
+        const ms = parseInt(v, 10);
+        if (isNaN(ms) || ms <= 0) return 'Interval must be a positive number (milliseconds)';
+        return '';
+      }
+      if (form.scheduleType === 'once') {
+        if (isNaN(new Date(v).getTime())) return 'Invalid timestamp';
+        return '';
+      }
+      return '';
+    });
+
+    const scheduleHint = computed(() => {
+      const v = form.scheduleValue.trim();
+      if (!v || scheduleError.value) return '';
+      if (form.scheduleType === 'cron') return 'Format: minute hour day month weekday';
+      if (form.scheduleType === 'interval') {
+        const ms = parseInt(v, 10);
+        if (ms >= 3600000) return `Every ${(ms / 3600000).toFixed(1)} hour(s)`;
+        if (ms >= 60000) return `Every ${(ms / 60000).toFixed(0)} minute(s)`;
+        return `Every ${(ms / 1000).toFixed(0)} second(s)`;
+      }
+      if (form.scheduleType === 'once') {
+        return `Runs at ${new Date(v).toLocaleString()}`;
+      }
+      return '';
+    });
+
     const fetchRuns = async () => {
       try { runs.value = await api(`/tasks/${props.taskId}/runs?limit=20`); } catch {}
     };
@@ -768,7 +828,7 @@ const AppTaskDetail = {
       saving.value = false;
     };
 
-    return { task, runs, promptText, loading, saving, activeTab, form, tabs, save };
+    return { task, runs, promptText, loading, saving, activeTab, form, tabs, save, scheduleError, scheduleHint };
   },
 };
 

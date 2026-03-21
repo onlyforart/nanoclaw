@@ -80,29 +80,49 @@ export class McpToolExecutor {
           this.toolToServer.set(mcpToolName, name);
         }
 
-        // Build Ollama tool schemas from pre-discovered schemas
-        if (config.toolSchemas) {
-          for (const schema of config.toolSchemas) {
-            const ollamaToolName = `${name}__${schema.name}`;
-            const mcpToolName = `mcp__${name}__${schema.name}`;
-
-            this.ollamaToolMap.set(ollamaToolName, {
-              mcpTool: mcpToolName,
-              serverName: name,
-            });
-
-            this.ollamaTools.push({
-              type: 'function',
-              function: {
-                name: ollamaToolName,
-                description: schema.description ?? '',
-                parameters: schema.inputSchema as Tool['function']['parameters'],
-              },
-            });
+        // Build Ollama tool schemas: use pre-discovered schemas if available,
+        // otherwise discover dynamically via MCP tools/list
+        let schemas = config.toolSchemas;
+        if (!schemas || schemas.length === 0) {
+          try {
+            const listResult = await client.listTools();
+            const toolSet = new Set(config.tools);
+            schemas = listResult.tools
+              .filter((t) => toolSet.has(t.name))
+              .map((t) => ({
+                name: t.name,
+                description: t.description,
+                inputSchema: t.inputSchema,
+              }));
+            if (schemas.length > 0) {
+              log(`Discovered ${schemas.length} tool schema(s) from ${name}`);
+            }
+          } catch (err) {
+            log(`Failed to discover tools from ${name}: ${err instanceof Error ? err.message : String(err)}`);
+            schemas = [];
           }
         }
 
-        log(`Connected to MCP server: ${name} (${config.tools.length} tools)`);
+        for (const schema of schemas) {
+          const ollamaToolName = `${name}__${schema.name}`;
+          const mcpToolName = `mcp__${name}__${schema.name}`;
+
+          this.ollamaToolMap.set(ollamaToolName, {
+            mcpTool: mcpToolName,
+            serverName: name,
+          });
+
+          this.ollamaTools.push({
+            type: 'function',
+            function: {
+              name: ollamaToolName,
+              description: schema.description ?? '',
+              parameters: schema.inputSchema as Tool['function']['parameters'],
+            },
+          });
+        }
+
+        log(`Connected to MCP server: ${name} (${config.tools.length} tools, ${schemas.length} schemas)`);
       } catch (err) {
         log(`Failed to connect to MCP server ${name}: ${err instanceof Error ? err.message : String(err)}`);
       }
