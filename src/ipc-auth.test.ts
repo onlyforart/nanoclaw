@@ -802,17 +802,26 @@ describe('agents receive accurate feedback on task actions', () => {
   it('successful pause reports success and actually pauses the task', async () => {
     const result = await processTaskIpc(
       { type: 'pause_task', taskId: 'task-owned' },
-      'other-group', false, deps,
+      'other-group',
+      false,
+      deps,
     );
     expect(result).toEqual({ success: true });
     expect(getTaskById('task-owned')!.status).toBe('paused');
   });
 
   it('successful resume reports success and actually resumes the task', async () => {
-    await processTaskIpc({ type: 'pause_task', taskId: 'task-owned' }, 'other-group', false, deps);
+    await processTaskIpc(
+      { type: 'pause_task', taskId: 'task-owned' },
+      'other-group',
+      false,
+      deps,
+    );
     const result = await processTaskIpc(
       { type: 'resume_task', taskId: 'task-owned' },
-      'other-group', false, deps,
+      'other-group',
+      false,
+      deps,
     );
     expect(result).toEqual({ success: true });
     expect(getTaskById('task-owned')!.status).toBe('active');
@@ -821,7 +830,9 @@ describe('agents receive accurate feedback on task actions', () => {
   it('successful cancel reports success and actually deletes the task', async () => {
     const result = await processTaskIpc(
       { type: 'cancel_task', taskId: 'task-owned' },
-      'other-group', false, deps,
+      'other-group',
+      false,
+      deps,
     );
     expect(result).toEqual({ success: true });
     expect(getTaskById('task-owned')).toBeUndefined();
@@ -830,7 +841,9 @@ describe('agents receive accurate feedback on task actions', () => {
   it('successful update reports success and actually updates the task', async () => {
     const result = await processTaskIpc(
       { type: 'update_task', taskId: 'task-owned', prompt: 'updated prompt' },
-      'other-group', false, deps,
+      'other-group',
+      false,
+      deps,
     );
     expect(result).toEqual({ success: true });
     expect(getTaskById('task-owned')!.prompt).toBe('updated prompt');
@@ -845,7 +858,9 @@ describe('agents receive accurate feedback on task actions', () => {
         schedule_value: '2025-06-01T00:00:00',
         targetJid: 'other@g.us',
       },
-      'whatsapp_main', true, deps,
+      'whatsapp_main',
+      true,
+      deps,
     );
     expect(result).toEqual({ success: true });
     expect(getAllTasks().length).toBe(2); // existing + new
@@ -859,11 +874,18 @@ describe('agents receive accurate feedback on task actions', () => {
     // This is the exact scenario that triggered the bug: the model truncated
     // a task ID, so the task was not found, but the agent told the user it
     // succeeded because it never learned the action failed.
-    for (const action of ['pause_task', 'resume_task', 'cancel_task', 'update_task'] as const) {
+    for (const action of [
+      'pause_task',
+      'resume_task',
+      'cancel_task',
+      'update_task',
+    ] as const) {
       it(`${action} reports failure and includes the bad ID`, async () => {
         const result = await processTaskIpc(
-          { type: action, taskId: 'task-1774077051949-kulvz' },  // truncated ID
-          'other-group', false, deps,
+          { type: action, taskId: 'task-1774077051949-kulvz' }, // truncated ID
+          'other-group',
+          false,
+          deps,
         );
         expect(result.success).toBe(false);
         expect(result.error).toContain('Task not found');
@@ -873,13 +895,24 @@ describe('agents receive accurate feedback on task actions', () => {
   });
 
   describe('when the agent is not authorized for the task', () => {
-    for (const action of ['pause_task', 'resume_task', 'cancel_task', 'update_task'] as const) {
+    for (const action of [
+      'pause_task',
+      'resume_task',
+      'cancel_task',
+      'update_task',
+    ] as const) {
       it(`${action} reports failure and the task is unchanged`, async () => {
         const statusBefore = getTaskById('task-owned')!.status;
         const promptBefore = getTaskById('task-owned')!.prompt;
         const result = await processTaskIpc(
-          { type: action, taskId: 'task-owned', ...(action === 'update_task' ? { prompt: 'hacked' } : {}) },
-          'third-group', false, deps,
+          {
+            type: action,
+            taskId: 'task-owned',
+            ...(action === 'update_task' ? { prompt: 'hacked' } : {}),
+          },
+          'third-group',
+          false,
+          deps,
         );
         expect(result.success).toBe(false);
         expect(result.error).toContain('Not authorized');
@@ -892,11 +925,18 @@ describe('agents receive accurate feedback on task actions', () => {
   });
 
   describe('when task_id is missing entirely', () => {
-    for (const action of ['pause_task', 'resume_task', 'cancel_task', 'update_task'] as const) {
+    for (const action of [
+      'pause_task',
+      'resume_task',
+      'cancel_task',
+      'update_task',
+    ] as const) {
       it(`${action} reports failure`, async () => {
         const result = await processTaskIpc(
           { type: action },
-          'other-group', false, deps,
+          'other-group',
+          false,
+          deps,
         );
         expect(result.success).toBe(false);
         expect(result.error).toBeDefined();
@@ -914,7 +954,9 @@ describe('agents receive accurate feedback on task actions', () => {
         schedule_value: '2025-06-01T00:00:00',
         targetJid: 'other@g.us',
       },
-      'whatsapp_main', true, deps,
+      'whatsapp_main',
+      true,
+      deps,
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('Missing required fields');
@@ -929,7 +971,9 @@ describe('agents receive accurate feedback on task actions', () => {
         schedule_value: 'not-a-cron',
         targetJid: 'other@g.us',
       },
-      'whatsapp_main', true, deps,
+      'whatsapp_main',
+      true,
+      deps,
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('Invalid cron');
@@ -945,7 +989,9 @@ describe('agents receive accurate feedback on task actions', () => {
         schedule_value: '-5',
         targetJid: 'other@g.us',
       },
-      'whatsapp_main', true, deps,
+      'whatsapp_main',
+      true,
+      deps,
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('Invalid interval');
@@ -960,7 +1006,9 @@ describe('agents receive accurate feedback on task actions', () => {
         schedule_value: 'next tuesday',
         targetJid: 'other@g.us',
       },
-      'whatsapp_main', true, deps,
+      'whatsapp_main',
+      true,
+      deps,
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('Invalid timestamp');
@@ -975,7 +1023,9 @@ describe('agents receive accurate feedback on task actions', () => {
         schedule_value: '2025-06-01T00:00:00',
         targetJid: 'nonexistent@g.us',
       },
-      'whatsapp_main', true, deps,
+      'whatsapp_main',
+      true,
+      deps,
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('not registered');
@@ -986,7 +1036,9 @@ describe('agents receive accurate feedback on task actions', () => {
   it('unknown IPC type reports failure instead of being silently ignored', async () => {
     const result = await processTaskIpc(
       { type: 'bogus_action' },
-      'other-group', false, deps,
+      'other-group',
+      false,
+      deps,
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('Unknown IPC task type');
@@ -999,12 +1051,16 @@ describe('agents receive accurate feedback on task actions', () => {
     // Try to pause a nonexistent task
     await processTaskIpc(
       { type: 'pause_task', taskId: 'does-not-exist' },
-      'other-group', false, deps,
+      'other-group',
+      false,
+      deps,
     );
     // Try to cancel as unauthorized group
     await processTaskIpc(
       { type: 'cancel_task', taskId: 'task-owned' },
-      'third-group', false, deps,
+      'third-group',
+      false,
+      deps,
     );
     // Try to schedule with invalid cron
     await processTaskIpc(
@@ -1015,7 +1071,9 @@ describe('agents receive accurate feedback on task actions', () => {
         schedule_value: 'bad',
         targetJid: 'other@g.us',
       },
-      'whatsapp_main', true, deps,
+      'whatsapp_main',
+      true,
+      deps,
     );
     const tasksAfter = getAllTasks();
     expect(tasksAfter).toEqual(tasksBefore);
