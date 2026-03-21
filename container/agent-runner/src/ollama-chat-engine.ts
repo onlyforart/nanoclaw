@@ -14,6 +14,7 @@ export interface OllamaChatOptions {
   host: string;
   model: string;
   systemPrompt?: string;
+  temperature?: number;
   maxIterations: number;
   timeoutMs: number;
   tools: Tool[];
@@ -65,6 +66,7 @@ export async function runOllamaChat(
     host,
     model,
     systemPrompt,
+    temperature,
     maxIterations,
     timeoutMs,
     tools,
@@ -151,6 +153,7 @@ export async function runOllamaChat(
       model: resolvedModel,
       messages,
       ...(tools.length > 0 && { tools }),
+      ...(temperature != null && { options: { temperature } }),
       stream: true,
     });
 

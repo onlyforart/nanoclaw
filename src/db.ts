@@ -146,6 +146,24 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  // Add temperature column to registered_groups
+  try {
+    database.exec(
+      `ALTER TABLE registered_groups ADD COLUMN temperature REAL DEFAULT NULL`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
+  // Add temperature column to scheduled_tasks
+  try {
+    database.exec(
+      `ALTER TABLE scheduled_tasks ADD COLUMN temperature REAL DEFAULT NULL`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
   // Add per-group configurable limits (Ollama direct mode)
   try {
     database.exec(
@@ -427,8 +445,8 @@ export function createTask(
 ): void {
   db.prepare(
     `
-    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, model, timezone, max_tool_rounds, timeout_ms, next_run, status, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, model, temperature, timezone, max_tool_rounds, timeout_ms, next_run, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `,
   ).run(
     task.id,
@@ -439,6 +457,7 @@ export function createTask(
     task.schedule_value,
     task.context_mode || 'isolated',
     task.model || null,
+    task.temperature ?? null,
     task.timezone || null,
     task.maxToolRounds ?? null,
     task.timeoutMs ?? null,
@@ -448,7 +467,7 @@ export function createTask(
   );
 }
 
-const TASK_SELECT = `SELECT id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, model, timezone, max_tool_rounds AS maxToolRounds, timeout_ms AS timeoutMs, next_run, last_run, last_result, status, created_at FROM scheduled_tasks`;
+const TASK_SELECT = `SELECT id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, model, temperature, timezone, max_tool_rounds AS maxToolRounds, timeout_ms AS timeoutMs, next_run, last_run, last_result, status, created_at FROM scheduled_tasks`;
 
 export function getTaskById(id: string): ScheduledTask | undefined {
   return db.prepare(`${TASK_SELECT} WHERE id = ?`).get(id) as
@@ -479,6 +498,7 @@ export function updateTask(
       | 'next_run'
       | 'status'
       | 'model'
+      | 'temperature'
       | 'timezone'
       | 'maxToolRounds'
       | 'timeoutMs'
@@ -511,6 +531,10 @@ export function updateTask(
   if (updates.model !== undefined) {
     fields.push('model = ?');
     values.push(updates.model);
+  }
+  if (updates.temperature !== undefined) {
+    fields.push('temperature = ?');
+    values.push(updates.temperature);
   }
   if (updates.timezone !== undefined) {
     fields.push('timezone = ?');
@@ -638,6 +662,7 @@ export function getRegisteredGroup(
         requires_trigger: number | null;
         is_main: number | null;
         model: string | null;
+        temperature: number | null;
         max_tool_rounds: number | null;
         timeout_ms: number | null;
       }
@@ -663,6 +688,7 @@ export function getRegisteredGroup(
       row.requires_trigger === null ? undefined : row.requires_trigger === 1,
     isMain: row.is_main === 1 ? true : undefined,
     model: row.model || undefined,
+    temperature: row.temperature ?? undefined,
     maxToolRounds: row.max_tool_rounds ?? undefined,
     timeoutMs: row.timeout_ms ?? undefined,
   };
@@ -673,8 +699,8 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
     throw new Error(`Invalid group folder "${group.folder}" for JID ${jid}`);
   }
   db.prepare(
-    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main, model, max_tool_rounds, timeout_ms)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main, model, temperature, max_tool_rounds, timeout_ms)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     jid,
     group.name,
@@ -685,6 +711,7 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
     group.requiresTrigger === undefined ? 1 : group.requiresTrigger ? 1 : 0,
     group.isMain ? 1 : 0,
     group.model || null,
+    group.temperature ?? null,
     group.maxToolRounds ?? null,
     group.timeoutMs ?? null,
   );
@@ -701,6 +728,7 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
     requires_trigger: number | null;
     is_main: number | null;
     model: string | null;
+    temperature: number | null;
     max_tool_rounds: number | null;
     timeout_ms: number | null;
   }>;
@@ -725,6 +753,7 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
         row.requires_trigger === null ? undefined : row.requires_trigger === 1,
       isMain: row.is_main === 1 ? true : undefined,
       model: row.model || undefined,
+      temperature: row.temperature ?? undefined,
       maxToolRounds: row.max_tool_rounds ?? undefined,
       timeoutMs: row.timeout_ms ?? undefined,
     };
@@ -735,7 +764,7 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
 export function updateRegisteredGroup(
   jid: string,
   updates: Partial<
-    Pick<RegisteredGroup, 'model' | 'maxToolRounds' | 'timeoutMs'>
+    Pick<RegisteredGroup, 'model' | 'temperature' | 'maxToolRounds' | 'timeoutMs'>
   >,
 ): void {
   const fields: string[] = [];
@@ -744,6 +773,10 @@ export function updateRegisteredGroup(
   if (updates.model !== undefined) {
     fields.push('model = ?');
     values.push(updates.model || null);
+  }
+  if (updates.temperature !== undefined) {
+    fields.push('temperature = ?');
+    values.push(updates.temperature ?? null);
   }
   if (updates.maxToolRounds !== undefined) {
     fields.push('max_tool_rounds = ?');
