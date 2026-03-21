@@ -324,6 +324,7 @@ async function runAgent(
         isMain,
         assistantName: ASSISTANT_NAME,
         model: group.model || undefined,
+        temperature: group.temperature,
         maxToolRounds: group.maxToolRounds,
         timeoutMs: group.timeoutMs,
       },
