@@ -650,6 +650,7 @@ const AppTaskDetail = {
               <div>
                 <label class="block text-sm font-medium mb-1">Model</label>
                 <input v-model="form.model" type="text"
+                  :placeholder="modelPlaceholder"
                   class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
               </div>
               <div>
@@ -714,6 +715,7 @@ const AppTaskDetail = {
   `,
   setup(props) {
     const task = ref(null);
+    const group = ref(null);
     const runs = ref([]);
     const promptText = ref('');
     const loading = ref(true);
@@ -724,6 +726,11 @@ const AppTaskDetail = {
     const form = Vue.reactive({
       scheduleType: '', scheduleValue: '', model: '', timezone: '',
       maxToolRounds: null, timeoutMs: null, status: 'active',
+    });
+
+    const modelPlaceholder = computed(() => {
+      if (group.value?.model) return `Inherited from group: ${group.value.model}`;
+      return 'System default';
     });
 
     const tabs = computed(() => [
@@ -803,6 +810,8 @@ const AppTaskDetail = {
         form.timeoutMs = t.timeoutMs;
         form.status = t.status;
         runs.value = r;
+        // Fetch group to show inherited model as placeholder
+        try { group.value = await api(`/groups/${t.groupFolder}`); } catch {}
       } catch (e) { showToast(e.message, 'error'); }
       loading.value = false;
       runsInterval = setInterval(fetchRuns, 10000);
@@ -828,7 +837,7 @@ const AppTaskDetail = {
       saving.value = false;
     };
 
-    return { task, runs, promptText, loading, saving, activeTab, form, tabs, save, scheduleError, scheduleHint };
+    return { task, group, runs, promptText, loading, saving, activeTab, form, tabs, save, scheduleError, scheduleHint, modelPlaceholder };
   },
 };
 
