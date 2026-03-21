@@ -764,7 +764,10 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
 export function updateRegisteredGroup(
   jid: string,
   updates: Partial<
-    Pick<RegisteredGroup, 'model' | 'temperature' | 'maxToolRounds' | 'timeoutMs'>
+    Pick<
+      RegisteredGroup,
+      'model' | 'temperature' | 'maxToolRounds' | 'timeoutMs'
+    >
   >,
 ): void {
   const fields: string[] = [];

@@ -23,7 +23,10 @@ export interface IpcDeps {
   updateGroup: (
     jid: string,
     updates: Partial<
-      Pick<RegisteredGroup, 'model' | 'temperature' | 'maxToolRounds' | 'timeoutMs'>
+      Pick<
+        RegisteredGroup,
+        'model' | 'temperature' | 'maxToolRounds' | 'timeoutMs'
+      >
     >,
   ) => void;
   syncGroups: (force: boolean) => Promise<void>;
@@ -152,7 +155,12 @@ export function startIpcWatcher(deps: IpcDeps): void {
             try {
               const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
               // Pass source group identity to processTaskIpc for authorization
-              const result = await processTaskIpc(data, sourceGroup, isMain, deps);
+              const result = await processTaskIpc(
+                data,
+                sourceGroup,
+                isMain,
+                deps,
+              );
               fs.unlinkSync(filePath);
               // Write result file for container to poll
               writeIpcResult(path.join(tasksDir, `${file}.result`), result);
@@ -246,7 +254,8 @@ function computeNextRun(
   }
   if (scheduleType === 'once') {
     const date = new Date(scheduleValue);
-    if (isNaN(date.getTime())) return fail(`Invalid timestamp: ${scheduleValue}`);
+    if (isNaN(date.getTime()))
+      return fail(`Invalid timestamp: ${scheduleValue}`);
     return date.toISOString();
   }
   return fail(`Unknown schedule type: ${scheduleType}`);
@@ -260,8 +269,15 @@ function handleScheduleTask(
   isMain: boolean,
   registeredGroups: Record<string, RegisteredGroup>,
 ): IpcResult {
-  if (!data.prompt || !data.schedule_type || !data.schedule_value || !data.targetJid) {
-    return fail('Missing required fields: prompt, schedule_type, schedule_value, or targetJid');
+  if (
+    !data.prompt ||
+    !data.schedule_type ||
+    !data.schedule_value ||
+    !data.targetJid
+  ) {
+    return fail(
+      'Missing required fields: prompt, schedule_type, schedule_value, or targetJid',
+    );
   }
 
   const targetGroupEntry = registeredGroups[data.targetJid];
@@ -269,12 +285,19 @@ function handleScheduleTask(
 
   const targetFolder = targetGroupEntry.folder;
   if (!isMain && targetFolder !== sourceGroup) {
-    logger.warn({ sourceGroup, targetFolder }, 'Unauthorized schedule_task attempt blocked');
+    logger.warn(
+      { sourceGroup, targetFolder },
+      'Unauthorized schedule_task attempt blocked',
+    );
     return fail('Not authorized to schedule tasks for other groups');
   }
 
   const taskTimezone = data.timezone || null;
-  const nextRunOrError = computeNextRun(data.schedule_type, data.schedule_value, taskTimezone);
+  const nextRunOrError = computeNextRun(
+    data.schedule_type,
+    data.schedule_value,
+    taskTimezone,
+  );
   if (typeof nextRunOrError !== 'string') return nextRunOrError;
 
   const taskId =
@@ -287,7 +310,8 @@ function handleScheduleTask(
 
   // Inherit model and temperature from group if not explicitly set on the task
   const taskModel = data.model || targetGroupEntry.model || null;
-  const taskTemperature = data.temperature ?? targetGroupEntry.temperature ?? null;
+  const taskTemperature =
+    data.temperature ?? targetGroupEntry.temperature ?? null;
 
   createTask({
     id: taskId,
@@ -306,7 +330,10 @@ function handleScheduleTask(
     status: 'active',
     created_at: new Date().toISOString(),
   });
-  logger.info({ taskId, sourceGroup, targetFolder, contextMode, model: data.model }, 'Task created via IPC');
+  logger.info(
+    { taskId, sourceGroup, targetFolder, contextMode, model: data.model },
+    'Task created via IPC',
+  );
   return ok();
 }
 
@@ -316,13 +343,20 @@ function handleTaskStatusChange(
   isMain: boolean,
   action: 'pause' | 'resume' | 'cancel',
 ): IpcResult {
-  const authResult = findAndAuthorizeTask(data.taskId, sourceGroup, isMain, action);
+  const authResult = findAndAuthorizeTask(
+    data.taskId,
+    sourceGroup,
+    isMain,
+    action,
+  );
   if (!('task' in authResult)) return authResult;
 
   if (action === 'cancel') {
     deleteTask(data.taskId);
   } else {
-    updateTask(data.taskId, { status: action === 'pause' ? 'paused' : 'active' });
+    updateTask(data.taskId, {
+      status: action === 'pause' ? 'paused' : 'active',
+    });
   }
   logger.info({ taskId: data.taskId, sourceGroup }, `Task ${action}d via IPC`);
   return ok();
@@ -333,7 +367,12 @@ function handleUpdateTask(
   sourceGroup: string,
   isMain: boolean,
 ): IpcResult {
-  const authResult = findAndAuthorizeTask(data.taskId, sourceGroup, isMain, 'update');
+  const authResult = findAndAuthorizeTask(
+    data.taskId,
+    sourceGroup,
+    isMain,
+    'update',
+  );
   if (!('task' in authResult)) return authResult;
   const { task } = authResult;
 
@@ -341,23 +380,37 @@ function handleUpdateTask(
   if (data.prompt !== undefined) updates.prompt = data.prompt;
   if (data.schedule_type !== undefined)
     updates.schedule_type = data.schedule_type as 'cron' | 'interval' | 'once';
-  if (data.schedule_value !== undefined) updates.schedule_value = data.schedule_value;
+  if (data.schedule_value !== undefined)
+    updates.schedule_value = data.schedule_value;
   if (data.model !== undefined) updates.model = data.model || null;
-  if (data.temperature !== undefined) updates.temperature = data.temperature ?? null;
+  if (data.temperature !== undefined)
+    updates.temperature = data.temperature ?? null;
   if (data.timezone !== undefined) updates.timezone = data.timezone || null;
-  if (data.maxToolRounds !== undefined) updates.maxToolRounds = data.maxToolRounds ?? null;
+  if (data.maxToolRounds !== undefined)
+    updates.maxToolRounds = data.maxToolRounds ?? null;
   if (data.timeoutMs !== undefined) updates.timeoutMs = data.timeoutMs ?? null;
 
   // Recompute next_run if schedule or timezone changed
-  if (data.schedule_type || data.schedule_value || data.timezone !== undefined) {
+  if (
+    data.schedule_type ||
+    data.schedule_value ||
+    data.timezone !== undefined
+  ) {
     const merged = { ...task, ...updates };
-    const nextRunOrError = computeNextRun(merged.schedule_type!, merged.schedule_value!, merged.timezone ?? null);
+    const nextRunOrError = computeNextRun(
+      merged.schedule_type!,
+      merged.schedule_value!,
+      merged.timezone ?? null,
+    );
     if (typeof nextRunOrError !== 'string') return nextRunOrError;
     updates.next_run = nextRunOrError;
   }
 
   updateTask(data.taskId, updates);
-  logger.info({ taskId: data.taskId, sourceGroup, updates }, 'Task updated via IPC');
+  logger.info(
+    { taskId: data.taskId, sourceGroup, updates },
+    'Task updated via IPC',
+  );
   return ok();
 }
 
@@ -374,7 +427,12 @@ async function handleRefreshGroups(
   logger.info({ sourceGroup }, 'Group metadata refresh requested via IPC');
   await deps.syncGroups(true);
   const availableGroups = deps.getAvailableGroups();
-  deps.writeGroupsSnapshot(sourceGroup, true, availableGroups, new Set(Object.keys(registeredGroups)));
+  deps.writeGroupsSnapshot(
+    sourceGroup,
+    true,
+    availableGroups,
+    new Set(Object.keys(registeredGroups)),
+  );
   return ok();
 }
 
@@ -389,11 +447,17 @@ function handleRegisterGroup(
     return fail('Not authorized');
   }
   if (!data.jid || !data.name || !data.folder || !data.trigger) {
-    logger.warn({ data }, 'Invalid register_group request - missing required fields');
+    logger.warn(
+      { data },
+      'Invalid register_group request - missing required fields',
+    );
     return fail('Missing required fields');
   }
   if (!isValidGroupFolder(data.folder)) {
-    logger.warn({ sourceGroup, folder: data.folder }, 'Invalid register_group request - unsafe folder name');
+    logger.warn(
+      { sourceGroup, folder: data.folder },
+      'Invalid register_group request - unsafe folder name',
+    );
     return fail('Invalid folder name');
   }
   deps.registerGroup(data.jid, {
@@ -429,15 +493,22 @@ function handleUpdateGroup(
     return fail('Group not found');
   }
   const groupUpdates: Partial<
-    Pick<RegisteredGroup, 'model' | 'temperature' | 'maxToolRounds' | 'timeoutMs'>
+    Pick<
+      RegisteredGroup,
+      'model' | 'temperature' | 'maxToolRounds' | 'timeoutMs'
+    >
   > = {};
   if (data.model !== undefined) groupUpdates.model = data.model || undefined;
-  if (data.temperature !== undefined) groupUpdates.temperature = data.temperature;
+  if (data.temperature !== undefined)
+    groupUpdates.temperature = data.temperature;
   if (data.maxToolRounds !== undefined)
     groupUpdates.maxToolRounds = data.maxToolRounds;
   if (data.timeoutMs !== undefined) groupUpdates.timeoutMs = data.timeoutMs;
   deps.updateGroup(data.jid, groupUpdates);
-  logger.info({ jid: data.jid, sourceGroup, updates: groupUpdates }, 'Group updated via IPC');
+  logger.info(
+    { jid: data.jid, sourceGroup, updates: groupUpdates },
+    'Group updated via IPC',
+  );
   return ok();
 }
 
@@ -467,7 +538,13 @@ export async function processTaskIpc(
     case 'register_group':
       return handleRegisterGroup(data, sourceGroup, isMain, deps);
     case 'update_group':
-      return handleUpdateGroup(data, sourceGroup, isMain, registeredGroups, deps);
+      return handleUpdateGroup(
+        data,
+        sourceGroup,
+        isMain,
+        registeredGroups,
+        deps,
+      );
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');
       return fail(`Unknown IPC task type: ${data.type}`);
