@@ -23,7 +23,10 @@ export interface IpcDeps {
   updateGroup: (
     jid: string,
     updates: Partial<
-      Pick<RegisteredGroup, 'model' | 'temperature' | 'maxToolRounds' | 'timeoutMs'>
+      Pick<
+        RegisteredGroup,
+        'model' | 'temperature' | 'maxToolRounds' | 'timeoutMs'
+      >
     >,
   ) => void;
   syncGroups: (force: boolean) => Promise<void>;
@@ -307,7 +310,8 @@ function handleScheduleTask(
 
   // Inherit model and temperature from group if not explicitly set on the task
   const taskModel = data.model || targetGroupEntry.model || null;
-  const taskTemperature = data.temperature ?? targetGroupEntry.temperature ?? null;
+  const taskTemperature =
+    data.temperature ?? targetGroupEntry.temperature ?? null;
 
   createTask({
     id: taskId,
@@ -379,7 +383,8 @@ function handleUpdateTask(
   if (data.schedule_value !== undefined)
     updates.schedule_value = data.schedule_value;
   if (data.model !== undefined) updates.model = data.model || null;
-  if (data.temperature !== undefined) updates.temperature = data.temperature ?? null;
+  if (data.temperature !== undefined)
+    updates.temperature = data.temperature ?? null;
   if (data.timezone !== undefined) updates.timezone = data.timezone || null;
   if (data.maxToolRounds !== undefined)
     updates.maxToolRounds = data.maxToolRounds ?? null;
@@ -488,10 +493,14 @@ function handleUpdateGroup(
     return fail('Group not found');
   }
   const groupUpdates: Partial<
-    Pick<RegisteredGroup, 'model' | 'temperature' | 'maxToolRounds' | 'timeoutMs'>
+    Pick<
+      RegisteredGroup,
+      'model' | 'temperature' | 'maxToolRounds' | 'timeoutMs'
+    >
   > = {};
   if (data.model !== undefined) groupUpdates.model = data.model || undefined;
-  if (data.temperature !== undefined) groupUpdates.temperature = data.temperature;
+  if (data.temperature !== undefined)
+    groupUpdates.temperature = data.temperature;
   if (data.maxToolRounds !== undefined)
     groupUpdates.maxToolRounds = data.maxToolRounds;
   if (data.timeoutMs !== undefined) groupUpdates.timeoutMs = data.timeoutMs;
