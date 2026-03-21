@@ -25,6 +25,7 @@ export interface GroupRow {
   is_main: number;
   requires_trigger: number;
   model: string | null;
+  temperature: number | null;
   max_tool_rounds: number | null;
   timeout_ms: number | null;
 }
@@ -38,6 +39,7 @@ export interface TaskRow {
   schedule_value: string;
   context_mode: string;
   model: string | null;
+  temperature: number | null;
   timezone: string | null;
   max_tool_rounds: number | null;
   timeout_ms: number | null;
@@ -62,7 +64,7 @@ export function getAllGroups(): GroupRow[] {
   return db
     .prepare(
       `SELECT jid, name, folder, trigger_pattern, is_main, requires_trigger,
-              model, max_tool_rounds, timeout_ms
+              model, temperature, max_tool_rounds, timeout_ms
        FROM registered_groups ORDER BY name`,
     )
     .all() as GroupRow[];
@@ -72,7 +74,7 @@ export function getGroupByFolder(folder: string): GroupRow | undefined {
   return db
     .prepare(
       `SELECT jid, name, folder, trigger_pattern, is_main, requires_trigger,
-              model, max_tool_rounds, timeout_ms
+              model, temperature, max_tool_rounds, timeout_ms
        FROM registered_groups WHERE folder = ?`,
     )
     .get(folder) as GroupRow | undefined;
@@ -80,7 +82,7 @@ export function getGroupByFolder(folder: string): GroupRow | undefined {
 
 export function updateGroup(
   folder: string,
-  updates: { model?: string; max_tool_rounds?: number; timeout_ms?: number },
+  updates: { model?: string; temperature?: number; max_tool_rounds?: number; timeout_ms?: number },
 ): boolean {
   const setClauses: string[] = [];
   const values: unknown[] = [];
@@ -88,6 +90,10 @@ export function updateGroup(
   if (updates.model !== undefined) {
     setClauses.push('model = ?');
     values.push(updates.model);
+  }
+  if (updates.temperature !== undefined) {
+    setClauses.push('temperature = ?');
+    values.push(updates.temperature);
   }
   if (updates.max_tool_rounds !== undefined) {
     setClauses.push('max_tool_rounds = ?');
@@ -113,7 +119,7 @@ export function getTasksByGroup(groupFolder: string): TaskRow[] {
   return db
     .prepare(
       `SELECT id, group_folder, chat_jid, prompt, schedule_type, schedule_value,
-              context_mode, model, timezone, max_tool_rounds, timeout_ms,
+              context_mode, model, temperature, timezone, max_tool_rounds, timeout_ms,
               next_run, last_run, last_result, status, created_at
        FROM scheduled_tasks WHERE group_folder = ? ORDER BY next_run`,
     )
@@ -124,7 +130,7 @@ export function getTaskById(id: string): TaskRow | undefined {
   return db
     .prepare(
       `SELECT id, group_folder, chat_jid, prompt, schedule_type, schedule_value,
-              context_mode, model, timezone, max_tool_rounds, timeout_ms,
+              context_mode, model, temperature, timezone, max_tool_rounds, timeout_ms,
               next_run, last_run, last_result, status, created_at
        FROM scheduled_tasks WHERE id = ?`,
     )
@@ -137,7 +143,9 @@ export function updateTask(
     prompt?: string;
     schedule_type?: string;
     schedule_value?: string;
+    context_mode?: string;
     model?: string;
+    temperature?: number;
     timezone?: string;
     max_tool_rounds?: number;
     timeout_ms?: number;

@@ -453,15 +453,22 @@ const AppGroupDetail = {
                   class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
               </div>
               <div>
+                <label class="block text-sm font-medium mb-1">Temperature</label>
+                <input v-model.number="form.temperature" type="number" step="0.1" min="0" max="2" placeholder="Model default"
+                  class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
+              </div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+              <div>
                 <label class="block text-sm font-medium mb-1">Max Tool Rounds</label>
                 <input v-model.number="form.maxToolRounds" type="number"
                   class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
               </div>
-            </div>
-            <div class="mb-4">
-              <label class="block text-sm font-medium mb-1">Timeout (ms)</label>
-              <input v-model.number="form.timeoutMs" type="number"
-                class="w-full md:w-1/2 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
+              <div>
+                <label class="block text-sm font-medium mb-1">Timeout (ms)</label>
+                <input v-model.number="form.timeoutMs" type="number"
+                  class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
+              </div>
             </div>
             <button @click="saveSettings" :disabled="saving"
               class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors">
@@ -526,7 +533,7 @@ const AppGroupDetail = {
     const activeTab = ref(props.initialTab || 'settings');
     let taskInterval = null;
 
-    const form = Vue.reactive({ model: '', maxToolRounds: null, timeoutMs: null });
+    const form = Vue.reactive({ model: '', temperature: null, maxToolRounds: null, timeoutMs: null });
 
     const tabs = computed(() => [
       { key: 'settings', label: 'Settings' },
@@ -547,6 +554,7 @@ const AppGroupDetail = {
         ]);
         group.value = g;
         form.model = g.model || '';
+        form.temperature = g.temperature;
         form.maxToolRounds = g.maxToolRounds;
         form.timeoutMs = g.timeoutMs;
         claude.value = p.claude;
@@ -564,6 +572,7 @@ const AppGroupDetail = {
       try {
         const body = {};
         if (form.model) body.model = form.model;
+        if (form.temperature != null) body.temperature = form.temperature;
         if (form.maxToolRounds != null) body.maxToolRounds = form.maxToolRounds;
         if (form.timeoutMs != null) body.timeoutMs = form.timeoutMs;
         await api(`/groups/${props.folder}`, { method: 'PATCH', body });
@@ -654,9 +663,25 @@ const AppTaskDetail = {
                   class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
               </div>
               <div>
+                <label class="block text-sm font-medium mb-1">Temperature</label>
+                <input v-model.number="form.temperature" type="number" step="0.1" min="0" max="2"
+                  :placeholder="temperaturePlaceholder"
+                  class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
+              </div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+              <div>
                 <label class="block text-sm font-medium mb-1">Timezone</label>
                 <input v-model="form.timezone" type="text"
                   class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
+              </div>
+              <div>
+                <label class="block text-sm font-medium mb-1">Context Mode</label>
+                <select v-model="form.contextMode"
+                  class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
+                  <option value="isolated">Isolated</option>
+                  <option value="group">Group</option>
+                </select>
               </div>
             </div>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
@@ -724,13 +749,18 @@ const AppTaskDetail = {
     let runsInterval = null;
 
     const form = Vue.reactive({
-      scheduleType: '', scheduleValue: '', model: '', timezone: '',
+      scheduleType: '', scheduleValue: '', contextMode: 'isolated', model: '', temperature: null, timezone: '',
       maxToolRounds: null, timeoutMs: null, status: 'active',
     });
 
     const modelPlaceholder = computed(() => {
       if (group.value?.model) return `Inherited from group: ${group.value.model}`;
       return 'System default';
+    });
+
+    const temperaturePlaceholder = computed(() => {
+      if (group.value?.temperature != null) return `Inherited from group: ${group.value.temperature}`;
+      return 'Model default';
     });
 
     const tabs = computed(() => [
@@ -804,7 +834,9 @@ const AppTaskDetail = {
         promptText.value = t.prompt;
         form.scheduleType = t.scheduleType;
         form.scheduleValue = t.scheduleValue;
+        form.contextMode = t.contextMode || 'isolated';
         form.model = t.model || '';
+        form.temperature = t.temperature;
         form.timezone = t.timezone || '';
         form.maxToolRounds = t.maxToolRounds;
         form.timeoutMs = t.timeoutMs;
@@ -825,7 +857,9 @@ const AppTaskDetail = {
         const body = { prompt: promptText.value };
         if (form.scheduleType) body.scheduleType = form.scheduleType;
         if (form.scheduleValue) body.scheduleValue = form.scheduleValue;
+        body.contextMode = form.contextMode;
         if (form.model) body.model = form.model;
+        if (form.temperature != null) body.temperature = form.temperature;
         if (form.timezone) body.timezone = form.timezone;
         if (form.maxToolRounds != null) body.maxToolRounds = form.maxToolRounds;
         if (form.timeoutMs != null) body.timeoutMs = form.timeoutMs;
@@ -837,7 +871,7 @@ const AppTaskDetail = {
       saving.value = false;
     };
 
-    return { task, group, runs, promptText, loading, saving, activeTab, form, tabs, save, scheduleError, scheduleHint, modelPlaceholder };
+    return { task, group, runs, promptText, loading, saving, activeTab, form, tabs, save, scheduleError, scheduleHint, modelPlaceholder, temperaturePlaceholder };
   },
 };
 
