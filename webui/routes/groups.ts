@@ -6,6 +6,7 @@ interface GroupResponse {
   name: string;
   folder: string;
   model: string | null;
+  temperature: number | null;
   maxToolRounds: number | null;
   timeoutMs: number | null;
   isMain: boolean;
@@ -19,6 +20,7 @@ function formatGroup(row: GroupRow): GroupResponse {
     name: row.name,
     folder: row.folder,
     model: row.model,
+    temperature: row.temperature,
     maxToolRounds: row.max_tool_rounds,
     timeoutMs: row.timeout_ms,
     isMain: row.is_main === 1,
@@ -40,12 +42,13 @@ export function handleGetGroup(folder: string): GroupResponse | null {
 
 export function handlePatchGroup(
   folder: string,
-  body: { model?: string; maxToolRounds?: number; timeoutMs?: number },
+  body: { model?: string; temperature?: number; maxToolRounds?: number; timeoutMs?: number },
 ): GroupResponse | null {
   if (!isValidGroupFolder(folder)) return null;
 
-  const updates: { model?: string; max_tool_rounds?: number; timeout_ms?: number } = {};
+  const updates: { model?: string; temperature?: number; max_tool_rounds?: number; timeout_ms?: number } = {};
   if (body.model !== undefined) updates.model = body.model;
+  if (body.temperature !== undefined) updates.temperature = body.temperature;
   if (body.maxToolRounds !== undefined) updates.max_tool_rounds = body.maxToolRounds;
   if (body.timeoutMs !== undefined) updates.timeout_ms = body.timeoutMs;
 
