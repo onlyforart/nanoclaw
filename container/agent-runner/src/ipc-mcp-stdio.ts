@@ -34,6 +34,38 @@ function writeIpcFile(dir: string, data: object): string {
   return filename;
 }
 
+/**
+ * Write an IPC file and wait for a result file from the host.
+ * The host writes {filename}.result after processing.
+ * Returns the parsed result or a timeout error.
+ */
+async function writeIpcFileAndWaitForResult(
+  dir: string,
+  data: object,
+  timeoutMs = 10_000,
+): Promise<{ success: boolean; error?: string }> {
+  const filename = writeIpcFile(dir, data);
+  const resultPath = path.join(dir, `${filename}.result`);
+
+  const pollMs = 200;
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (fs.existsSync(resultPath)) {
+      try {
+        const result = JSON.parse(fs.readFileSync(resultPath, 'utf-8'));
+        fs.unlinkSync(resultPath);
+        return result;
+      } catch {
+        // Result file may be partially written; retry
+      }
+    }
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+
+  return { success: false, error: 'Timed out waiting for host confirmation' };
+}
+
 const server = new McpServer({
   name: 'nanoclaw',
   version: '1.0.0',
@@ -207,9 +239,15 @@ server.tool(
       timestamp: new Date().toISOString(),
     };
 
-    writeIpcFile(TASKS_DIR, data);
+    const result = await writeIpcFileAndWaitForResult(TASKS_DIR, data);
+    if (!result.success) {
+      return {
+        content: [{ type: 'text' as const, text: `Failed to pause task ${args.task_id}: ${result.error}` }],
+        isError: true,
+      };
+    }
 
-    return { content: [{ type: 'text' as const, text: `Task ${args.task_id} pause requested.` }] };
+    return { content: [{ type: 'text' as const, text: `Task ${args.task_id} paused.` }] };
   },
 );
 
@@ -226,9 +264,15 @@ server.tool(
       timestamp: new Date().toISOString(),
     };
 
-    writeIpcFile(TASKS_DIR, data);
+    const result = await writeIpcFileAndWaitForResult(TASKS_DIR, data);
+    if (!result.success) {
+      return {
+        content: [{ type: 'text' as const, text: `Failed to resume task ${args.task_id}: ${result.error}` }],
+        isError: true,
+      };
+    }
 
-    return { content: [{ type: 'text' as const, text: `Task ${args.task_id} resume requested.` }] };
+    return { content: [{ type: 'text' as const, text: `Task ${args.task_id} resumed.` }] };
   },
 );
 
@@ -245,9 +289,15 @@ server.tool(
       timestamp: new Date().toISOString(),
     };
 
-    writeIpcFile(TASKS_DIR, data);
+    const result = await writeIpcFileAndWaitForResult(TASKS_DIR, data);
+    if (!result.success) {
+      return {
+        content: [{ type: 'text' as const, text: `Failed to cancel task ${args.task_id}: ${result.error}` }],
+        isError: true,
+      };
+    }
 
-    return { content: [{ type: 'text' as const, text: `Task ${args.task_id} cancellation requested.` }] };
+    return { content: [{ type: 'text' as const, text: `Task ${args.task_id} cancelled.` }] };
   },
 );
 
@@ -303,9 +353,15 @@ server.tool(
     if (args.max_tool_rounds !== undefined) data.maxToolRounds = args.max_tool_rounds;
     if (args.timeout_ms !== undefined) data.timeoutMs = args.timeout_ms;
 
-    writeIpcFile(TASKS_DIR, data);
+    const result = await writeIpcFileAndWaitForResult(TASKS_DIR, data);
+    if (!result.success) {
+      return {
+        content: [{ type: 'text' as const, text: `Failed to update task ${args.task_id}: ${result.error}` }],
+        isError: true,
+      };
+    }
 
-    return { content: [{ type: 'text' as const, text: `Task ${args.task_id} update requested.` }] };
+    return { content: [{ type: 'text' as const, text: `Task ${args.task_id} updated.` }] };
   },
 );
 

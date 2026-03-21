@@ -1,3 +1,5 @@
+import { CronExpressionParser } from 'cron-parser';
+
 import {
   getTasksByGroup,
   getTaskById,
@@ -72,6 +74,34 @@ export function handleGetTask(id: string): TaskResponse | null {
   return row ? formatTask(row) : null;
 }
 
+/**
+ * Validate and compute the next run time for a schedule.
+ * Returns the ISO string on success, or throws with a descriptive message.
+ */
+function computeNextRun(
+  scheduleType: string,
+  scheduleValue: string,
+  timezone: string | null,
+): string | null {
+  const tz = timezone || undefined;
+  if (scheduleType === 'cron') {
+    // Throws on invalid expression — caller should catch
+    const interval = CronExpressionParser.parse(scheduleValue, { tz });
+    return interval.next().toISOString()!;
+  }
+  if (scheduleType === 'interval') {
+    const ms = parseInt(scheduleValue, 10);
+    if (isNaN(ms) || ms <= 0) throw new Error(`Invalid interval: ${scheduleValue}`);
+    return new Date(Date.now() + ms).toISOString();
+  }
+  if (scheduleType === 'once') {
+    const date = new Date(scheduleValue);
+    if (isNaN(date.getTime())) throw new Error(`Invalid timestamp: ${scheduleValue}`);
+    return date.toISOString();
+  }
+  return null;
+}
+
 export function handlePatchTask(
   id: string,
   body: {
@@ -84,9 +114,9 @@ export function handlePatchTask(
     timeoutMs?: number;
     status?: string;
   },
-): TaskResponse | null {
+): { task: TaskResponse } | { error: string } {
   const existing = getTaskById(id);
-  if (!existing) return null;
+  if (!existing) return { error: 'Task not found' };
 
   // Map camelCase to snake_case, excluding contextMode (read-only)
   const updates: Record<string, unknown> = {};
@@ -99,12 +129,26 @@ export function handlePatchTask(
   if (body.timeoutMs !== undefined) updates.timeout_ms = body.timeoutMs;
   if (body.status !== undefined) updates.status = body.status;
 
+  // Recompute next_run when schedule or timezone changes
+  if (body.scheduleType !== undefined || body.scheduleValue !== undefined || body.timezone !== undefined) {
+    const merged = {
+      schedule_type: body.scheduleType ?? existing.schedule_type,
+      schedule_value: body.scheduleValue ?? existing.schedule_value,
+      timezone: body.timezone !== undefined ? body.timezone : existing.timezone,
+    };
+    try {
+      updates.next_run = computeNextRun(merged.schedule_type, merged.schedule_value, merged.timezone);
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
   if (Object.keys(updates).length > 0) {
     updateTask(id, updates as any);
   }
 
   const updated = getTaskById(id);
-  return updated ? formatTask(updated) : null;
+  return updated ? { task: formatTask(updated) } : { error: 'Task not found after update' };
 }
 
 export function handleGetTaskRuns(taskId: string, limit: number = 20): TaskRunResponse[] {
