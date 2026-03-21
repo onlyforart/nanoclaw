@@ -45,6 +45,7 @@ export interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   model?: string;
+  temperature?: number;
   maxToolRounds?: number;
   timeoutMs?: number;
 }
