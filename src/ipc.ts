@@ -331,7 +331,7 @@ function handleScheduleTask(
     created_at: new Date().toISOString(),
   });
   logger.info(
-    { taskId, sourceGroup, targetFolder, contextMode, model: data.model },
+    { taskId, sourceGroup, targetFolder, contextMode, model: taskModel },
     'Task created via IPC',
   );
   return ok();
