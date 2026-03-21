@@ -628,7 +628,6 @@ const AppTaskDetail = {
             class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors">
             {{ saving ? 'Saving...' : 'Save' }}
           </button>
-          <p class="mt-4 text-xs text-gray-400">Context mode: <span class="font-mono">{{ task.contextMode }}</span> (read-only)</p>
         </div>
 
         <!-- Settings Tab -->
