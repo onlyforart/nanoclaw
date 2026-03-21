@@ -17,6 +17,7 @@ interface TaskResponse {
   scheduleValue: string;
   contextMode: string;
   model: string | null;
+  temperature: number | null;
   timezone: string | null;
   maxToolRounds: number | null;
   timeoutMs: number | null;
@@ -44,6 +45,7 @@ function formatTask(row: TaskRow): TaskResponse {
     scheduleValue: row.schedule_value,
     contextMode: row.context_mode,
     model: row.model,
+    temperature: row.temperature,
     timezone: row.timezone,
     maxToolRounds: row.max_tool_rounds,
     timeoutMs: row.timeout_ms,
@@ -108,7 +110,9 @@ export function handlePatchTask(
     prompt?: string;
     scheduleType?: string;
     scheduleValue?: string;
+    contextMode?: string;
     model?: string;
+    temperature?: number;
     timezone?: string;
     maxToolRounds?: number;
     timeoutMs?: number;
@@ -118,12 +122,13 @@ export function handlePatchTask(
   const existing = getTaskById(id);
   if (!existing) return { error: 'Task not found' };
 
-  // Map camelCase to snake_case, excluding contextMode (read-only)
   const updates: Record<string, unknown> = {};
   if (body.prompt !== undefined) updates.prompt = body.prompt;
   if (body.scheduleType !== undefined) updates.schedule_type = body.scheduleType;
   if (body.scheduleValue !== undefined) updates.schedule_value = body.scheduleValue;
+  if (body.contextMode !== undefined) updates.context_mode = body.contextMode;
   if (body.model !== undefined) updates.model = body.model;
+  if (body.temperature !== undefined) updates.temperature = body.temperature;
   if (body.timezone !== undefined) updates.timezone = body.timezone;
   if (body.maxToolRounds !== undefined) updates.max_tool_rounds = body.maxToolRounds;
   if (body.timeoutMs !== undefined) updates.timeout_ms = body.timeoutMs;

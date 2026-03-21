@@ -23,7 +23,7 @@ export interface IpcDeps {
   updateGroup: (
     jid: string,
     updates: Partial<
-      Pick<RegisteredGroup, 'model' | 'maxToolRounds' | 'timeoutMs'>
+      Pick<RegisteredGroup, 'model' | 'temperature' | 'maxToolRounds' | 'timeoutMs'>
     >,
   ) => void;
   syncGroups: (force: boolean) => Promise<void>;
@@ -277,9 +277,17 @@ function handleScheduleTask(
   const nextRunOrError = computeNextRun(data.schedule_type, data.schedule_value, taskTimezone);
   if (typeof nextRunOrError !== 'string') return nextRunOrError;
 
-  const taskId = data.taskId || `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const contextMode = data.context_mode === 'group' || data.context_mode === 'isolated'
-    ? data.context_mode : 'isolated';
+  const taskId =
+    data.taskId ||
+    `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const contextMode =
+    data.context_mode === 'group' || data.context_mode === 'isolated'
+      ? data.context_mode
+      : 'isolated';
+
+  // Inherit model and temperature from group if not explicitly set on the task
+  const taskModel = data.model || targetGroupEntry.model || null;
+  const taskTemperature = data.temperature ?? targetGroupEntry.temperature ?? null;
 
   createTask({
     id: taskId,
@@ -289,7 +297,8 @@ function handleScheduleTask(
     schedule_type: data.schedule_type as 'cron' | 'interval' | 'once',
     schedule_value: data.schedule_value,
     context_mode: contextMode,
-    model: data.model || null,
+    model: taskModel,
+    temperature: taskTemperature,
     timezone: taskTimezone,
     maxToolRounds: data.maxToolRounds ?? null,
     timeoutMs: data.timeoutMs ?? null,
@@ -334,6 +343,7 @@ function handleUpdateTask(
     updates.schedule_type = data.schedule_type as 'cron' | 'interval' | 'once';
   if (data.schedule_value !== undefined) updates.schedule_value = data.schedule_value;
   if (data.model !== undefined) updates.model = data.model || null;
+  if (data.temperature !== undefined) updates.temperature = data.temperature ?? null;
   if (data.timezone !== undefined) updates.timezone = data.timezone || null;
   if (data.maxToolRounds !== undefined) updates.maxToolRounds = data.maxToolRounds ?? null;
   if (data.timeoutMs !== undefined) updates.timeoutMs = data.timeoutMs ?? null;
@@ -394,6 +404,7 @@ function handleRegisterGroup(
     containerConfig: data.containerConfig,
     requiresTrigger: data.requiresTrigger,
     model: data.model || undefined,
+    temperature: data.temperature,
     maxToolRounds: data.maxToolRounds,
     timeoutMs: data.timeoutMs,
   });
@@ -417,9 +428,13 @@ function handleUpdateGroup(
     logger.warn({ jid: data.jid, sourceGroup }, 'Group not found for update');
     return fail('Group not found');
   }
-  const groupUpdates: Partial<Pick<RegisteredGroup, 'model' | 'maxToolRounds' | 'timeoutMs'>> = {};
+  const groupUpdates: Partial<
+    Pick<RegisteredGroup, 'model' | 'temperature' | 'maxToolRounds' | 'timeoutMs'>
+  > = {};
   if (data.model !== undefined) groupUpdates.model = data.model || undefined;
-  if (data.maxToolRounds !== undefined) groupUpdates.maxToolRounds = data.maxToolRounds;
+  if (data.temperature !== undefined) groupUpdates.temperature = data.temperature;
+  if (data.maxToolRounds !== undefined)
+    groupUpdates.maxToolRounds = data.maxToolRounds;
   if (data.timeoutMs !== undefined) groupUpdates.timeoutMs = data.timeoutMs;
   deps.updateGroup(data.jid, groupUpdates);
   logger.info({ jid: data.jid, sourceGroup, updates: groupUpdates }, 'Group updated via IPC');

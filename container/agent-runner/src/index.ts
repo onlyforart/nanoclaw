@@ -31,6 +31,7 @@ interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   model?: string;
+  temperature?: number;
   maxToolRounds?: number;
   timeoutMs?: number;
 }
@@ -587,6 +588,7 @@ async function runOllamaDirectMode(containerInput: ContainerInput): Promise<void
         host,
         model: ollamaModel,
         systemPrompt,
+        temperature: containerInput.temperature,
         maxIterations: containerInput.maxToolRounds || 10,
         timeoutMs: containerInput.timeoutMs || 300_000,
         tools: executor.getOllamaTools(),
