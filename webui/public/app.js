@@ -497,6 +497,94 @@ const AppGroupDetail = {
 
         <!-- Tasks Tab -->
         <div v-if="activeTab === 'tasks'">
+          <!-- New Task Button -->
+          <div class="flex justify-end mb-4" v-if="!showNewTask">
+            <button @click="showNewTask = true"
+              class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors">
+              New Task
+            </button>
+          </div>
+
+          <!-- New Task Form -->
+          <div v-if="showNewTask" class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 mb-6">
+            <h3 class="text-lg font-semibold mb-4">New Task</h3>
+            <div class="mb-4">
+              <label class="block text-sm font-medium mb-1">Prompt</label>
+              <textarea v-model="newTask.prompt" rows="3" placeholder="What should the agent do?"
+                class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 font-mono text-sm resize-y focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"></textarea>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+              <div>
+                <label class="block text-sm font-medium mb-1">Schedule Type</label>
+                <select v-model="newTask.scheduleType"
+                  class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
+                  <option value="cron">cron</option>
+                  <option value="interval">interval</option>
+                  <option value="once">once</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-sm font-medium mb-1">Schedule Value</label>
+                <input v-model="newTask.scheduleValue" type="text"
+                  :class="['w-full px-3 py-2 rounded-lg border font-mono text-sm focus:ring-2 focus:border-blue-500 outline-none transition',
+                    newTaskScheduleError ? 'border-red-400 dark:border-red-500 focus:ring-red-500' : 'border-gray-300 dark:border-gray-600 focus:ring-blue-500',
+                    'bg-white dark:bg-gray-800']"
+                  :placeholder="newTask.scheduleType === 'cron' ? '0 9 * * 1-5' : newTask.scheduleType === 'interval' ? '300000' : '2026-06-01T09:00:00'">
+                <p v-if="newTaskScheduleError" class="mt-1 text-xs text-red-500">{{ newTaskScheduleError }}</p>
+                <p v-else-if="newTaskScheduleHint" class="mt-1 text-xs text-gray-400">{{ newTaskScheduleHint }}</p>
+              </div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+              <div>
+                <label class="block text-sm font-medium mb-1">Model</label>
+                <input v-model="newTask.model" type="text" placeholder="Inherit from group"
+                  class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
+              </div>
+              <div>
+                <label class="block text-sm font-medium mb-1">Temperature</label>
+                <input v-model.number="newTask.temperature" type="number" step="0.1" min="0" max="2" placeholder="Model default"
+                  class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
+              </div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+              <div>
+                <label class="block text-sm font-medium mb-1">Timezone</label>
+                <input v-model="newTask.timezone" type="text" placeholder="UTC"
+                  class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
+              </div>
+              <div>
+                <label class="block text-sm font-medium mb-1">Context Mode</label>
+                <select v-model="newTask.contextMode"
+                  class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
+                  <option value="isolated">Isolated</option>
+                  <option value="group">Group</option>
+                </select>
+              </div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+              <div>
+                <label class="block text-sm font-medium mb-1">Max Tool Rounds</label>
+                <input v-model.number="newTask.maxToolRounds" type="number" placeholder="Default"
+                  class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
+              </div>
+              <div>
+                <label class="block text-sm font-medium mb-1">Timeout (ms)</label>
+                <input v-model.number="newTask.timeoutMs" type="number" placeholder="Default"
+                  class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
+              </div>
+            </div>
+            <div class="flex gap-3">
+              <button @click="createNewTask" :disabled="saving || !newTask.prompt.trim() || !newTask.scheduleValue.trim() || !!newTaskScheduleError"
+                class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors">
+                {{ saving ? 'Creating...' : 'Create Task' }}
+              </button>
+              <button @click="showNewTask = false"
+                class="px-4 py-2 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 rounded-lg text-sm font-medium transition-colors">
+                Cancel
+              </button>
+            </div>
+          </div>
+
           <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
             <table v-if="tasks.length" class="w-full text-sm">
               <thead>
@@ -534,6 +622,58 @@ const AppGroupDetail = {
     let taskInterval = null;
 
     const form = Vue.reactive({ model: '', temperature: null, maxToolRounds: null, timeoutMs: null });
+    const showNewTask = ref(false);
+    const newTask = Vue.reactive({
+      prompt: '', scheduleType: 'cron', scheduleValue: '', contextMode: 'isolated',
+      model: '', temperature: null, timezone: '', maxToolRounds: null, timeoutMs: null,
+    });
+
+    const newTaskScheduleError = computed(() => {
+      const v = newTask.scheduleValue.trim();
+      if (!v) return '';
+      if (newTask.scheduleType === 'cron') {
+        const fields = v.split(/\s+/);
+        if (fields.length !== 5) return `Cron requires exactly 5 fields, got ${fields.length}`;
+        const ranges = [
+          { name: 'minute', min: 0, max: 59 },
+          { name: 'hour', min: 0, max: 23 },
+          { name: 'day', min: 1, max: 31 },
+          { name: 'month', min: 1, max: 12 },
+          { name: 'weekday', min: 0, max: 7 },
+        ];
+        for (let i = 0; i < 5; i++) {
+          const field = fields[i];
+          if (field === '*') continue;
+          if (/^(\*\/\d+|\d+(-\d+)?(\/\d+)?(,\d+(-\d+)?(\/\d+)?)*)$/.test(field)) continue;
+          return `Invalid ${ranges[i].name} field: "${field}"`;
+        }
+        return '';
+      }
+      if (newTask.scheduleType === 'interval') {
+        const ms = parseInt(v, 10);
+        if (isNaN(ms) || ms <= 0) return 'Interval must be a positive number (milliseconds)';
+        return '';
+      }
+      if (newTask.scheduleType === 'once') {
+        if (isNaN(new Date(v).getTime())) return 'Invalid timestamp';
+        return '';
+      }
+      return '';
+    });
+
+    const newTaskScheduleHint = computed(() => {
+      const v = newTask.scheduleValue.trim();
+      if (!v || newTaskScheduleError.value) return '';
+      if (newTask.scheduleType === 'cron') return 'Format: minute hour day month weekday';
+      if (newTask.scheduleType === 'interval') {
+        const ms = parseInt(v, 10);
+        if (ms >= 3600000) return `Every ${(ms / 3600000).toFixed(1)} hour(s)`;
+        if (ms >= 60000) return `Every ${(ms / 60000).toFixed(0)} minute(s)`;
+        return `Every ${(ms / 1000).toFixed(0)} second(s)`;
+      }
+      if (newTask.scheduleType === 'once') return `Runs at ${new Date(v).toLocaleString()}`;
+      return '';
+    });
 
     const tabs = computed(() => [
       { key: 'settings', label: 'Settings' },
@@ -593,9 +733,41 @@ const AppGroupDetail = {
       saving.value = false;
     };
 
+    const createNewTask = async () => {
+      saving.value = true;
+      try {
+        const body = {
+          prompt: newTask.prompt,
+          scheduleType: newTask.scheduleType,
+          scheduleValue: newTask.scheduleValue,
+          contextMode: newTask.contextMode,
+        };
+        if (newTask.model) body.model = newTask.model;
+        if (newTask.temperature != null) body.temperature = newTask.temperature;
+        if (newTask.timezone) body.timezone = newTask.timezone;
+        if (newTask.maxToolRounds != null) body.maxToolRounds = newTask.maxToolRounds;
+        if (newTask.timeoutMs != null) body.timeoutMs = newTask.timeoutMs;
+        const created = await api(`/groups/${props.folder}/tasks`, { method: 'POST', body });
+        tasks.value.push(created);
+        showNewTask.value = false;
+        // Reset form
+        newTask.prompt = '';
+        newTask.scheduleType = 'cron';
+        newTask.scheduleValue = '';
+        newTask.contextMode = 'isolated';
+        newTask.model = '';
+        newTask.temperature = null;
+        newTask.timezone = '';
+        newTask.maxToolRounds = null;
+        newTask.timeoutMs = null;
+        showToast('Task created');
+      } catch (e) { showToast(e.message, 'error'); }
+      saving.value = false;
+    };
+
     const navigate = (path) => { window.location.hash = path; };
 
-    return { group, tasks, claude, ollama, loading, saving, activeTab, form, tabs, saveSettings, savePrompts, navigate };
+    return { group, tasks, claude, ollama, loading, saving, activeTab, form, tabs, showNewTask, newTask, newTaskScheduleError, newTaskScheduleHint, createNewTask, saveSettings, savePrompts, navigate };
   },
 };
 

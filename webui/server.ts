@@ -20,6 +20,7 @@ import {
 import {
   handleGetGroupTasks,
   handleGetTask,
+  handleCreateTask,
   handlePatchTask,
   handleGetTaskRuns,
 } from './routes/tasks.js';
@@ -132,6 +133,16 @@ export function createApp(groupsDir: string, publicDir?: string): http.Server {
       method: 'GET',
       compiled: compilePath('/api/v1/groups/:folder/tasks'),
       handler: (params) => handleGetGroupTasks(params.folder),
+    },
+    {
+      method: 'POST',
+      compiled: compilePath('/api/v1/groups/:folder/tasks'),
+      handler: async (params, req) => {
+        const body = (await parseJsonBody(req)) as any;
+        const result = handleCreateTask(params.folder, body);
+        if ('error' in result) throw new HttpError(400, result.error);
+        return result.task;
+      },
     },
     {
       method: 'GET',
