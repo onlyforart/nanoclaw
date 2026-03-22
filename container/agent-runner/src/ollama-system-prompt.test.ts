@@ -129,4 +129,5 @@ describe('buildOllamaSystemPrompt', () => {
     const projectPaths = checkedPaths.filter((p) => p.startsWith('/workspace/project'));
     expect(projectPaths).toHaveLength(0);
   });
+
 });
