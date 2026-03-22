@@ -36,6 +36,7 @@ beforeEach(() => {
       requires_trigger INTEGER DEFAULT 1,
       is_main INTEGER DEFAULT 0,
       model TEXT DEFAULT NULL,
+      temperature REAL DEFAULT NULL,
       max_tool_rounds INTEGER DEFAULT NULL,
       timeout_ms INTEGER DEFAULT NULL
     );
@@ -54,6 +55,7 @@ beforeEach(() => {
       created_at TEXT NOT NULL,
       context_mode TEXT DEFAULT 'isolated',
       model TEXT DEFAULT NULL,
+      temperature REAL DEFAULT NULL,
       timezone TEXT DEFAULT NULL,
       max_tool_rounds INTEGER DEFAULT NULL,
       timeout_ms INTEGER DEFAULT NULL

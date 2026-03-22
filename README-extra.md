@@ -13,6 +13,16 @@ This is a personal fork of [qwibitai/nanoclaw](https://github.com/qwibitai/nanoc
 
 To pull upstream changes: `git fetch upstream && git merge upstream/main`
 
+## Docker Sandbox Install (macOS)
+
+To install this fork in a Docker AI Sandbox on an Apple Silicon Mac (M1+), with Docker Desktop 4.40+ installed:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/onlyforart/nanoclaw/main/install-docker-sandboxes-fork.sh | bash
+```
+
+Type `/setup` when Claude Code starts inside the sandbox.
+
 ## What This Fork Adds
 
 Compared to upstream `main`, this fork includes:

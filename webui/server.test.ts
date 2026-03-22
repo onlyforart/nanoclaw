@@ -81,6 +81,7 @@ beforeEach(async () => {
       trigger_pattern TEXT NOT NULL, added_at TEXT NOT NULL,
       container_config TEXT, requires_trigger INTEGER DEFAULT 1,
       is_main INTEGER DEFAULT 0, model TEXT DEFAULT NULL,
+      temperature REAL DEFAULT NULL,
       max_tool_rounds INTEGER DEFAULT NULL, timeout_ms INTEGER DEFAULT NULL
     );
     CREATE TABLE scheduled_tasks (
@@ -88,7 +89,7 @@ beforeEach(async () => {
       prompt TEXT NOT NULL, schedule_type TEXT NOT NULL, schedule_value TEXT NOT NULL,
       next_run TEXT, last_run TEXT, last_result TEXT, status TEXT DEFAULT 'active',
       created_at TEXT NOT NULL, context_mode TEXT DEFAULT 'isolated',
-      model TEXT DEFAULT NULL, timezone TEXT DEFAULT NULL,
+      model TEXT DEFAULT NULL, temperature REAL DEFAULT NULL, timezone TEXT DEFAULT NULL,
       max_tool_rounds INTEGER DEFAULT NULL, timeout_ms INTEGER DEFAULT NULL
     );
     CREATE TABLE task_run_logs (
@@ -97,13 +98,13 @@ beforeEach(async () => {
       result TEXT, error TEXT
     );
   `);
-  db.prepare(`INSERT INTO registered_groups VALUES (?, ?, ?, ?, ?, NULL, 1, 1, NULL, NULL, NULL)`).run(
+  db.prepare(`INSERT INTO registered_groups VALUES (?, ?, ?, ?, ?, NULL, 1, 1, NULL, NULL, NULL, NULL)`).run(
     'main@s.whatsapp.net', 'Main Chat', 'whatsapp_main', '@Andy', '2024-01-01T00:00:00.000Z',
   );
-  db.prepare(`INSERT INTO registered_groups VALUES (?, ?, ?, ?, ?, NULL, 1, 0, ?, ?, ?)`).run(
+  db.prepare(`INSERT INTO registered_groups VALUES (?, ?, ?, ?, ?, NULL, 1, 0, ?, NULL, ?, ?)`).run(
     'slack@main', 'Slack Main', 'slack_main', '@Andy', '2024-01-02T00:00:00.000Z', 'sonnet', 10, 300000,
   );
-  db.prepare(`INSERT INTO scheduled_tasks VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, NULL, NULL, NULL, NULL)`).run(
+  db.prepare(`INSERT INTO scheduled_tasks VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, NULL, NULL, NULL, NULL, NULL)`).run(
     'task-1', 'slack_main', 'slack@main', 'Daily standup', 'cron', '0 9 * * 1-5',
     '2024-06-03T09:00:00.000Z', 'active', '2024-01-01T00:00:00.000Z', 'group',
   );
