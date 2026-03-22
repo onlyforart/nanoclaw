@@ -82,7 +82,7 @@ export function getGroupByFolder(folder: string): GroupRow | undefined {
 
 export function updateGroup(
   folder: string,
-  updates: { model?: string; temperature?: number; max_tool_rounds?: number; timeout_ms?: number },
+  updates: { model?: string; temperature?: number | null; max_tool_rounds?: number; timeout_ms?: number },
 ): boolean {
   const setClauses: string[] = [];
   const values: unknown[] = [];
