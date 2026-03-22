@@ -91,9 +91,17 @@ These are the primary place to look when debugging a specific agent invocation. 
 
 Each group's container session generates runtime state under `data/sessions/{groupName}/`:
 
-- `agent-runner-src/` — compiled TypeScript for that session's container
+- `agent-runner-src/` — per-group copy of the agent-runner TypeScript source, recompiled on each container startup
 - `mcp-servers/config.json` — container-side MCP server configuration (pre-resolved paths, no host paths)
 - `.claude/` — Claude Code project state and backups
+
+> **Important:** `agent-runner-src/` is only created once per group and never auto-updated. After changing any code in `container/agent-runner/src/`, you **must** delete the stale copies or they will shadow your changes:
+>
+> ```bash
+> rm -rf data/sessions/*/agent-runner-src/
+> ```
+>
+> Then restart nanoclaw. The fresh source will be copied on the next container spawn.
 
 ### IPC (Inter-Process Communication)
 

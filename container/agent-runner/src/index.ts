@@ -638,6 +638,57 @@ async function runOllamaDirectMode(containerInput: ContainerInput): Promise<void
     log(`MCP executor init failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 
+  // Load skill files for lazy injection — skill content is injected into
+  // the conversation only when a tool from that server is first called,
+  // keeping the initial context small.
+  const serverSkills = new Map<string, string>();
+  for (const [name, config] of Object.entries(mcpConfig)) {
+    const cfg = config as { skill?: string };
+    if (!cfg.skill) continue;
+    const candidates = [
+      `/workspace/mcp-servers/${name}/${cfg.skill}`,
+      `/home/node/.claude/skills/${name}/SKILL.md`,
+    ];
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        try {
+          const raw = fs.readFileSync(candidate, 'utf-8');
+          // Strip YAML frontmatter
+          let content = raw.replace(/^---\n[\s\S]*?\n---\n/, '').trim();
+
+          // Inline referenced markdown files — the model can't read files,
+          // so resolve relative links like [Title](skill/foo.md) and append
+          // their content. This gives the model the full operational context.
+          const skillDir = path.dirname(candidate);
+          const refPattern = /\[([^\]]+)\]\(([^)]+\.md)\)/g;
+          const inlined: string[] = [];
+          let match;
+          while ((match = refPattern.exec(content)) !== null) {
+            const [, title, relPath] = match;
+            const refFile = path.resolve(skillDir, relPath);
+            if (fs.existsSync(refFile)) {
+              try {
+                const refContent = fs.readFileSync(refFile, 'utf-8').trim();
+                if (refContent) {
+                  inlined.push(`### ${title}\n\n${refContent}`);
+                }
+              } catch { /* skip */ }
+            }
+          }
+          if (inlined.length > 0) {
+            content += '\n\n' + inlined.join('\n\n');
+          }
+
+          if (content) {
+            serverSkills.set(name, content);
+            log(`Loaded skill for ${name} from ${candidate} (${inlined.length} referenced docs inlined)`);
+          }
+        } catch { /* skip */ }
+        break;
+      }
+    }
+  }
+
   const systemPrompt = buildOllamaSystemPrompt(containerInput);
 
   // Build prompt
@@ -669,6 +720,7 @@ async function runOllamaDirectMode(containerInput: ContainerInput): Promise<void
         tools: executor.getOllamaTools(),
         toolNameMap: executor.getToolNameMap(),
         executeTool: (name, args) => executor.callTool(name, args),
+        serverSkills,
       });
 
       const meta = result.timedOut ? ' [timeout]'

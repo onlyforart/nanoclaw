@@ -344,6 +344,169 @@ describe('runOllamaChat', () => {
   });
 });
 
+describe('lazy skill injection', () => {
+  it('injects skill content as system message on first tool call from a server', async () => {
+    const executeTool = vi.fn().mockResolvedValue('{"pods": []}');
+    const toolNameMap = new Map([
+      ['eks-kubectl__list_pods', { mcpTool: 'mcp__eks-kubectl__list_pods', serverName: 'eks-kubectl' }],
+    ]);
+    const serverSkills = new Map([
+      ['eks-kubectl', '# EKS kubectl\nUse these tools for cluster ops.'],
+    ]);
+
+    // Round 1: model calls a tool
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { function: { name: 'eks-kubectl__list_pods', arguments: { cluster: 'prod', namespace: 'default' } } },
+        ],
+      },
+    }));
+    // Round 2: model returns final text
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: { role: 'assistant', content: 'Here are the pods.' },
+    }));
+
+    await runOllamaChat('list pods in prod', {
+      ...baseOptions({ executeTool, toolNameMap }),
+      serverSkills,
+    });
+
+    // The second ollama.chat call should include a system message with the skill
+    const secondCallMessages = mockChat.mock.calls[1][0].messages;
+    const skillMessages = secondCallMessages.filter(
+      (m: { role: string; content: string }) =>
+        m.role === 'system' && m.content.includes('EKS kubectl'),
+    );
+    expect(skillMessages).toHaveLength(1);
+    expect(skillMessages[0].content).toContain('Use these tools for cluster ops');
+  });
+
+  it('does not inject skill content more than once for the same server', async () => {
+    const executeTool = vi.fn().mockResolvedValue('ok');
+    const toolNameMap = new Map([
+      ['eks-kubectl__list_pods', { mcpTool: 'mcp__eks-kubectl__list_pods', serverName: 'eks-kubectl' }],
+    ]);
+    const serverSkills = new Map([
+      ['eks-kubectl', 'EKS skill content'],
+    ]);
+
+    // Round 1: tool call
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { function: { name: 'eks-kubectl__list_pods', arguments: { cluster: 'prod', namespace: 'default' } } },
+        ],
+      },
+    }));
+    // Round 2: another tool call from same server
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { function: { name: 'eks-kubectl__list_pods', arguments: { cluster: 'prod', namespace: 'kube-system' } } },
+        ],
+      },
+    }));
+    // Round 3: final text
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: { role: 'assistant', content: 'Done.' },
+    }));
+
+    await runOllamaChat('check all pods', {
+      ...baseOptions({ executeTool, toolNameMap }),
+      serverSkills,
+    });
+
+    // Count skill system messages across all messages in the third call
+    const thirdCallMessages = mockChat.mock.calls[2][0].messages;
+    const skillMessages = thirdCallMessages.filter(
+      (m: { role: string; content: string }) =>
+        m.role === 'system' && m.content.includes('EKS skill content'),
+    );
+    expect(skillMessages).toHaveLength(1);
+  });
+
+  it('does not inject any skill when serverSkills is not provided', async () => {
+    const executeTool = vi.fn().mockResolvedValue('ok');
+    const toolNameMap = new Map([
+      ['eks-kubectl__list_pods', { mcpTool: 'mcp__eks-kubectl__list_pods', serverName: 'eks-kubectl' }],
+    ]);
+
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { function: { name: 'eks-kubectl__list_pods', arguments: { cluster: 'prod', namespace: 'default' } } },
+        ],
+      },
+    }));
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: { role: 'assistant', content: 'Done.' },
+    }));
+
+    await runOllamaChat('list pods', baseOptions({ executeTool, toolNameMap }));
+
+    const secondCallMessages = mockChat.mock.calls[1][0].messages;
+    const skillMessages = secondCallMessages.filter(
+      (m: { role: string; content: string }) =>
+        m.role === 'system' && !m.content.includes('tool-calling capabilities'),
+    );
+    // Only the initial system messages (no extra skill injection)
+    // No serverSkills passed, so no skill system messages should appear beyond the originals
+    expect(skillMessages.every(
+      (m: { content: string }) => !m.content.includes('EKS') && !m.content.includes('skill'),
+    )).toBe(true);
+  });
+
+  it('injects skill before tool result so model has context for interpretation', async () => {
+    const executeTool = vi.fn().mockResolvedValue('{"pods": []}');
+    const toolNameMap = new Map([
+      ['eks-kubectl__list_pods', { mcpTool: 'mcp__eks-kubectl__list_pods', serverName: 'eks-kubectl' }],
+    ]);
+    const serverSkills = new Map([
+      ['eks-kubectl', 'SKILL: interpret pod status carefully'],
+    ]);
+
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { function: { name: 'eks-kubectl__list_pods', arguments: { cluster: 'prod', namespace: 'default' } } },
+        ],
+      },
+    }));
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: { role: 'assistant', content: 'Pods look healthy.' },
+    }));
+
+    await runOllamaChat('check pods', {
+      ...baseOptions({ executeTool, toolNameMap }),
+      serverSkills,
+    });
+
+    const secondCallMessages = mockChat.mock.calls[1][0].messages;
+    const skillIdx = secondCallMessages.findIndex(
+      (m: { role: string; content: string }) =>
+        m.role === 'system' && m.content.includes('SKILL:'),
+    );
+    const toolResultIdx = secondCallMessages.findIndex(
+      (m: { role: string }) => m.role === 'tool',
+    );
+
+    expect(skillIdx).toBeGreaterThan(-1);
+    expect(toolResultIdx).toBeGreaterThan(-1);
+    expect(skillIdx).toBeLessThan(toolResultIdx);
+  });
+});
+
 describe('resolveOllamaModel', () => {
   it('returns exact match when model name matches', async () => {
     const { resolveOllamaModel } = await import('./ollama-chat-engine.js');

@@ -22,6 +22,8 @@ export interface OllamaChatOptions {
   executeTool: (mcpToolName: string, args: Record<string, unknown>) => Promise<string>;
   /** Called with status updates (e.g. "Calling model...", "Executing tool X...") */
   onStatus?: (status: string) => void;
+  /** Server skill content to inject lazily on first tool call from each server */
+  serverSkills?: Map<string, string>;
 }
 
 export interface OllamaChatResult {
@@ -73,7 +75,11 @@ export async function runOllamaChat(
     toolNameMap,
     executeTool,
     onStatus,
+    serverSkills,
   } = options;
+
+  // Track which servers have had their skill injected
+  const injectedSkills = new Set<string>();
 
   const ollama = new Ollama({ host });
   const startTime = Date.now();
@@ -221,6 +227,14 @@ export async function runOllamaChat(
       }
       log(`  Args: ${JSON.stringify(args).slice(0, 500)}`);
       onStatus?.(`Executing tool: ${ollamaName}...`);
+
+      // Inject skill instructions on first tool call from this server
+      const serverName = mapping?.serverName;
+      if (serverName && serverSkills?.has(serverName) && !injectedSkills.has(serverName)) {
+        messages.push({ role: 'system', content: serverSkills.get(serverName)! });
+        injectedSkills.add(serverName);
+        log(`  [injected skill for ${serverName}]`);
+      }
 
       const toolStart = Date.now();
       try {
