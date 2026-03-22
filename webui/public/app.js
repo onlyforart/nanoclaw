@@ -45,6 +45,55 @@ function formatUptime(s) {
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
+function validateSchedule(type, value) {
+  const v = value.trim();
+  if (!v) return '';
+  if (type === 'cron') {
+    const fields = v.split(/\s+/);
+    if (fields.length !== 5) return `Cron requires exactly 5 fields (minute hour day month weekday), got ${fields.length}`;
+    const names = ['minute', 'hour', 'day', 'month', 'weekday'];
+    for (let i = 0; i < 5; i++) {
+      const f = fields[i];
+      if (f === '*') continue;
+      if (/^(\*\/\d+|\d+(-\d+)?(\/\d+)?(,\d+(-\d+)?(\/\d+)?)*)$/.test(f)) continue;
+      return `Invalid ${names[i]} field: "${f}"`;
+    }
+    return '';
+  }
+  if (type === 'interval') {
+    const ms = parseInt(v, 10);
+    if (isNaN(ms) || ms <= 0) return 'Interval must be a positive number (milliseconds)';
+    return '';
+  }
+  if (type === 'once') {
+    if (isNaN(new Date(v).getTime())) return 'Could not parse date \u2014 try "June 1 2026 9am" or "2026-06-01T09:00"';
+    return '';
+  }
+  return '';
+}
+
+function scheduleHintText(type, value) {
+  const v = value.trim();
+  if (!v || validateSchedule(type, value)) return '';
+  if (type === 'cron') return 'Format: minute hour day month weekday';
+  if (type === 'interval') {
+    const ms = parseInt(v, 10);
+    if (ms >= 3600000) return `Every ${(ms / 3600000).toFixed(1)} hour(s)`;
+    if (ms >= 60000) return `Every ${(ms / 60000).toFixed(0)} minute(s)`;
+    return `Every ${(ms / 1000).toFixed(0)} second(s)`;
+  }
+  if (type === 'once') {
+    const d = new Date(v);
+    return `Will run at: ${d.toLocaleString()} \u2014 ${d.toISOString()}`;
+  }
+  return '';
+}
+
+function normalizeScheduleValue(type, value) {
+  if (type === 'once') return new Date(value).toISOString();
+  return value;
+}
+
 // ── Icons (inline SVG paths) ───────────────────────────────
 
 const icons = {
@@ -628,52 +677,8 @@ const AppGroupDetail = {
       model: '', temperature: null, timezone: '', maxToolRounds: null, timeoutMs: null,
     });
 
-    const newTaskScheduleError = computed(() => {
-      const v = newTask.scheduleValue.trim();
-      if (!v) return '';
-      if (newTask.scheduleType === 'cron') {
-        const fields = v.split(/\s+/);
-        if (fields.length !== 5) return `Cron requires exactly 5 fields, got ${fields.length}`;
-        const ranges = [
-          { name: 'minute', min: 0, max: 59 },
-          { name: 'hour', min: 0, max: 23 },
-          { name: 'day', min: 1, max: 31 },
-          { name: 'month', min: 1, max: 12 },
-          { name: 'weekday', min: 0, max: 7 },
-        ];
-        for (let i = 0; i < 5; i++) {
-          const field = fields[i];
-          if (field === '*') continue;
-          if (/^(\*\/\d+|\d+(-\d+)?(\/\d+)?(,\d+(-\d+)?(\/\d+)?)*)$/.test(field)) continue;
-          return `Invalid ${ranges[i].name} field: "${field}"`;
-        }
-        return '';
-      }
-      if (newTask.scheduleType === 'interval') {
-        const ms = parseInt(v, 10);
-        if (isNaN(ms) || ms <= 0) return 'Interval must be a positive number (milliseconds)';
-        return '';
-      }
-      if (newTask.scheduleType === 'once') {
-        if (isNaN(new Date(v).getTime())) return 'Could not parse date — try "June 1 2026 9am" or "2026-06-01T09:00"';
-        return '';
-      }
-      return '';
-    });
-
-    const newTaskScheduleHint = computed(() => {
-      const v = newTask.scheduleValue.trim();
-      if (!v || newTaskScheduleError.value) return '';
-      if (newTask.scheduleType === 'cron') return 'Format: minute hour day month weekday';
-      if (newTask.scheduleType === 'interval') {
-        const ms = parseInt(v, 10);
-        if (ms >= 3600000) return `Every ${(ms / 3600000).toFixed(1)} hour(s)`;
-        if (ms >= 60000) return `Every ${(ms / 60000).toFixed(0)} minute(s)`;
-        return `Every ${(ms / 1000).toFixed(0)} second(s)`;
-      }
-      if (newTask.scheduleType === 'once') { const d = new Date(v); return `Will run at: ${d.toLocaleString()} — ${d.toISOString()}`; }
-      return '';
-    });
+    const newTaskScheduleError = computed(() => validateSchedule(newTask.scheduleType, newTask.scheduleValue));
+    const newTaskScheduleHint = computed(() => scheduleHintText(newTask.scheduleType, newTask.scheduleValue));
 
     const tabs = computed(() => [
       { key: 'settings', label: 'Settings' },
@@ -742,14 +747,10 @@ const AppGroupDetail = {
     const createNewTask = async () => {
       saving.value = true;
       try {
-        let scheduleValue = newTask.scheduleValue;
-        if (newTask.scheduleType === 'once') {
-          scheduleValue = new Date(scheduleValue).toISOString();
-        }
         const body = {
           prompt: newTask.prompt,
           scheduleType: newTask.scheduleType,
-          scheduleValue,
+          scheduleValue: normalizeScheduleValue(newTask.scheduleType, newTask.scheduleValue),
           contextMode: newTask.contextMode,
         };
         if (newTask.model) body.model = newTask.model;
@@ -987,56 +988,8 @@ const AppTaskDetail = {
       { key: 'runs', label: 'Run History', count: runs.value.length },
     ]);
 
-    const scheduleError = computed(() => {
-      const v = form.scheduleValue.trim();
-      if (!v) return '';
-      if (form.scheduleType === 'cron') {
-        const fields = v.split(/\s+/);
-        if (fields.length !== 5) return `Cron requires exactly 5 fields (minute hour day month weekday), got ${fields.length}`;
-        // Basic field validation
-        const ranges = [
-          { name: 'minute', min: 0, max: 59 },
-          { name: 'hour', min: 0, max: 23 },
-          { name: 'day', min: 1, max: 31 },
-          { name: 'month', min: 1, max: 12 },
-          { name: 'weekday', min: 0, max: 7 },
-        ];
-        for (let i = 0; i < 5; i++) {
-          const field = fields[i];
-          if (field === '*') continue;
-          // Allow */N, N-M, N,M,... patterns
-          if (/^(\*\/\d+|\d+(-\d+)?(\/\d+)?(,\d+(-\d+)?(\/\d+)?)*)$/.test(field)) continue;
-          return `Invalid ${ranges[i].name} field: "${field}"`;
-        }
-        return '';
-      }
-      if (form.scheduleType === 'interval') {
-        const ms = parseInt(v, 10);
-        if (isNaN(ms) || ms <= 0) return 'Interval must be a positive number (milliseconds)';
-        return '';
-      }
-      if (form.scheduleType === 'once') {
-        if (isNaN(new Date(v).getTime())) return 'Could not parse date — try "June 1 2026 9am" or "2026-06-01T09:00"';
-        return '';
-      }
-      return '';
-    });
-
-    const scheduleHint = computed(() => {
-      const v = form.scheduleValue.trim();
-      if (!v || scheduleError.value) return '';
-      if (form.scheduleType === 'cron') return 'Format: minute hour day month weekday';
-      if (form.scheduleType === 'interval') {
-        const ms = parseInt(v, 10);
-        if (ms >= 3600000) return `Every ${(ms / 3600000).toFixed(1)} hour(s)`;
-        if (ms >= 60000) return `Every ${(ms / 60000).toFixed(0)} minute(s)`;
-        return `Every ${(ms / 1000).toFixed(0)} second(s)`;
-      }
-      if (form.scheduleType === 'once') {
-        const d = new Date(v); return `Will run at: ${d.toLocaleString()} — ${d.toISOString()}`;
-      }
-      return '';
-    });
+    const scheduleError = computed(() => validateSchedule(form.scheduleType, form.scheduleValue));
+    const scheduleHint = computed(() => scheduleHintText(form.scheduleType, form.scheduleValue));
 
     const fetchRuns = async () => {
       try { runs.value = await api(`/tasks/${props.taskId}/runs?limit=20`); } catch {}
@@ -1074,11 +1027,7 @@ const AppTaskDetail = {
       try {
         const body = { prompt: promptText.value };
         if (form.scheduleType) body.scheduleType = form.scheduleType;
-        if (form.scheduleValue) {
-          body.scheduleValue = form.scheduleType === 'once'
-            ? new Date(form.scheduleValue).toISOString()
-            : form.scheduleValue;
-        }
+        if (form.scheduleValue) body.scheduleValue = normalizeScheduleValue(form.scheduleType, form.scheduleValue);
         body.contextMode = form.contextMode;
         if (form.model) body.model = form.model;
         if (form.temperature != null) body.temperature = form.temperature;

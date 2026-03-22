@@ -204,8 +204,8 @@ export function updateTask(
 }
 
 export function deleteTask(id: string): boolean {
-  const result = db.prepare(`DELETE FROM scheduled_tasks WHERE id = ?`).run(id);
   db.prepare(`DELETE FROM task_run_logs WHERE task_id = ?`).run(id);
+  const result = db.prepare(`DELETE FROM scheduled_tasks WHERE id = ?`).run(id);
   return result.changes > 0;
 }
 
