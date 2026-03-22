@@ -22,6 +22,7 @@ import {
   handleGetTask,
   handleCreateTask,
   handlePatchTask,
+  handleDeleteTask,
   handleGetTaskRuns,
 } from './routes/tasks.js';
 import { handleGetContainers } from './routes/containers.js';
@@ -161,6 +162,15 @@ export function createApp(groupsDir: string, publicDir?: string): http.Server {
         const result = handlePatchTask(params.id, body);
         if ('error' in result) throw new HttpError(400, result.error);
         return result.task;
+      },
+    },
+    {
+      method: 'DELETE',
+      compiled: compilePath('/api/v1/tasks/:id'),
+      handler: (params) => {
+        const result = handleDeleteTask(params.id);
+        if ('error' in result) throw new HttpError(404, result.error);
+        return result;
       },
     },
     {
