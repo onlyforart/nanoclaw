@@ -16,20 +16,18 @@ interface PromptInput {
 }
 
 /**
- * Read a memory file, preferring OLLAMA.md over CLAUDE.md.
- * Returns the file content, or undefined if neither exists.
+ * Read a memory file, preferring the first filename that exists.
+ * Defaults to OLLAMA.md → CLAUDE.md when no filenames are specified.
+ * Returns the file content, or undefined if none exists.
  */
-function readMemoryFile(dir: string): string | undefined {
-  const ollamaPath = `${dir}/OLLAMA.md`;
-  if (fs.existsSync(ollamaPath)) {
-    return fs.readFileSync(ollamaPath, 'utf-8');
+function readMemoryFile(dir: string, ...filenames: string[]): string | undefined {
+  const names = filenames.length > 0 ? filenames : ['OLLAMA.md', 'CLAUDE.md'];
+  for (const name of names) {
+    const filePath = `${dir}/${name}`;
+    if (fs.existsSync(filePath)) {
+      return fs.readFileSync(filePath, 'utf-8');
+    }
   }
-
-  const claudePath = `${dir}/CLAUDE.md`;
-  if (fs.existsSync(claudePath)) {
-    return fs.readFileSync(claudePath, 'utf-8');
-  }
-
   return undefined;
 }
 
@@ -57,9 +55,9 @@ export function buildOllamaSystemPrompt(input: PromptInput): string {
   if (input.groupFolder) {
     const channelPrefix = input.groupFolder.split('_')[0]?.toUpperCase();
     if (channelPrefix) {
-      const channelMdPath = `/workspace/global/${channelPrefix}.md`;
-      if (fs.existsSync(channelMdPath)) {
-        parts.push('## Channel Overrides\n' + fs.readFileSync(channelMdPath, 'utf-8'));
+      const channelOverride = readMemoryFile(`/workspace/global`, `${channelPrefix}_OLLAMA.md`, `${channelPrefix}.md`);
+      if (channelOverride) {
+        parts.push('## Channel Overrides\n' + channelOverride);
       }
     }
   }

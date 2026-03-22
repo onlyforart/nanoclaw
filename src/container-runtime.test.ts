@@ -146,4 +146,44 @@ describe('cleanupOrphans', () => {
       'Stopped orphaned containers',
     );
   });
+
+  it('excludes its own hostname from orphan list (self-protection)', () => {
+    const hostname = require('os').hostname();
+    // docker ps returns the sandbox's own container name alongside real orphans
+    mockExecSync.mockReturnValueOnce(
+      `nanoclaw-group1-111\n${hostname}\nnanoclaw-group2-222\n`,
+    );
+    // Two stop calls (not three — hostname is excluded)
+    mockExecSync.mockReturnValue('');
+
+    cleanupOrphans();
+
+    // ps + 2 stops (the hostname container is skipped)
+    expect(mockExecSync).toHaveBeenCalledTimes(3);
+    expect(mockExecSync).toHaveBeenNthCalledWith(
+      2,
+      `${CONTAINER_RUNTIME_BIN} stop nanoclaw-group1-111`,
+      { stdio: 'pipe' },
+    );
+    expect(mockExecSync).toHaveBeenNthCalledWith(
+      3,
+      `${CONTAINER_RUNTIME_BIN} stop nanoclaw-group2-222`,
+      { stdio: 'pipe' },
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      { count: 2, names: ['nanoclaw-group1-111', 'nanoclaw-group2-222'] },
+      'Stopped orphaned containers',
+    );
+  });
+
+  it('stops nothing when only the sandbox itself is running', () => {
+    const hostname = require('os').hostname();
+    mockExecSync.mockReturnValueOnce(`${hostname}\n`);
+
+    cleanupOrphans();
+
+    // Only the ps call, no stops
+    expect(mockExecSync).toHaveBeenCalledTimes(1);
+    expect(logger.info).not.toHaveBeenCalled();
+  });
 });
