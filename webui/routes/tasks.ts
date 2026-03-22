@@ -124,7 +124,7 @@ export function handleCreateTask(
     schedule_value: body.scheduleValue,
     context_mode: body.contextMode || 'isolated',
     model: body.model || null,
-    temperature: body.temperature ?? null,
+    temperature: body.temperature != null && String(body.temperature) !== '' ? Number(body.temperature) : null,
     timezone: body.timezone || null,
     max_tool_rounds: body.maxToolRounds ?? null,
     timeout_ms: body.timeoutMs ?? null,
@@ -189,7 +189,7 @@ export function handlePatchTask(
   if (body.scheduleValue !== undefined) updates.schedule_value = body.scheduleValue;
   if (body.contextMode !== undefined) updates.context_mode = body.contextMode;
   if (body.model !== undefined) updates.model = body.model;
-  if (body.temperature !== undefined) updates.temperature = body.temperature;
+  if (body.temperature !== undefined) updates.temperature = body.temperature != null && String(body.temperature) !== '' ? Number(body.temperature) : null;
   if (body.timezone !== undefined) updates.timezone = body.timezone;
   if (body.maxToolRounds !== undefined) updates.max_tool_rounds = body.maxToolRounds;
   if (body.timeoutMs !== undefined) updates.timeout_ms = body.timeoutMs;

@@ -46,9 +46,9 @@ export function handlePatchGroup(
 ): GroupResponse | null {
   if (!isValidGroupFolder(folder)) return null;
 
-  const updates: { model?: string; temperature?: number; max_tool_rounds?: number; timeout_ms?: number } = {};
+  const updates: { model?: string; temperature?: number | null; max_tool_rounds?: number; timeout_ms?: number } = {};
   if (body.model !== undefined) updates.model = body.model;
-  if (body.temperature !== undefined) updates.temperature = body.temperature;
+  if (body.temperature !== undefined) updates.temperature = body.temperature != null && String(body.temperature) !== '' ? Number(body.temperature) : null;
   if (body.maxToolRounds !== undefined) updates.max_tool_rounds = body.maxToolRounds;
   if (body.timeoutMs !== undefined) updates.timeout_ms = body.timeoutMs;
 
