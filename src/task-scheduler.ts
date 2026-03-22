@@ -182,7 +182,7 @@ async function runTask(
         isScheduledTask: true,
         assistantName: ASSISTANT_NAME,
         model: task.model || group.model || undefined,
-        temperature: task.temperature ?? group.temperature,
+        temperature: (task.temperature != null && String(task.temperature) !== '' ? task.temperature : null) ?? group.temperature,
         maxToolRounds: task.maxToolRounds ?? group.maxToolRounds,
         timeoutMs: task.timeoutMs ?? group.timeoutMs,
       },

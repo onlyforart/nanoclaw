@@ -104,14 +104,14 @@ export async function runOllamaChat(
     messages.push({ role: 'system', content: systemPrompt });
   }
 
-  // If tools are available, add a tool-usage instruction
+  // If tools are available, inject the tool list (behavioral instructions are in OLLAMA-SYSTEM.md)
   if (tools.length > 0) {
     const toolList = tools
       .map((t) => `- ${t.function.name}: ${t.function.description}`)
       .join('\n');
     messages.push({
       role: 'system',
-      content: `You have tool-calling capabilities. When the user asks you to check, query, or look up anything, you MUST call the appropriate tool. Never say you don't have access to tools — you do. Use them.\n\nAvailable tools:\n${toolList}`,
+      content: `Available tools:\n${toolList}`,
     });
   }
 

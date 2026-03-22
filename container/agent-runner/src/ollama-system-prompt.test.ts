@@ -68,7 +68,9 @@ describe('buildOllamaSystemPrompt', () => {
   it('prefers OLLAMA.md over CLAUDE.md when both exist', () => {
     mockExistsSync.mockReturnValue(true);
     mockReadFileSync.mockImplementation((p) => {
-      if (String(p).endsWith('OLLAMA.md')) return 'ollama wins';
+      const path = String(p);
+      if (path.endsWith('OLLAMA-SYSTEM.md')) return 'base instructions';
+      if (path.endsWith('OLLAMA.md')) return 'ollama wins';
       return 'claude loses';
     });
 
@@ -117,7 +119,7 @@ describe('buildOllamaSystemPrompt', () => {
     expect(prompt).not.toContain('Shared Memory');
   });
 
-  it('never reads from /workspace/project (root CLAUDE.md is for Claude Code, not agents)', () => {
+  it('only reads OLLAMA-SYSTEM.md from /workspace/project (root CLAUDE.md is for Claude Code, not agents)', () => {
     const checkedPaths: string[] = [];
     mockExistsSync.mockImplementation((p) => {
       checkedPaths.push(String(p));
@@ -127,7 +129,7 @@ describe('buildOllamaSystemPrompt', () => {
     buildOllamaSystemPrompt(baseInput());
 
     const projectPaths = checkedPaths.filter((p) => p.startsWith('/workspace/project'));
-    expect(projectPaths).toHaveLength(0);
+    expect(projectPaths).toEqual(['/workspace/project/container/OLLAMA-SYSTEM.md']);
   });
 
 });

@@ -36,6 +36,12 @@ export function buildOllamaSystemPrompt(input: PromptInput): string {
 
   parts.push(`You are ${input.assistantName || 'Andy'}, a helpful assistant.`);
 
+  // Base system instructions (tool usage rules, output formatting)
+  const baseInstructions = readMemoryFile('/workspace/project', 'container/OLLAMA-SYSTEM.md');
+  if (baseInstructions) {
+    parts.push(baseInstructions);
+  }
+
   // Group memory
   const groupMemory = readMemoryFile('/workspace/group');
   if (groupMemory) {
