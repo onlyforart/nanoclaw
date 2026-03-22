@@ -1,10 +1,14 @@
 import { CronExpressionParser } from 'cron-parser';
 
+import crypto from 'node:crypto';
+
 import {
   getTasksByGroup,
   getTaskById,
+  createTask,
   updateTask,
   getTaskRuns,
+  getGroupByFolder,
   type TaskRow,
   type TaskRunRow,
 } from '../db.js';
@@ -74,6 +78,62 @@ export function handleGetGroupTasks(groupFolder: string): TaskResponse[] {
 export function handleGetTask(id: string): TaskResponse | null {
   const row = getTaskById(id);
   return row ? formatTask(row) : null;
+}
+
+export function handleCreateTask(
+  groupFolder: string,
+  body: {
+    prompt?: string;
+    scheduleType?: string;
+    scheduleValue?: string;
+    contextMode?: string;
+    model?: string;
+    temperature?: number;
+    timezone?: string;
+    maxToolRounds?: number;
+    timeoutMs?: number;
+  },
+): { task: TaskResponse } | { error: string } {
+  if (!body.prompt?.trim()) return { error: 'prompt is required' };
+  if (!body.scheduleType) return { error: 'scheduleType is required' };
+  if (!body.scheduleValue) return { error: 'scheduleValue is required' };
+  if (!['cron', 'interval', 'once'].includes(body.scheduleType)) {
+    return { error: 'scheduleType must be cron, interval, or once' };
+  }
+
+  const group = getGroupByFolder(groupFolder);
+  if (!group) return { error: 'Group not found' };
+
+  let nextRun: string | null;
+  try {
+    nextRun = computeNextRun(body.scheduleType, body.scheduleValue, body.timezone ?? null);
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+
+  const id = `task-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+  const now = new Date().toISOString();
+
+  createTask({
+    id,
+    group_folder: groupFolder,
+    chat_jid: group.jid,
+    prompt: body.prompt.trim(),
+    schedule_type: body.scheduleType,
+    schedule_value: body.scheduleValue,
+    context_mode: body.contextMode || 'isolated',
+    model: body.model || null,
+    temperature: body.temperature ?? null,
+    timezone: body.timezone || null,
+    max_tool_rounds: body.maxToolRounds ?? null,
+    timeout_ms: body.timeoutMs ?? null,
+    next_run: nextRun,
+    status: 'active',
+    created_at: now,
+  });
+
+  const created = getTaskById(id);
+  return created ? { task: formatTask(created) } : { error: 'Failed to create task' };
 }
 
 /**

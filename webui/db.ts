@@ -115,6 +115,37 @@ export function updateGroup(
 
 // --- Tasks ---
 
+export function createTask(task: {
+  id: string;
+  group_folder: string;
+  chat_jid: string;
+  prompt: string;
+  schedule_type: string;
+  schedule_value: string;
+  context_mode: string;
+  model: string | null;
+  temperature: number | null;
+  timezone: string | null;
+  max_tool_rounds: number | null;
+  timeout_ms: number | null;
+  next_run: string | null;
+  status: string;
+  created_at: string;
+}): void {
+  db.prepare(
+    `INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value,
+       context_mode, model, temperature, timezone, max_tool_rounds, timeout_ms,
+       next_run, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    task.id, task.group_folder, task.chat_jid, task.prompt,
+    task.schedule_type, task.schedule_value, task.context_mode,
+    task.model, task.temperature, task.timezone,
+    task.max_tool_rounds, task.timeout_ms,
+    task.next_run, task.status, task.created_at,
+  );
+}
+
 export function getTasksByGroup(groupFolder: string): TaskRow[] {
   return db
     .prepare(
