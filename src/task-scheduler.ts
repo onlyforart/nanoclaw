@@ -181,7 +181,7 @@ async function runTask(
         isMain,
         isScheduledTask: true,
         assistantName: ASSISTANT_NAME,
-        model: task.model || undefined,
+        model: task.model || group.model || undefined,
         temperature: task.temperature ?? group.temperature,
         maxToolRounds: task.maxToolRounds ?? group.maxToolRounds,
         timeoutMs: task.timeoutMs ?? group.timeoutMs,
