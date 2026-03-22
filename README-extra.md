@@ -25,6 +25,8 @@ Compared to upstream `main`, this fork includes:
 - **Per-task timezone support**
 - **Credential proxy rate limiting**
 - **Agent teams disabled** (to reduce token usage)
+- **Web UI task management** — create, edit, and delete scheduled tasks from the browser; tab persistence via URL hash; flexible "once" schedule dates
+- **Temperature and context mode** — configurable per-group temperature for Ollama models; editable context mode in the UI
 
 ## Where Things Live
 
@@ -41,6 +43,8 @@ The **primary database** is `store/messages.db` (SQLite). This is the only datab
 - `registered_groups` — group-to-folder mappings
 
 There is also a `data/nanoclaw.db` — this is **unused/legacy**. Ignore it.
+
+> **Note:** The database schema includes backfill logic for Discord (`dc:`) and Telegram (`tg:`) JID patterns. These come from upstream channel skill branches that this fork has **not** merged and does not plan to merge. The backfill statements are harmless no-ops.
 
 ### Session / Auth Data
 
@@ -184,6 +188,7 @@ In direct mode:
 | `container/agent-runner/src/mcp-tool-executor.ts` | MCP client that spawns server processes for direct mode |
 | `container/agent-runner/src/ollama-system-prompt.ts` | System prompt builder (reads OLLAMA.md / CLAUDE.md) |
 | `container/agent-runner/src/ollama-mcp-stdio.ts` | MCP server for delegated mode (`ollama_chat` tool) |
+| `container/agent-runner/src/ipc-mcp-stdio.ts` | Stdio MCP server for NanoClaw IPC (messages, tasks, groups) |
 | `src/connection-profiles.ts` | Model string parsing and backend-specific defaults |
 | `data/backend-defaults.json` | Installation-specific default limits per backend |
 | `docs/OLLAMA-DIRECT-MODE.md` | Design spec for direct mode |
@@ -194,7 +199,7 @@ In direct mode:
 
 - `OLLAMA_HOST` in `.env` — local Ollama server URL (default: `http://host.docker.internal:11434`)
 - `OLLAMA_REMOTE_HOST` in `.env` — remote Ollama server URL (for `ollama-remote:` prefix)
-- `data/backend-defaults.json` — per-backend default limits (see below)
+- `data/backend-defaults.json` — per-backend default limits (copy from `data/backend-defaults.json.example` and customise)
 - MCP servers are defined in `data/mcp-servers.json` with their host paths, commands, tool lists, and optional skill files
 - At container launch, `src/container-runner.ts` resolves host paths into container-side config and mounts MCP server directories read-only
 
@@ -296,8 +301,8 @@ The web UI lets you view and edit groups, system prompts, scheduled tasks, and l
 |------|---------|
 | Dashboard | Health status, active containers (auto-refreshes), all groups |
 | Global Prompts | Edit `groups/global/CLAUDE.md` and `OLLAMA.md` |
-| Group Detail | Settings (model, limits), prompt editor, task list |
-| Task Detail | Prompt editor, schedule/model/timezone settings, run history |
+| Group Detail | Settings (model, limits, temperature), prompt editor, task list, task creation |
+| Task Detail | Prompt editor, schedule/model/timezone/context-mode settings, run history, deletion |
 
 The UI is read/write for configuration (prompts, model selection, task schedules) but **view-only for containers** — it cannot start or stop agent containers.
 
