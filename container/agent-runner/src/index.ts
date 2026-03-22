@@ -540,14 +540,20 @@ function writeIpcNotification(chatJid: string, groupFolder: string, text: string
  * Check if an Ollama host is reachable by calling its list models endpoint.
  * Returns true if reachable, false otherwise.
  */
-async function isOllamaReachable(host: string): Promise<boolean> {
-  try {
-    const ollama = new Ollama({ host });
-    await ollama.list();
-    return true;
-  } catch {
-    return false;
+async function isOllamaReachable(host: string, retries = 3, delayMs = 2000): Promise<boolean> {
+  const ollama = new Ollama({ host });
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      await ollama.list();
+      return true;
+    } catch {
+      if (attempt < retries) {
+        log(`Ollama at ${host} not reachable (attempt ${attempt}/${retries}), retrying in ${delayMs}ms...`);
+        await new Promise(r => setTimeout(r, delayMs));
+      }
+    }
   }
+  return false;
 }
 
 /**

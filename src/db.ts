@@ -688,7 +688,7 @@ export function getRegisteredGroup(
       row.requires_trigger === null ? undefined : row.requires_trigger === 1,
     isMain: row.is_main === 1 ? true : undefined,
     model: row.model || undefined,
-    temperature: row.temperature ?? undefined,
+    temperature: row.temperature != null && String(row.temperature) !== '' ? row.temperature : undefined,
     maxToolRounds: row.max_tool_rounds ?? undefined,
     timeoutMs: row.timeout_ms ?? undefined,
   };
