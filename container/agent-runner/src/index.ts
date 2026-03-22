@@ -18,6 +18,7 @@ import fs from 'fs';
 import path from 'path';
 import { query, HookCallback, PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
+import { Ollama } from 'ollama';
 import { runOllamaChat } from './ollama-chat-engine.js';
 import { McpToolExecutor, McpServerConfig } from './mcp-tool-executor.js';
 import { buildOllamaSystemPrompt } from './ollama-system-prompt.js';
@@ -503,7 +504,7 @@ async function runQuery(
       log(`Result #${resultCount}: subtype=${message.subtype}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`);
       writeOutput({
         status: 'success',
-        result: textResult || null,
+        result: textResult ? `:cloud: ${textResult}` : null,
         newSessionId
       });
     }
@@ -514,9 +515,50 @@ async function runQuery(
   return { newSessionId, lastAssistantUuid, closedDuringQuery };
 }
 
+const IPC_MESSAGES_DIR = '/workspace/ipc/messages';
+
+/**
+ * Write an IPC message file directly (outside MCP) so the host can deliver it
+ * to the group's channel. Same format as ipc-mcp-stdio.ts send_message.
+ */
+function writeIpcNotification(chatJid: string, groupFolder: string, text: string): void {
+  fs.mkdirSync(IPC_MESSAGES_DIR, { recursive: true });
+  const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`;
+  const filepath = path.join(IPC_MESSAGES_DIR, filename);
+  const tempPath = `${filepath}.tmp`;
+  fs.writeFileSync(tempPath, JSON.stringify({
+    type: 'message',
+    chatJid,
+    text,
+    groupFolder,
+    timestamp: new Date().toISOString(),
+  }, null, 2));
+  fs.renameSync(tempPath, filepath);
+}
+
+/**
+ * Check if an Ollama host is reachable by calling its list models endpoint.
+ * Returns true if reachable, false otherwise.
+ */
+async function isOllamaReachable(host: string): Promise<boolean> {
+  try {
+    const ollama = new Ollama({ host });
+    await ollama.list();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Run Ollama direct mode — bypass Claude SDK entirely.
  * Spawns MCP server processes directly and drives Ollama with tool calling.
+ *
+ * Fallback logic for ollama-remote:
+ *   1. If remote host is unreachable, notify the group and fall back to local Ollama.
+ *   2. If local Ollama is also unreachable, notify the group and exit with error.
+ * For ollama (local only):
+ *   1. If local host is unreachable, notify the group and exit with error.
  */
 async function runOllamaDirectMode(containerInput: ContainerInput): Promise<void> {
   const model = containerInput.model!;
@@ -524,11 +566,44 @@ async function runOllamaDirectMode(containerInput: ContainerInput): Promise<void
   const prefix = model.slice(0, colonIdx);
   const ollamaModel = model.slice(colonIdx + 1);
 
-  const host = prefix === 'ollama-remote'
-    ? process.env.OLLAMA_REMOTE_HOST || 'http://localhost:11434'
-    : process.env.OLLAMA_HOST || 'http://host.docker.internal:11434';
+  const remoteHost = process.env.OLLAMA_REMOTE_HOST || 'http://localhost:11434';
+  const localHost = process.env.OLLAMA_HOST || 'http://host.docker.internal:11434';
 
-  log(`Ollama direct mode: model=${ollamaModel} host=${host}`);
+  let host: string;
+  if (prefix === 'ollama-remote') {
+    host = remoteHost;
+    log(`Ollama direct mode: model=${ollamaModel} host=${host} (remote)`);
+
+    if (!await isOllamaReachable(host)) {
+      log(`Remote Ollama at ${host} is not reachable, falling back to local`);
+      writeIpcNotification(
+        containerInput.chatJid,
+        containerInput.groupFolder,
+        `⚠️ Remote Ollama is not available. Falling back to local Ollama.`,
+      );
+      host = localHost;
+
+      if (!await isOllamaReachable(host)) {
+        const msg = `Local Ollama is also not available. ${containerInput.isScheduledTask ? 'Scheduled task' : 'Command'} failed.`;
+        log(`Local Ollama at ${host} is not reachable either`);
+        writeIpcNotification(containerInput.chatJid, containerInput.groupFolder, `❌ ${msg}`);
+        writeOutput({ status: 'error', result: null, error: msg });
+        return;
+      }
+      log(`Fell back to local Ollama at ${host}`);
+    }
+  } else {
+    host = localHost;
+    log(`Ollama direct mode: model=${ollamaModel} host=${host} (local)`);
+
+    if (!await isOllamaReachable(host)) {
+      const msg = `Local Ollama is not available. ${containerInput.isScheduledTask ? 'Scheduled task' : 'Command'} failed.`;
+      log(`Local Ollama at ${host} is not reachable`);
+      writeIpcNotification(containerInput.chatJid, containerInput.groupFolder, `❌ ${msg}`);
+      writeOutput({ status: 'error', result: null, error: msg });
+      return;
+    }
+  }
 
   // Load MCP server config
   const mcpConfigPath = '/workspace/mcp-servers-config/config.json';
