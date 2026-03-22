@@ -203,6 +203,12 @@ export function updateTask(
   return result.changes > 0;
 }
 
+export function deleteTask(id: string): boolean {
+  const result = db.prepare(`DELETE FROM scheduled_tasks WHERE id = ?`).run(id);
+  db.prepare(`DELETE FROM task_run_logs WHERE task_id = ?`).run(id);
+  return result.changes > 0;
+}
+
 // --- Task Runs ---
 
 export function getTaskRuns(taskId: string, limit: number = 20): TaskRunRow[] {

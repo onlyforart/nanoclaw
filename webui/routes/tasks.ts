@@ -7,6 +7,7 @@ import {
   getTaskById,
   createTask,
   updateTask,
+  deleteTask,
   getTaskRuns,
   getGroupByFolder,
   type TaskRow,
@@ -214,6 +215,13 @@ export function handlePatchTask(
 
   const updated = getTaskById(id);
   return updated ? { task: formatTask(updated) } : { error: 'Task not found after update' };
+}
+
+export function handleDeleteTask(id: string): { success: true } | { error: string } {
+  const existing = getTaskById(id);
+  if (!existing) return { error: 'Task not found' };
+  deleteTask(id);
+  return { success: true };
 }
 
 export function handleGetTaskRuns(taskId: string, limit: number = 20): TaskRunResponse[] {

@@ -441,7 +441,7 @@ const AppGroupDetail = {
 
       <div v-if="loading" class="text-gray-400 text-sm">Loading...</div>
       <div v-else>
-        <tab-bar :tabs="tabs" :active="activeTab" @select="activeTab = $event" />
+        <tab-bar :tabs="tabs" :active="activeTab" @select="selectTab" />
 
         <!-- Settings Tab -->
         <div v-if="activeTab === 'settings'">
@@ -529,7 +529,7 @@ const AppGroupDetail = {
                   :class="['w-full px-3 py-2 rounded-lg border font-mono text-sm focus:ring-2 focus:border-blue-500 outline-none transition',
                     newTaskScheduleError ? 'border-red-400 dark:border-red-500 focus:ring-red-500' : 'border-gray-300 dark:border-gray-600 focus:ring-blue-500',
                     'bg-white dark:bg-gray-800']"
-                  :placeholder="newTask.scheduleType === 'cron' ? '0 9 * * 1-5' : newTask.scheduleType === 'interval' ? '300000' : '2026-06-01T09:00:00'">
+                  :placeholder="newTask.scheduleType === 'cron' ? '0 9 * * 1-5' : newTask.scheduleType === 'interval' ? '300000' : 'June 1 2026 9:00 AM'">
                 <p v-if="newTaskScheduleError" class="mt-1 text-xs text-red-500">{{ newTaskScheduleError }}</p>
                 <p v-else-if="newTaskScheduleHint" class="mt-1 text-xs text-gray-400">{{ newTaskScheduleHint }}</p>
               </div>
@@ -655,7 +655,7 @@ const AppGroupDetail = {
         return '';
       }
       if (newTask.scheduleType === 'once') {
-        if (isNaN(new Date(v).getTime())) return 'Invalid timestamp';
+        if (isNaN(new Date(v).getTime())) return 'Could not parse date — try "June 1 2026 9am" or "2026-06-01T09:00"';
         return '';
       }
       return '';
@@ -671,7 +671,7 @@ const AppGroupDetail = {
         if (ms >= 60000) return `Every ${(ms / 60000).toFixed(0)} minute(s)`;
         return `Every ${(ms / 1000).toFixed(0)} second(s)`;
       }
-      if (newTask.scheduleType === 'once') return `Runs at ${new Date(v).toLocaleString()}`;
+      if (newTask.scheduleType === 'once') { const d = new Date(v); return `Will run at: ${d.toLocaleString()} — ${d.toISOString()}`; }
       return '';
     });
 
@@ -733,13 +733,23 @@ const AppGroupDetail = {
       saving.value = false;
     };
 
+    const selectTab = (tab) => {
+      activeTab.value = tab;
+      const hashBase = `#/groups/${props.folder}`;
+      window.location.hash = tab === 'settings' ? hashBase : `${hashBase}?tab=${tab}`;
+    };
+
     const createNewTask = async () => {
       saving.value = true;
       try {
+        let scheduleValue = newTask.scheduleValue;
+        if (newTask.scheduleType === 'once') {
+          scheduleValue = new Date(scheduleValue).toISOString();
+        }
         const body = {
           prompt: newTask.prompt,
           scheduleType: newTask.scheduleType,
-          scheduleValue: newTask.scheduleValue,
+          scheduleValue,
           contextMode: newTask.contextMode,
         };
         if (newTask.model) body.model = newTask.model;
@@ -767,7 +777,7 @@ const AppGroupDetail = {
 
     const navigate = (path) => { window.location.hash = path; };
 
-    return { group, tasks, claude, ollama, loading, saving, activeTab, form, tabs, showNewTask, newTask, newTaskScheduleError, newTaskScheduleHint, createNewTask, saveSettings, savePrompts, navigate };
+    return { group, tasks, claude, ollama, loading, saving, activeTab, form, tabs, showNewTask, newTask, newTaskScheduleError, newTaskScheduleHint, selectTab, createNewTask, saveSettings, savePrompts, navigate };
   },
 };
 
@@ -821,7 +831,7 @@ const AppTaskDetail = {
                   :class="['w-full px-3 py-2 rounded-lg border font-mono text-sm focus:ring-2 focus:border-blue-500 outline-none transition',
                     scheduleError ? 'border-red-400 dark:border-red-500 focus:ring-red-500' : 'border-gray-300 dark:border-gray-600 focus:ring-blue-500',
                     'bg-white dark:bg-gray-800']"
-                  :placeholder="form.scheduleType === 'cron' ? '*/15 * * * *' : form.scheduleType === 'interval' ? '300000' : '2026-06-01T09:00:00'">
+                  :placeholder="form.scheduleType === 'cron' ? '*/15 * * * *' : form.scheduleType === 'interval' ? '300000' : 'June 1 2026 9:00 AM'">
                 <p v-if="scheduleError" class="mt-1 text-xs text-red-500">{{ scheduleError }}</p>
                 <p v-else-if="scheduleHint" class="mt-1 text-xs text-gray-400">{{ scheduleHint }}</p>
               </div>
@@ -906,6 +916,40 @@ const AppTaskDetail = {
             <p v-else class="px-4 py-8 text-center text-gray-400 text-sm">No runs yet</p>
           </div>
         </div>
+
+        <!-- Delete Section -->
+        <div class="mt-8 pt-6 border-t border-gray-200 dark:border-gray-700">
+          <button @click="showDeleteDialog = true"
+            class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium transition-colors">
+            Delete Task
+          </button>
+        </div>
+
+        <!-- Delete Confirmation Dialog -->
+        <div v-if="showDeleteDialog" class="fixed inset-0 z-50 flex items-center justify-center">
+          <div @click="cancelDelete" class="absolute inset-0 bg-black/50"></div>
+          <div class="relative bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 shadow-xl max-w-md w-full mx-4">
+            <h3 class="text-lg font-semibold mb-2">Delete Task</h3>
+            <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">
+              Are you sure you want to delete task <span class="font-mono font-medium text-gray-700 dark:text-gray-300">{{ taskId }}</span>? This action cannot be undone.
+            </p>
+            <div class="mb-4">
+              <label class="block text-sm font-medium mb-1">Type the task ID to confirm</label>
+              <input v-model="deleteConfirmId" type="text" placeholder="Paste task ID here"
+                class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 font-mono text-sm focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none transition">
+            </div>
+            <div class="flex gap-3 justify-end">
+              <button @click="cancelDelete"
+                class="px-4 py-2 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 rounded-lg text-sm font-medium transition-colors">
+                Cancel
+              </button>
+              <button @click="confirmDelete" :disabled="deleteConfirmId !== taskId || deleting"
+                class="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors">
+                {{ deleting ? 'Deleting...' : 'Delete' }}
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   `,
@@ -916,6 +960,9 @@ const AppTaskDetail = {
     const promptText = ref('');
     const loading = ref(true);
     const saving = ref(false);
+    const deleting = ref(false);
+    const showDeleteDialog = ref(false);
+    const deleteConfirmId = ref('');
     const activeTab = ref('prompt');
     let runsInterval = null;
 
@@ -969,7 +1016,7 @@ const AppTaskDetail = {
         return '';
       }
       if (form.scheduleType === 'once') {
-        if (isNaN(new Date(v).getTime())) return 'Invalid timestamp';
+        if (isNaN(new Date(v).getTime())) return 'Could not parse date — try "June 1 2026 9am" or "2026-06-01T09:00"';
         return '';
       }
       return '';
@@ -986,7 +1033,7 @@ const AppTaskDetail = {
         return `Every ${(ms / 1000).toFixed(0)} second(s)`;
       }
       if (form.scheduleType === 'once') {
-        return `Runs at ${new Date(v).toLocaleString()}`;
+        const d = new Date(v); return `Will run at: ${d.toLocaleString()} — ${d.toISOString()}`;
       }
       return '';
     });
@@ -1027,7 +1074,11 @@ const AppTaskDetail = {
       try {
         const body = { prompt: promptText.value };
         if (form.scheduleType) body.scheduleType = form.scheduleType;
-        if (form.scheduleValue) body.scheduleValue = form.scheduleValue;
+        if (form.scheduleValue) {
+          body.scheduleValue = form.scheduleType === 'once'
+            ? new Date(form.scheduleValue).toISOString()
+            : form.scheduleValue;
+        }
         body.contextMode = form.contextMode;
         if (form.model) body.model = form.model;
         if (form.temperature != null) body.temperature = form.temperature;
@@ -1042,7 +1093,23 @@ const AppTaskDetail = {
       saving.value = false;
     };
 
-    return { task, group, runs, promptText, loading, saving, activeTab, form, tabs, save, scheduleError, scheduleHint, modelPlaceholder, temperaturePlaceholder };
+    const cancelDelete = () => {
+      showDeleteDialog.value = false;
+      deleteConfirmId.value = '';
+    };
+
+    const confirmDelete = async () => {
+      if (deleteConfirmId.value !== props.taskId) return;
+      deleting.value = true;
+      try {
+        await api(`/tasks/${props.taskId}`, { method: 'DELETE' });
+        showToast('Task deleted');
+        window.location.hash = `/groups/${task.value.groupFolder}?tab=tasks`;
+      } catch (e) { showToast(e.message, 'error'); }
+      deleting.value = false;
+    };
+
+    return { task, group, runs, promptText, loading, saving, deleting, showDeleteDialog, deleteConfirmId, activeTab, form, tabs, save, cancelDelete, confirmDelete, scheduleError, scheduleHint, modelPlaceholder, temperaturePlaceholder };
   },
 };
 
