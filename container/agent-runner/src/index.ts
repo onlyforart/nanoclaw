@@ -627,11 +627,12 @@ async function runOllamaDirectMode(containerInput: ContainerInput): Promise<void
   const ipcServerPath = path.join(__dirname, 'ipc-mcp-stdio.js');
   const isOllama = containerInput.model?.startsWith('ollama:') || containerInput.model?.startsWith('ollama-remote:');
 
-  // Scheduled tasks only get send_message and list_tasks — they must not
-  // create/modify tasks or groups (defense-in-depth against runaway models).
+  // Scheduled tasks only get send_message, send_cross_channel_message, and
+  // list_tasks — they must not create/modify tasks or groups (defense-in-depth
+  // against runaway models).
   const nanoclawTools = containerInput.isScheduledTask
-    ? ['send_message', 'list_tasks']
-    : ['send_message', 'schedule_task', 'list_tasks', 'pause_task', 'resume_task', 'cancel_task', 'update_task', 'register_group', 'update_group', 'list_groups'];
+    ? ['send_message', 'send_cross_channel_message', 'list_tasks']
+    : ['send_message', 'send_cross_channel_message', 'schedule_task', 'list_tasks', 'pause_task', 'resume_task', 'cancel_task', 'update_task', 'register_group', 'update_group', 'list_groups'];
 
   mcpConfig['nanoclaw'] = {
     command: 'node',

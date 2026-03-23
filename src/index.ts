@@ -225,7 +225,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
       logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
       if (text) {
-        const prefixed = !outputSentToUser && !isOllamaModel(group.model) ? `:cloud: ${text}` : text;
+        const prefixed =
+          !outputSentToUser && !isOllamaModel(group.model)
+            ? `:cloud: ${text}`
+            : text;
         await channel.sendMessage(chatJid, prefixed);
         outputSentToUser = true;
       }

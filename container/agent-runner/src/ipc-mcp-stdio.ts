@@ -102,6 +102,85 @@ server.tool(
 );
 
 server.tool(
+  'send_cross_channel_message',
+  'Send a message to a different group/channel than the one you are running in. The target group must be registered (the bot must be active in it). Use this when a task prompt instructs you to notify a specific channel.',
+  {
+    target_group: z
+      .string()
+      .describe(
+        'The name of the target group as it appears in available_groups.json (e.g. "ux-dev-support"). Case-insensitive match.',
+      ),
+    text: z.string().describe('The message text to send'),
+  },
+  async (args) => {
+    // Read available_groups.json to resolve group name to JID
+    const groupsFile = path.join(IPC_DIR, 'available_groups.json');
+    let groups: { groups: Array<{ jid: string; name: string; isRegistered: boolean }> };
+    try {
+      groups = JSON.parse(fs.readFileSync(groupsFile, 'utf-8'));
+    } catch {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Error: could not read available_groups.json. Group list not available.',
+          },
+        ],
+      };
+    }
+
+    const targetName = args.target_group.toLowerCase();
+    const match = groups.groups.find(
+      (g) => g.name.toLowerCase() === targetName,
+    );
+
+    if (!match) {
+      const registered = groups.groups
+        .filter((g) => g.isRegistered)
+        .map((g) => g.name);
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Error: group "${args.target_group}" not found. Registered groups: ${registered.join(', ')}`,
+          },
+        ],
+      };
+    }
+
+    if (!match.isRegistered) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Error: group "${match.name}" exists but is not registered (bot is not active in it). Only registered groups can receive messages.`,
+          },
+        ],
+      };
+    }
+
+    const data = {
+      type: 'cross_channel_message',
+      targetChatJid: match.jid,
+      text: args.text,
+      sourceGroup: groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(MESSAGES_DIR, data);
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Message sent to ${match.name}.`,
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
   'schedule_task',
   `Schedule a recurring or one-time task. The task will run as a full agent with access to all tools. Returns the task ID for future reference. To modify an existing task, use update_task instead.
 

@@ -18,6 +18,7 @@ import {
   updateTaskAfterRun,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
+import { hasRecentIpcDelivery } from './ipc.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup, ScheduledTask } from './types.js';
@@ -195,10 +196,21 @@ async function runTask(
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {
           const effectiveModel = task.model || group.model || undefined;
-          const prefix = !result && !isOllamaModel(effectiveModel) ? ':cloud: ' : '';
+          const prefix =
+            !result && !isOllamaModel(effectiveModel) ? ':cloud: ' : '';
           result = streamedOutput.result;
-          // Forward result to user (sendMessage handles formatting)
-          await deps.sendMessage(task.chat_jid, `${prefix}${streamedOutput.result}`);
+          // Skip forwarding if the agent already sent this exact text via IPC
+          if (!hasRecentIpcDelivery(task.chat_jid, streamedOutput.result)) {
+            await deps.sendMessage(
+              task.chat_jid,
+              `${prefix}${streamedOutput.result}`,
+            );
+          } else {
+            logger.debug(
+              { taskId: task.id },
+              'Skipping duplicate task result (already sent via IPC)',
+            );
+          }
           scheduleClose();
         }
         if (streamedOutput.status === 'success') {

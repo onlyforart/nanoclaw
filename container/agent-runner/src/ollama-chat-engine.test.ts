@@ -382,6 +382,9 @@ describe('lazy skill injection', () => {
     );
     expect(skillMessages).toHaveLength(1);
     expect(skillMessages[0].content).toContain('Use these tools for cluster ops');
+    // Should be wrapped in XML-style delimiters
+    expect(skillMessages[0].content).toContain('<tool-instructions name="eks-kubectl">');
+    expect(skillMessages[0].content).toContain('</tool-instructions>');
   });
 
   it('does not inject skill content more than once for the same server', async () => {

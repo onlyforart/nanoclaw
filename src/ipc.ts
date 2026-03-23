@@ -56,6 +56,61 @@ function writeIpcResult(resultPath: string, result: IpcResult): void {
 
 let ipcWatcherRunning = false;
 
+// --- IPC delivery dedup tracking ---
+// Tracks recent IPC message deliveries per chatJid+content so the task
+// scheduler can skip forwarding the container result when the agent already
+// sent the same content via send_message IPC. Stores a hash of the text
+// to avoid keeping full message content in memory.
+import crypto from 'crypto';
+
+const DEFAULT_DEDUP_TTL_MS = 120_000; // 2 minutes
+
+interface DeliveryEntry {
+  textHash: string;
+  timestamp: number;
+}
+
+// chatJid → list of recent deliveries (multiple messages per group possible)
+const recentDeliveries = new Map<string, DeliveryEntry[]>();
+
+function hashText(text: string): string {
+  return crypto.createHash('sha256').update(text).digest('hex');
+}
+
+/** Record that an IPC message was just delivered for this chatJid. */
+export function recordIpcDelivery(chatJid: string, text: string): void {
+  const entries = recentDeliveries.get(chatJid) ?? [];
+  entries.push({ textHash: hashText(text), timestamp: Date.now() });
+  recentDeliveries.set(chatJid, entries);
+}
+
+/** Check if an IPC message with this exact text was delivered for chatJid within ttlMs. */
+export function hasRecentIpcDelivery(
+  chatJid: string,
+  text: string,
+  ttlMs: number = DEFAULT_DEDUP_TTL_MS,
+): boolean {
+  const entries = recentDeliveries.get(chatJid);
+  if (!entries) return false;
+  const now = Date.now();
+  const targetHash = hashText(text);
+  // Prune expired entries while checking
+  const valid = entries.filter((e) => now - e.timestamp < ttlMs);
+  recentDeliveries.set(chatJid, valid);
+  return valid.some((e) => e.textHash === targetHash);
+}
+
+/** Reset singleton guard and delivery tracking — test-only. */
+export function _resetIpcWatcherForTests(): void {
+  ipcWatcherRunning = false;
+  recentDeliveries.clear();
+}
+
+/** Reset delivery tracking only — test-only. */
+export function _resetIpcDeliveriesForTests(): void {
+  recentDeliveries.clear();
+}
+
 export function startIpcWatcher(deps: IpcDeps): void {
   if (ipcWatcherRunning) {
     logger.debug('IPC watcher already running, skipping duplicate start');
@@ -111,6 +166,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   (targetGroup && targetGroup.folder === sourceGroup)
                 ) {
                   await deps.sendMessage(data.chatJid, data.text);
+                  recordIpcDelivery(data.chatJid, data.text);
                   logger.info(
                     { chatJid: data.chatJid, sourceGroup },
                     'IPC message sent',
@@ -119,6 +175,29 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   logger.warn(
                     { chatJid: data.chatJid, sourceGroup },
                     'Unauthorized IPC message attempt blocked',
+                  );
+                }
+              } else if (
+                data.type === 'cross_channel_message' &&
+                data.targetChatJid &&
+                data.text
+              ) {
+                // Cross-channel: any group can send to any registered group
+                const targetGroup = registeredGroups[data.targetChatJid];
+                if (targetGroup) {
+                  await deps.sendMessage(data.targetChatJid, data.text);
+                  logger.info(
+                    {
+                      targetChatJid: data.targetChatJid,
+                      targetFolder: targetGroup.folder,
+                      sourceGroup,
+                    },
+                    'Cross-channel IPC message sent',
+                  );
+                } else {
+                  logger.warn(
+                    { targetChatJid: data.targetChatJid, sourceGroup },
+                    'Cross-channel message blocked: target group not registered',
                   );
                 }
               }
