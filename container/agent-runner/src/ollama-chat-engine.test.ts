@@ -140,6 +140,69 @@ describe('runOllamaChat', () => {
     expect(result.iterations).toBe(2);
   });
 
+  it('logs tool result to stderr', async () => {
+    const executeTool = vi.fn().mockResolvedValue('the tool output data');
+    const toolNameMap = new Map([
+      ['server__my_tool', { mcpTool: 'mcp__server__my_tool', serverName: 'server' }],
+    ]);
+
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { function: { name: 'server__my_tool', arguments: {} } },
+        ],
+      },
+    }));
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: { role: 'assistant', content: 'done' },
+    }));
+
+    const stderrSpy = vi.spyOn(console, 'error');
+    await runOllamaChat('test', baseOptions({ executeTool, toolNameMap }));
+
+    const resultLog = stderrSpy.mock.calls.find(
+      (call) => typeof call[0] === 'string' && call[0].includes('Tool result:'),
+    );
+    expect(resultLog).toBeDefined();
+    expect(resultLog![0]).toContain('the tool output data');
+    stderrSpy.mockRestore();
+  });
+
+  it('truncates long tool results in log', async () => {
+    const longResult = 'x'.repeat(3000);
+    const executeTool = vi.fn().mockResolvedValue(longResult);
+    const toolNameMap = new Map([
+      ['server__my_tool', { mcpTool: 'mcp__server__my_tool', serverName: 'server' }],
+    ]);
+
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { function: { name: 'server__my_tool', arguments: {} } },
+        ],
+      },
+    }));
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: { role: 'assistant', content: 'done' },
+    }));
+
+    const stderrSpy = vi.spyOn(console, 'error');
+    await runOllamaChat('test', baseOptions({ executeTool, toolNameMap }));
+
+    const resultLog = stderrSpy.mock.calls.find(
+      (call) => typeof call[0] === 'string' && call[0].includes('Tool result:'),
+    );
+    expect(resultLog).toBeDefined();
+    // Should be truncated with ... indicator
+    expect(resultLog![0].length).toBeLessThan(3000);
+    expect(resultLog![0]).toContain('...');
+    stderrSpy.mockRestore();
+  });
+
   it('handles tool execution errors gracefully', async () => {
     const executeTool = vi.fn().mockRejectedValue(new Error('connection refused'));
 

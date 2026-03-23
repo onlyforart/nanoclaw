@@ -245,6 +245,11 @@ export async function runOllamaChat(
         const result = await executeTool(mcpName, args);
         const toolMs = Date.now() - toolStart;
         log(`  Tool executed: ${ollamaName} in ${(toolMs / 1000).toFixed(1)}s`);
+        const MAX_RESULT_LOG = 2000;
+        const truncated = result.length > MAX_RESULT_LOG
+          ? result.slice(0, MAX_RESULT_LOG) + '... [truncated]'
+          : result;
+        log(`  Tool result: ${truncated}`);
         messages.push({ role: 'tool', content: result });
       } catch (err) {
         const toolMs = Date.now() - toolStart;
