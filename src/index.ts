@@ -128,15 +128,34 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
 export function getAvailableGroups(): import('./container-runner.js').AvailableGroup[] {
   const chats = getAllChats();
   const registeredJids = new Set(Object.keys(registeredGroups));
+  const seenJids = new Set<string>();
 
-  return chats
+  const groups = chats
     .filter((c) => c.jid !== '__group_sync__' && c.is_group)
-    .map((c) => ({
-      jid: c.jid,
-      name: c.name,
-      lastActivity: c.last_message_time,
-      isRegistered: registeredJids.has(c.jid),
-    }));
+    .map((c) => {
+      seenJids.add(c.jid);
+      return {
+        jid: c.jid,
+        name: c.name,
+        lastActivity: c.last_message_time,
+        isRegistered: registeredJids.has(c.jid),
+      };
+    });
+
+  // Include registered groups not yet in the chats table
+  // (e.g. channels the bot is in but has never received messages from)
+  for (const [jid, group] of Object.entries(registeredGroups)) {
+    if (!seenJids.has(jid)) {
+      groups.push({
+        jid,
+        name: group.name,
+        lastActivity: group.added_at,
+        isRegistered: true,
+      });
+    }
+  }
+
+  return groups;
 }
 
 /** @internal - exported for testing */
@@ -606,6 +625,17 @@ async function main(): Promise<void> {
   }
   if (channels.length === 0) {
     logger.fatal('No channels connected');
+    process.exit(1);
+  }
+
+  // Verify sender allowlist exists — this is a critical security control
+  const allowlistCheck = loadSenderAllowlist();
+  if (allowlistCheck.default.allow === '*') {
+    logger.fatal(
+      'SECURITY: sender-allowlist.json is missing or has allow:"*" default. ' +
+        'All senders will be accepted. Create ~/.config/nanoclaw/sender-allowlist.json ' +
+        'with an explicit allow list. Refusing to start.',
+    );
     process.exit(1);
   }
 
