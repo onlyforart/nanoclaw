@@ -108,8 +108,8 @@ describe('cross_channel_message IPC', () => {
       registerGroup: () => {},
       updateGroup: () => {},
       syncGroups: async () => {},
-      getAvailableGroups: () => [],
-      writeGroupsSnapshot: () => {},
+      refreshAllGroupSnapshots: () => {},
+      refreshAllTaskSnapshots: () => {},
     };
 
     // Create IPC directory structure under tmpDir (which is now DATA_DIR)

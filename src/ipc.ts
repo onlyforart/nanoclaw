@@ -4,7 +4,6 @@ import path from 'path';
 import { CronExpressionParser } from 'cron-parser';
 
 import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
-import { AvailableGroup } from './container-runner.js';
 import {
   createTask,
   deleteTask,
@@ -30,13 +29,8 @@ export interface IpcDeps {
     >,
   ) => void;
   syncGroups: (force: boolean) => Promise<void>;
-  getAvailableGroups: () => AvailableGroup[];
-  writeGroupsSnapshot: (
-    groupFolder: string,
-    isMain: boolean,
-    availableGroups: AvailableGroup[],
-    registeredJids: Set<string>,
-  ) => void;
+  refreshAllGroupSnapshots: () => void;
+  refreshAllTaskSnapshots: () => void;
 }
 
 interface IpcResult {
@@ -514,13 +508,7 @@ async function handleRefreshGroups(
   }
   logger.info({ sourceGroup }, 'Group metadata refresh requested via IPC');
   await deps.syncGroups(true);
-  const availableGroups = deps.getAvailableGroups();
-  deps.writeGroupsSnapshot(
-    sourceGroup,
-    true,
-    availableGroups,
-    new Set(Object.keys(registeredGroups)),
-  );
+  deps.refreshAllGroupSnapshots();
   return ok();
 }
 
@@ -610,17 +598,28 @@ export async function processTaskIpc(
 ): Promise<IpcResult> {
   const registeredGroups = deps.registeredGroups();
 
+  let result: IpcResult;
   switch (data.type) {
     case 'schedule_task':
-      return handleScheduleTask(data, sourceGroup, isMain, registeredGroups);
+      result = handleScheduleTask(data, sourceGroup, isMain, registeredGroups);
+      if (result.success) deps.refreshAllTaskSnapshots();
+      return result;
     case 'pause_task':
-      return handleTaskStatusChange(data, sourceGroup, isMain, 'pause');
+      result = handleTaskStatusChange(data, sourceGroup, isMain, 'pause');
+      if (result.success) deps.refreshAllTaskSnapshots();
+      return result;
     case 'resume_task':
-      return handleTaskStatusChange(data, sourceGroup, isMain, 'resume');
+      result = handleTaskStatusChange(data, sourceGroup, isMain, 'resume');
+      if (result.success) deps.refreshAllTaskSnapshots();
+      return result;
     case 'cancel_task':
-      return handleTaskStatusChange(data, sourceGroup, isMain, 'cancel');
+      result = handleTaskStatusChange(data, sourceGroup, isMain, 'cancel');
+      if (result.success) deps.refreshAllTaskSnapshots();
+      return result;
     case 'update_task':
-      return handleUpdateTask(data, sourceGroup, isMain);
+      result = handleUpdateTask(data, sourceGroup, isMain);
+      if (result.success) deps.refreshAllTaskSnapshots();
+      return result;
     case 'refresh_groups':
       return handleRefreshGroups(sourceGroup, isMain, registeredGroups, deps);
     case 'register_group':

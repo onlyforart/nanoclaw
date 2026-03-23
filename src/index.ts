@@ -119,6 +119,48 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
     { jid, name: group.name, folder: group.folder },
     'Group registered',
   );
+
+  // Refresh available_groups.json for all groups so cross-channel
+  // messaging can resolve the new group immediately
+  refreshAllGroupSnapshots();
+}
+
+/**
+ * Refresh available_groups.json for all registered groups.
+ * Called on startup and whenever the group registry changes.
+ */
+function refreshAllGroupSnapshots(): void {
+  const availableGroups = getAvailableGroups();
+  const registeredJids = new Set(Object.keys(registeredGroups));
+  for (const group of Object.values(registeredGroups)) {
+    writeGroupsSnapshot(
+      group.folder,
+      group.isMain === true,
+      availableGroups,
+      registeredJids,
+    );
+  }
+}
+
+/**
+ * Refresh current_tasks.json for all registered groups.
+ * Called on startup and whenever tasks are created, updated, or deleted.
+ */
+function refreshAllTaskSnapshots(): void {
+  const tasks = getAllTasks().map((t) => ({
+    id: t.id,
+    groupFolder: t.group_folder,
+    prompt: t.prompt,
+    schedule_type: t.schedule_type,
+    schedule_value: t.schedule_value,
+    timezone: t.timezone,
+    status: t.status,
+    next_run: t.next_run,
+    model: t.model,
+  }));
+  for (const group of Object.values(registeredGroups)) {
+    writeTasksSnapshot(group.folder, group.isMain === true, tasks);
+  }
 }
 
 /**
@@ -639,6 +681,10 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Write initial snapshots for all groups so containers have fresh data
+  refreshAllGroupSnapshots();
+  refreshAllTaskSnapshots();
+
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({
     registeredGroups: () => registeredGroups,
@@ -681,9 +727,8 @@ async function main(): Promise<void> {
           .map((ch) => ch.syncGroups!(force)),
       );
     },
-    getAvailableGroups,
-    writeGroupsSnapshot: (gf, im, ag, rj) =>
-      writeGroupsSnapshot(gf, im, ag, rj),
+    refreshAllGroupSnapshots,
+    refreshAllTaskSnapshots,
   });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();

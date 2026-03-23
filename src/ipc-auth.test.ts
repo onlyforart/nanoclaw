@@ -64,8 +64,8 @@ beforeEach(() => {
       updateRegisteredGroup(jid, updates);
     },
     syncGroups: async () => {},
-    getAvailableGroups: () => [],
-    writeGroupsSnapshot: () => {},
+    refreshAllGroupSnapshots: () => {},
+    refreshAllTaskSnapshots: () => {},
   };
 });
 
