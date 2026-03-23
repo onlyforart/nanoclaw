@@ -3,6 +3,7 @@ import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
 
 import { ASSISTANT_NAME, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
+import { isOllamaModel } from './connection-profiles.js';
 import {
   ContainerOutput,
   runContainerAgent,
@@ -182,7 +183,10 @@ async function runTask(
         isScheduledTask: true,
         assistantName: ASSISTANT_NAME,
         model: task.model || group.model || undefined,
-        temperature: (task.temperature != null && String(task.temperature) !== '' ? task.temperature : null) ?? group.temperature,
+        temperature:
+          (task.temperature != null && String(task.temperature) !== ''
+            ? task.temperature
+            : null) ?? group.temperature,
         maxToolRounds: task.maxToolRounds ?? group.maxToolRounds,
         timeoutMs: task.timeoutMs ?? group.timeoutMs,
       },
@@ -190,9 +194,11 @@ async function runTask(
         deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {
+          const effectiveModel = task.model || group.model || undefined;
+          const prefix = !result && !isOllamaModel(effectiveModel) ? ':cloud: ' : '';
           result = streamedOutput.result;
           // Forward result to user (sendMessage handles formatting)
-          await deps.sendMessage(task.chat_jid, streamedOutput.result);
+          await deps.sendMessage(task.chat_jid, `${prefix}${streamedOutput.result}`);
           scheduleClose();
         }
         if (streamedOutput.status === 'success') {

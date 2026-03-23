@@ -15,6 +15,7 @@ import {
   getChannelFactory,
   getRegisteredChannelNames,
 } from './channels/registry.js';
+import { isOllamaModel } from './connection-profiles.js';
 import {
   ContainerOutput,
   runContainerAgent,
@@ -224,7 +225,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
       logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
       if (text) {
-        await channel.sendMessage(chatJid, text);
+        const prefixed = !outputSentToUser && !isOllamaModel(group.model) ? `:cloud: ${text}` : text;
+        await channel.sendMessage(chatJid, prefixed);
         outputSentToUser = true;
       }
       // Only reset idle timer on actual results, not session-update markers (result: null)

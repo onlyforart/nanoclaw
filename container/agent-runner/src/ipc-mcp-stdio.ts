@@ -19,6 +19,13 @@ const TASKS_DIR = path.join(IPC_DIR, 'tasks');
 const chatJid = process.env.NANOCLAW_CHAT_JID!;
 const groupFolder = process.env.NANOCLAW_GROUP_FOLDER!;
 const isMain = process.env.NANOCLAW_IS_MAIN === '1';
+const isScheduledTask = process.env.NANOCLAW_IS_SCHEDULED_TASK === '1';
+const isOllama = process.env.NANOCLAW_IS_OLLAMA === '1';
+
+// Model description varies: Ollama models should not see Claude aliases
+const modelDescription = isOllama
+  ? 'Model to use (e.g., "ollama:modelname" or "ollama-remote:modelname"). Omit to use the group default.'
+  : 'Model to use. Aliases: "haiku" (default), "sonnet", "opus". Ollama: "ollama:modelname" or "ollama-remote:modelname". Defaults to haiku if omitted.';
 
 function writeIpcFile(dir: string, data: object): string {
   fs.mkdirSync(dir, { recursive: true });
@@ -118,13 +125,21 @@ SCHEDULE VALUE FORMAT (times are interpreted in the task's timezone):
     schedule_type: z.enum(['cron', 'interval', 'once']).describe('cron=recurring at specific times, interval=recurring every N ms, once=run once at specific time'),
     schedule_value: z.string().describe('cron: "*/5 * * * *" | interval: milliseconds like "300000" | once: local timestamp like "2026-02-01T15:30:00" (no Z suffix!)'),
     context_mode: z.enum(['group', 'isolated']).default('isolated').describe('isolated=fresh session (default, faster), group=runs with chat history and subagents (only if user explicitly requests it)'),
-    model: z.string().optional().describe('Model to use. Claude aliases: "haiku", "sonnet", "opus". Ollama: "ollama:modelname" or "ollama-remote:modelname". Defaults to sonnet if omitted.'),
+    model: z.string().optional().describe(modelDescription),
     timezone: z.string().optional().describe('IANA timezone for this task (e.g., "Europe/London", "America/New_York"). Cron and once times are interpreted in this timezone. Defaults to system timezone if omitted.'),
-    max_tool_rounds: z.number().int().positive().optional().describe('Maximum tool-calling rounds per invocation. Defaults to backend default (unlimited for Claude, 10 for Ollama).'),
-    timeout_ms: z.number().int().positive().optional().describe('Per-invocation timeout in milliseconds. Defaults to backend default (30min for Claude, 5min for Ollama).'),
+    max_tool_rounds: z.number().int().positive().optional().describe('Maximum tool-calling rounds per invocation. Defaults to backend default.'),
+    timeout_ms: z.number().int().positive().optional().describe('Per-invocation timeout in milliseconds. Defaults to backend default.'),
     target_group_jid: z.string().optional().describe('(Main group only) JID of the group to schedule the task for. Defaults to the current group.'),
   },
   async (args) => {
+    // Defense-in-depth: scheduled tasks must not create new tasks
+    if (isScheduledTask) {
+      return {
+        content: [{ type: 'text' as const, text: 'Scheduled tasks cannot create new tasks.' }],
+        isError: true,
+      };
+    }
+
     // Validate schedule_value before writing IPC
     if (args.schedule_type === 'cron') {
       try {
@@ -164,7 +179,7 @@ SCHEDULE VALUE FORMAT (times are interpreted in the task's timezone):
 
     const taskId = `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-    const data: Record<string, string | number | undefined> = {
+    const data: Record<string, string | number | boolean | undefined> = {
       type: 'schedule_task',
       taskId,
       prompt: args.prompt,
@@ -177,6 +192,7 @@ SCHEDULE VALUE FORMAT (times are interpreted in the task's timezone):
       timeoutMs: args.timeout_ms,
       targetJid,
       createdBy: groupFolder,
+      fromScheduledTask: isScheduledTask,
       timestamp: new Date().toISOString(),
     };
 
@@ -309,7 +325,7 @@ server.tool(
     prompt: z.string().optional().describe('New prompt for the task'),
     schedule_type: z.enum(['cron', 'interval', 'once']).optional().describe('New schedule type'),
     schedule_value: z.string().optional().describe('New schedule value (see schedule_task for format)'),
-    model: z.string().optional().describe('Model to use. Claude aliases: "haiku", "sonnet", "opus". Ollama: "ollama:modelname" or "ollama-remote:modelname". Omit to keep current value.'),
+    model: z.string().optional().describe(modelDescription),
     timezone: z.string().optional().describe('IANA timezone for this task (e.g., "Europe/London", "America/New_York"). Set to empty string to clear and use system default.'),
     max_tool_rounds: z.number().int().positive().optional().describe('Maximum tool-calling rounds. Omit to keep current value.'),
     timeout_ms: z.number().int().positive().optional().describe('Per-invocation timeout in milliseconds. Omit to keep current value.'),
@@ -375,7 +391,7 @@ Use available_groups.json to find the JID for a group. The folder name must be c
     name: z.string().describe('Display name for the group'),
     folder: z.string().describe('Channel-prefixed folder name (e.g., "whatsapp_family-chat", "telegram_dev-team")'),
     trigger: z.string().describe('Trigger word (e.g., "@Andy")'),
-    model: z.string().optional().describe('Model to use. Claude aliases: "haiku", "sonnet", "opus". Ollama: "ollama:modelname" or "ollama-remote:modelname". Defaults to sonnet if omitted.'),
+    model: z.string().optional().describe(modelDescription),
     max_tool_rounds: z.number().int().positive().optional().describe('Maximum tool-calling rounds per invocation. Defaults to backend default.'),
     timeout_ms: z.number().int().positive().optional().describe('Per-invocation timeout in milliseconds. Defaults to backend default.'),
   },
@@ -412,7 +428,7 @@ server.tool(
   'Update settings for a registered group. Main group only. Supports model, max_tool_rounds, and timeout_ms.',
   {
     jid: z.string().describe('The chat JID of the group to update'),
-    model: z.string().optional().describe('Model to use. Claude aliases: "haiku", "sonnet", "opus". Ollama: "ollama:modelname" or "ollama-remote:modelname". Omit to keep current value.'),
+    model: z.string().optional().describe(modelDescription),
     max_tool_rounds: z.number().int().positive().optional().describe('Maximum tool-calling rounds per invocation. Omit to keep current value.'),
     timeout_ms: z.number().int().positive().optional().describe('Per-invocation timeout in milliseconds. Omit to keep current value.'),
   },

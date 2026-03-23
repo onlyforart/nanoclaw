@@ -1138,3 +1138,87 @@ describe('IPC result file protocol', () => {
     fs.rmdirSync(tmpDir);
   });
 });
+
+// --- Scheduled task defense-in-depth ---
+//
+// Scheduled tasks must not be able to create, modify, or delete other tasks.
+// This prevents runaway models (especially weaker Ollama models) from
+// recursively spawning tasks or mutating the task schedule.
+
+describe('scheduled task defense-in-depth', () => {
+  it('rejects schedule_task when fromScheduledTask is set', async () => {
+    const result = await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'runaway task',
+        schedule_type: 'cron',
+        schedule_value: '*/5 * * * *',
+        targetJid: 'other@g.us',
+        fromScheduledTask: true,
+      },
+      'whatsapp_main',
+      true,
+      deps,
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Scheduled tasks cannot create new tasks');
+    expect(getAllTasks()).toHaveLength(0);
+  });
+
+  it('allows schedule_task when fromScheduledTask is false', async () => {
+    const result = await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'normal task',
+        schedule_type: 'once',
+        schedule_value: '2025-06-01T00:00:00',
+        targetJid: 'other@g.us',
+        fromScheduledTask: false,
+      },
+      'whatsapp_main',
+      true,
+      deps,
+    );
+
+    expect(result.success).toBe(true);
+    expect(getAllTasks()).toHaveLength(1);
+  });
+
+  it('allows schedule_task when fromScheduledTask is absent', async () => {
+    const result = await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'legacy task',
+        schedule_type: 'once',
+        schedule_value: '2025-06-01T00:00:00',
+        targetJid: 'other@g.us',
+      },
+      'whatsapp_main',
+      true,
+      deps,
+    );
+
+    expect(result.success).toBe(true);
+    expect(getAllTasks()).toHaveLength(1);
+  });
+
+  it('rejects schedule_task from scheduled task even for main group', async () => {
+    const result = await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'sneaky task',
+        schedule_type: 'once',
+        schedule_value: '2025-06-01T00:00:00',
+        targetJid: 'main@g.us',
+        fromScheduledTask: true,
+      },
+      'whatsapp_main',
+      true,
+      deps,
+    );
+
+    expect(result.success).toBe(false);
+    expect(getAllTasks()).toHaveLength(0);
+  });
+});

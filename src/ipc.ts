@@ -269,6 +269,15 @@ function handleScheduleTask(
   isMain: boolean,
   registeredGroups: Record<string, RegisteredGroup>,
 ): IpcResult {
+  // Defense-in-depth: reject task creation from scheduled task runs
+  if (data.fromScheduledTask) {
+    logger.warn(
+      { sourceGroup },
+      'Blocked schedule_task from scheduled task run',
+    );
+    return fail('Scheduled tasks cannot create new tasks');
+  }
+
   if (
     !data.prompt ||
     !data.schedule_type ||

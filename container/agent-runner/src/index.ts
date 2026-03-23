@@ -504,7 +504,7 @@ async function runQuery(
       log(`Result #${resultCount}: subtype=${message.subtype}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`);
       writeOutput({
         status: 'success',
-        result: textResult ? `:cloud: ${textResult}` : null,
+        result: textResult || null,
         newSessionId
       });
     }
@@ -625,14 +625,24 @@ async function runOllamaDirectMode(containerInput: ContainerInput): Promise<void
   // Add the nanoclaw IPC server
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const ipcServerPath = path.join(__dirname, 'ipc-mcp-stdio.js');
+  const isOllama = containerInput.model?.startsWith('ollama:') || containerInput.model?.startsWith('ollama-remote:');
+
+  // Scheduled tasks only get send_message and list_tasks — they must not
+  // create/modify tasks or groups (defense-in-depth against runaway models).
+  const nanoclawTools = containerInput.isScheduledTask
+    ? ['send_message', 'list_tasks']
+    : ['send_message', 'schedule_task', 'list_tasks', 'pause_task', 'resume_task', 'cancel_task', 'update_task', 'register_group', 'update_group', 'list_groups'];
+
   mcpConfig['nanoclaw'] = {
     command: 'node',
     args: [ipcServerPath],
-    tools: ['send_message', 'schedule_task', 'list_tasks', 'pause_task', 'resume_task', 'cancel_task', 'update_task', 'register_group', 'update_group', 'list_groups'],
+    tools: nanoclawTools,
     env: {
       NANOCLAW_CHAT_JID: containerInput.chatJid,
       NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
       NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+      NANOCLAW_IS_SCHEDULED_TASK: containerInput.isScheduledTask ? '1' : '0',
+      NANOCLAW_IS_OLLAMA: isOllama ? '1' : '0',
     },
   };
 
