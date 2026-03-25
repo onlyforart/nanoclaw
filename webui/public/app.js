@@ -716,7 +716,7 @@ const AppGroupDetail = {
       saving.value = true;
       try {
         const body = {};
-        if (form.model) body.model = form.model;
+        if (form.model != null) body.model = form.model;
         if (form.temperature != null) body.temperature = form.temperature;
         if (form.maxToolRounds != null) body.maxToolRounds = form.maxToolRounds;
         if (form.timeoutMs != null) body.timeoutMs = form.timeoutMs;
@@ -1029,7 +1029,7 @@ const AppTaskDetail = {
         if (form.scheduleType) body.scheduleType = form.scheduleType;
         if (form.scheduleValue) body.scheduleValue = normalizeScheduleValue(form.scheduleType, form.scheduleValue);
         body.contextMode = form.contextMode;
-        if (form.model) body.model = form.model;
+        if (form.model != null) body.model = form.model;
         if (form.temperature != null) body.temperature = form.temperature;
         if (form.timezone) body.timezone = form.timezone;
         if (form.maxToolRounds != null) body.maxToolRounds = form.maxToolRounds;
