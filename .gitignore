@@ -4,6 +4,9 @@ node_modules/
 # Build output
 dist/
 
+# Local config (installation-specific, not committed)
+.gitleaks-local.toml
+
 # Local data & auth
 store/
 data/

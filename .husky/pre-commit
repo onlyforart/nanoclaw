@@ -7,7 +7,13 @@ if [ ! -x "$GITLEAKS" ]; then
 fi
 
 if [ -n "$GITLEAKS" ]; then
-  "$GITLEAKS" git --staged --pre-commit --verbose --redact
+  # Prefer local config (extends tracked config with installation-specific rules)
+  if [ -f ".gitleaks-local.toml" ]; then
+    GITLEAKS_CONFIG="--config .gitleaks-local.toml"
+  else
+    GITLEAKS_CONFIG=""
+  fi
+  "$GITLEAKS" git --staged --pre-commit --verbose --redact $GITLEAKS_CONFIG
 else
   echo "WARNING: gitleaks not found — skipping secret scan"
   echo "Install: https://github.com/gitleaks/gitleaks#installing"
