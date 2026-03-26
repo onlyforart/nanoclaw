@@ -51,10 +51,7 @@ export function startMcpAuthProxy(
     server.on('error', reject);
     server.listen(port, host, () => {
       const addr = server.address() as { port: number };
-      logger.info(
-        { port: addr.port, host },
-        'MCP authorization proxy started',
-      );
+      logger.info({ port: addr.port, host }, 'MCP authorization proxy started');
       resolve({ server, port: addr.port });
     });
   });
@@ -107,9 +104,7 @@ async function handleRequest(
   const groupFolder = req.headers['x-nanoclaw-group'] as string | undefined;
   if (!groupFolder) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
-    res.end(
-      JSON.stringify({ error: 'Missing X-NanoClaw-Group header' }),
-    );
+    res.end(JSON.stringify({ error: 'Missing X-NanoClaw-Group header' }));
     return;
   }
 
@@ -142,7 +137,12 @@ async function handleRequest(
 
   if (!result.allowed) {
     logger.info(
-      { server: serverName, group: groupFolder, tool: toolName, reason: result.reason },
+      {
+        server: serverName,
+        group: groupFolder,
+        tool: toolName,
+        reason: result.reason,
+      },
       'MCP tool call denied by policy',
     );
     sendMcpError(res, parsed.id, `Access denied: ${result.reason}`);

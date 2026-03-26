@@ -172,7 +172,10 @@ export function loadPolicies(policyDir: string): PolicySet {
         );
       } catch (err) {
         logger.warn(
-          { file: filePath, err: err instanceof Error ? err.message : String(err) },
+          {
+            file: filePath,
+            err: err instanceof Error ? err.message : String(err),
+          },
           'Failed to parse policy file',
         );
       }
@@ -204,8 +207,7 @@ export function resolveTier(
   if (!serverPolicies) return null;
 
   // Check explicit group assignment first
-  const tierName =
-    assignments.groups[groupFolder] || assignments.defaultTier;
+  const tierName = assignments.groups[groupFolder] || assignments.defaultTier;
   if (!tierName) return null;
 
   return serverPolicies.get(tierName) || null;

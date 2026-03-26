@@ -9,7 +9,11 @@ import {
   startMcpAuthProxy,
   type McpAuthProxyConfig,
 } from './mcp-auth-proxy.js';
-import { loadPolicies, type PolicySet, type PolicyAssignments } from './mcp-policy.js';
+import {
+  loadPolicies,
+  type PolicySet,
+  type PolicyAssignments,
+} from './mcp-policy.js';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -135,9 +139,7 @@ describe('MCP Authorization Proxy', () => {
     });
 
     const config: McpAuthProxyConfig = {
-      upstreams: new Map([
-        ['mongodb', `http://127.0.0.1:${upstreamPort}`],
-      ]),
+      upstreams: new Map([['mongodb', `http://127.0.0.1:${upstreamPort}`]]),
       policies,
       assignments,
       ...overrides,

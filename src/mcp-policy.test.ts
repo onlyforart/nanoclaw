@@ -7,7 +7,12 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { loadPolicies, resolveTier, evaluatePolicy, type PolicyRule } from './mcp-policy.js';
+import {
+  loadPolicies,
+  resolveTier,
+  evaluatePolicy,
+  type PolicyRule,
+} from './mcp-policy.js';
 
 // ---------------------------------------------------------------------------
 // evaluatePolicy — pure logic, no filesystem
@@ -25,7 +30,9 @@ describe('evaluatePolicy', () => {
   });
 
   it('denies tool in deny list even if in allow via wildcard', () => {
-    const policy: PolicyRule = { tools: { allow: ['*'], deny: ['delete-many'] } };
+    const policy: PolicyRule = {
+      tools: { allow: ['*'], deny: ['delete-many'] },
+    };
     const result = evaluatePolicy(policy, 'delete-many', {});
     expect(result.allowed).toBe(false);
   });
@@ -71,7 +78,9 @@ describe('evaluatePolicy', () => {
       tools: { allow: ['get_object'] },
       arguments: { bucket: { allow: ['reports*'] } },
     };
-    expect(evaluatePolicy(policy, 'get_object', { bucket: 'reports-prod' })).toEqual({
+    expect(
+      evaluatePolicy(policy, 'get_object', { bucket: 'reports-prod' }),
+    ).toEqual({
       allowed: true,
     });
   });
@@ -81,7 +90,9 @@ describe('evaluatePolicy', () => {
       tools: { allow: ['get_object'] },
       arguments: { bucket: { allow: ['reports*'] } },
     };
-    const result = evaluatePolicy(policy, 'get_object', { bucket: 'logs-prod' });
+    const result = evaluatePolicy(policy, 'get_object', {
+      bucket: 'logs-prod',
+    });
     expect(result.allowed).toBe(false);
   });
 
@@ -121,8 +132,12 @@ describe('evaluatePolicy', () => {
         database: { allow: ['*'], deny: ['admin'] },
       },
     };
-    expect(evaluatePolicy(policy, 'find', { database: 'analytics' }).allowed).toBe(true);
-    expect(evaluatePolicy(policy, 'find', { database: 'admin' }).allowed).toBe(false);
+    expect(
+      evaluatePolicy(policy, 'find', { database: 'analytics' }).allowed,
+    ).toBe(true);
+    expect(evaluatePolicy(policy, 'find', { database: 'admin' }).allowed).toBe(
+      false,
+    );
   });
 });
 
@@ -147,7 +162,10 @@ describe('loadPolicies + resolveTier', () => {
   }
 
   it('loads YAML policy from file', () => {
-    writePolicy('mongodb', 'readonly', `
+    writePolicy(
+      'mongodb',
+      'readonly',
+      `
 tools:
   allow:
     - find
@@ -156,7 +174,8 @@ arguments:
   database:
     allow:
       - analytics
-`);
+`,
+    );
     const ps = loadPolicies(tmpDir);
     expect(ps.policies.has('mongodb')).toBe(true);
     const tier = ps.policies.get('mongodb')!.get('readonly')!;
@@ -179,15 +198,23 @@ arguments:
   });
 
   it('resolves explicit group tier', () => {
-    writePolicy('mongodb', 'admin', `
+    writePolicy(
+      'mongodb',
+      'admin',
+      `
 tools:
   allow: ["*"]
-`);
-    writePolicy('mongodb', 'readonly', `
+`,
+    );
+    writePolicy(
+      'mongodb',
+      'readonly',
+      `
 tools:
   allow:
     - find
-`);
+`,
+    );
     const ps = loadPolicies(tmpDir);
     const assignments = { defaultTier: 'readonly', groups: { main: 'admin' } };
     const tier = resolveTier(ps, 'mongodb', 'main', assignments);
@@ -196,11 +223,15 @@ tools:
   });
 
   it('falls back to default tier when group not listed', () => {
-    writePolicy('mongodb', 'readonly', `
+    writePolicy(
+      'mongodb',
+      'readonly',
+      `
 tools:
   allow:
     - find
-`);
+`,
+    );
     const ps = loadPolicies(tmpDir);
     const assignments = { defaultTier: 'readonly', groups: {} };
     const tier = resolveTier(ps, 'mongodb', 'slack_ops', assignments);
@@ -209,10 +240,14 @@ tools:
   });
 
   it('returns null when no default and no match (fail-closed)', () => {
-    writePolicy('mongodb', 'admin', `
+    writePolicy(
+      'mongodb',
+      'admin',
+      `
 tools:
   allow: ["*"]
-`);
+`,
+    );
     const ps = loadPolicies(tmpDir);
     const assignments = { groups: { main: 'admin' } };
     const tier = resolveTier(ps, 'mongodb', 'unknown_group', assignments);

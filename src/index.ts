@@ -588,11 +588,15 @@ async function main(): Promise<void> {
 
       if (upstreams.size > 0) {
         const policies = loadPolicies(path.join(DATA_DIR, 'mcp-policies'));
-        const result = await startMcpAuthProxy(MCP_PROXY_PORT, PROXY_BIND_HOST, {
-          upstreams,
-          policies,
-          assignments,
-        });
+        const result = await startMcpAuthProxy(
+          MCP_PROXY_PORT,
+          PROXY_BIND_HOST,
+          {
+            upstreams,
+            policies,
+            assignments,
+          },
+        );
         mcpProxyServer = result.server;
         logger.info(
           { port: result.port, servers: [...upstreams.keys()] },
