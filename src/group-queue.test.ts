@@ -407,9 +407,21 @@ describe('GroupQueue', () => {
     await vi.advanceTimersByTimeAsync(10);
 
     // Register message process
-    queue.registerProcess('group1@g.us', {} as any, 'msg-container', 'test-group', false);
+    queue.registerProcess(
+      'group1@g.us',
+      {} as any,
+      'msg-container',
+      'test-group',
+      false,
+    );
     // Register task process
-    queue.registerProcess('group1@g.us', {} as any, 'task-container', 'test-group', true);
+    queue.registerProcess(
+      'group1@g.us',
+      {} as any,
+      'task-container',
+      'test-group',
+      true,
+    );
 
     // sendMessage should work (message container is registered)
     const fs = await import('fs');
