@@ -210,7 +210,8 @@ export class GroupQueue {
         groupFolder: folder,
         slot,
         taskId: state.runningTaskId,
-        containerName: (slot === 'task' ? state.task : state.message).containerName,
+        containerName: (slot === 'task' ? state.task : state.message)
+          .containerName,
         reason: reason || 'unspecified',
       },
       'Writing close sentinel',

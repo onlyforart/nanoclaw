@@ -184,11 +184,17 @@ export function updateTask(
     next_run?: string;
   },
 ): boolean {
+  const ALLOWED_COLUMNS = new Set([
+    'prompt', 'schedule_type', 'schedule_value', 'context_mode',
+    'model', 'temperature', 'timezone', 'max_tool_rounds',
+    'timeout_ms', 'status', 'next_run',
+  ]);
+
   const setClauses: string[] = [];
   const values: unknown[] = [];
 
   for (const [key, value] of Object.entries(updates)) {
-    if (value !== undefined) {
+    if (value !== undefined && ALLOWED_COLUMNS.has(key)) {
       setClauses.push(`${key} = ?`);
       values.push(value);
     }

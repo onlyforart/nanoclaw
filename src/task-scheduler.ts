@@ -166,7 +166,10 @@ async function runTask(
   const scheduleClose = () => {
     if (closeTimer) return; // already scheduled
     closeTimer = setTimeout(() => {
-      logger.debug({ taskId: task.id, group: task.group_folder }, 'Closing task container after result');
+      logger.debug(
+        { taskId: task.id, group: task.group_folder },
+        'Closing task container after result',
+      );
       deps.queue.closeStdin(task.chat_jid, `task-result: ${task.id}`);
     }, TASK_CLOSE_DELAY_MS);
   };
@@ -224,13 +227,20 @@ async function runTask(
     }
 
     logger.info(
-      { taskId: task.id, group: task.group_folder, durationMs: Date.now() - startTime },
+      {
+        taskId: task.id,
+        group: task.group_folder,
+        durationMs: Date.now() - startTime,
+      },
       'Task completed',
     );
   } catch (err) {
     if (closeTimer) clearTimeout(closeTimer);
     error = err instanceof Error ? err.message : String(err);
-    logger.error({ taskId: task.id, group: task.group_folder, error }, 'Task failed');
+    logger.error(
+      { taskId: task.id, group: task.group_folder, error },
+      'Task failed',
+    );
   }
 
   const durationMs = Date.now() - startTime;

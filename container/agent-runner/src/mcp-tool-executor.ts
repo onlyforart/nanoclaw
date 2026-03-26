@@ -78,12 +78,14 @@ export class McpToolExecutor {
           );
           transportType = 'http';
         } else if (config.command) {
-          // Stdio MCP server — spawn child process
-          const env: Record<string, string> = {
-            ...process.env as Record<string, string>,
-            ...(config.env || {}),
-            ...(extraEnv || {}),
-          };
+          // Stdio MCP server — spawn child process.
+          // Only forward safe env vars — never spread process.env wholesale.
+          const SAFE_ENV_KEYS = ['PATH', 'HOME', 'NODE_ENV', 'TZ', 'LANG', 'LC_ALL'];
+          const env: Record<string, string> = {};
+          for (const key of SAFE_ENV_KEYS) {
+            if (process.env[key]) env[key] = process.env[key]!;
+          }
+          Object.assign(env, config.env || {}, extraEnv || {});
           transport = new StdioClientTransport({
             command: config.command,
             args: config.args || [],
