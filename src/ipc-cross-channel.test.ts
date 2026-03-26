@@ -69,10 +69,7 @@ function writeIpcMessage(
   const messagesDir = path.join(tmpDir, sourceFolder, 'messages');
   fs.mkdirSync(messagesDir, { recursive: true });
   const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`;
-  fs.writeFileSync(
-    path.join(messagesDir, filename),
-    JSON.stringify(data),
-  );
+  fs.writeFileSync(path.join(messagesDir, filename), JSON.stringify(data));
 }
 
 // Since startIpcWatcher uses DATA_DIR from config, we need to test
@@ -83,9 +80,8 @@ function writeIpcMessage(
 
 // We'll mock the config module to point DATA_DIR at our temp directory.
 vi.mock('./config.js', async () => {
-  const actual = await vi.importActual<typeof import('./config.js')>(
-    './config.js',
-  );
+  const actual =
+    await vi.importActual<typeof import('./config.js')>('./config.js');
   return {
     ...actual,
     get DATA_DIR() {
@@ -124,10 +120,7 @@ describe('cross_channel_message IPC', () => {
     const messagesDir = path.join(tmpDir, 'ipc', sourceFolder, 'messages');
     fs.mkdirSync(messagesDir, { recursive: true });
     const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`;
-    fs.writeFileSync(
-      path.join(messagesDir, filename),
-      JSON.stringify(data),
-    );
+    fs.writeFileSync(path.join(messagesDir, filename), JSON.stringify(data));
   }
 
   async function runOnce(): Promise<void> {
