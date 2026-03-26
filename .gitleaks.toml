@@ -45,6 +45,49 @@ description = "Slack channel ID (real, not test fixtures)"
 regex = '''(?:^|[^A-Z0-9_])C0[A-Z0-9]{7,10}(?:[^A-Z0-9_]|$)'''
 tags = ["pii", "slack"]
 
+[[rules]]
+id = "lmax-identifier"
+description = "LMAX-specific identifier (company name, product names, internal references)"
+# Match lmax in contexts that suggest internal config, paths, or identifiers
+# (case-insensitive). Allows "lmax" in comments, docs, and general prose.
+regex = '''(?i)(?:lmax-|/lmax|lmax_)'''
+tags = ["proprietary", "lmax"]
+[rules.allowlist]
+paths = [
+  '''README\.md$''',
+  '''README-extra\.md$''',
+  '''CLAUDE\.md$''',
+  '''docs/''',
+]
+
+[[rules]]
+id = "dfx-identifier"
+description = "DFX (Deliverable FX) specific identifier — LMAX product"
+regex = '''(?i)(?:dfx-status|dfx.instance|deliverable.fx|check_dfx)'''
+tags = ["proprietary", "lmax"]
+[rules.allowlist]
+paths = [
+  '''README\.md$''',
+  '''README-extra\.md$''',
+  '''CLAUDE\.md$''',
+  '''docs/''',
+]
+
+[[rules]]
+id = "mcp-servers-config"
+description = "MCP server configuration file (contains host paths and internal tool names)"
+regex = '''mcp-servers\.json'''
+tags = ["proprietary", "config"]
+[rules.allowlist]
+paths = [
+  '''README\.md$''',
+  '''README-extra\.md$''',
+  '''CLAUDE\.md$''',
+  '''docs/''',
+  '''\.gitignore$''',
+  '''src/''',
+]
+
 # Global allowlist — paths and patterns that are safe to skip
 [allowlist]
 paths = [
