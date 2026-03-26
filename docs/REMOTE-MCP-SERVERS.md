@@ -220,6 +220,8 @@ When the orchestrator starts, for each remote MCP server entry:
 
 Schema discovery results are cached for the lifetime of the orchestrator process. A restart re-discovers schemas.
 
+> **Implementation note — policy reload timing:** YAML policy files in `data/mcp-policies/` are re-read from disk on every container spawn (not cached at startup). This means edited policy files take effect on the next agent invocation without restarting NanoClaw. However, the policy *assignments* (`policies.default` and `policies.groups` in `mcp-servers.json`) are loaded once at orchestrator startup — changes to tier-to-group mappings require a restart.
+
 ### Runtime
 
 - The remote server runs continuously, independent of container lifecycle.
@@ -615,6 +617,10 @@ The tier name maps to `data/mcp-policies/{server-name}/{tier-name}.yaml`.
 **When `proxy: true` is NOT set** (or absent):
 
 The container connects directly to the remote MCP server. No authorization proxy, no group header. This is the simpler path for servers that don't need per-group scoping.
+
+**When `proxy: true` is set but `policies` is absent:**
+
+The proxy starts and routes requests, but **all `tools/call` requests are denied** (fail-closed). The proxy requires a policy tier for each group, and with no assignments configured, `resolveTier()` returns `null` for every group. The container-runner's tool filtering also finds no tier, so the container config's `tools` array is empty — the model won't even see the tools. To enable access, add a `policies` field with at least a `default` tier pointing to a YAML policy file in `data/mcp-policies/`.
 
 #### Pre-Filtered Tool Exposure
 
