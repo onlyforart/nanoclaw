@@ -18,7 +18,12 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import {
   StreamableHTTPClientTransport,
 } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import {
+  ListToolsRequestSchema,
+  CallToolRequestSchema,
+} from '@modelcontextprotocol/sdk/types.js';
 
 function log(msg: string): void {
   console.error(`[mcp-http-bridge] ${msg}`);
@@ -57,14 +62,15 @@ export function parseArgs(argv: string[]): BridgeArgs {
 }
 
 /**
- * Create the bridge: connect an MCP client (HTTP) to a stdio server transport.
- * The Client acts as a transparent proxy — all messages from the SDK on stdin
- * are forwarded to the HTTP server, and responses flow back to stdout.
+ * Create the bridge: connect an MCP client to the remote HTTP server,
+ * then expose a stdio MCP server that transparently proxies tools/list
+ * and tools/call to the remote server.
  */
 export async function createBridge(
   url: string,
   headers: Record<string, string>,
-): Promise<Client> {
+): Promise<{ client: Client; server: Server }> {
+  // Connect to the remote HTTP server as a client
   const httpTransport = new StreamableHTTPClientTransport(
     new URL(url),
     { requestInit: { headers } },
@@ -75,14 +81,44 @@ export async function createBridge(
     version: '1.0.0',
   });
 
-  const stdioTransport = new StdioServerTransport();
-
-  // Connect the client to the remote HTTP server
   await client.connect(httpTransport);
-
   log(`Connected to ${url}`);
 
-  return client;
+  // Create a low-level MCP server on stdio that proxies requests
+  const server = new Server(
+    { name: 'mcp-http-bridge', version: '1.0.0' },
+    { capabilities: { tools: {} } },
+  );
+
+  // Proxy tools/list — forward to remote server
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    const result = await client.listTools();
+    return { tools: result.tools };
+  });
+
+  // Proxy tools/call — forward to remote server with raw arguments
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const { name, arguments: args } = request.params;
+    log(`Proxying tools/call: ${name}`);
+    try {
+      const result = await client.callTool({ name, arguments: args });
+      return { content: result.content };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log(`Tool ${name} error: ${msg}`);
+      return {
+        content: [{ type: 'text' as const, text: `Error: ${msg}` }],
+        isError: true,
+      };
+    }
+  });
+
+  // Connect the server to stdio
+  const stdioTransport = new StdioServerTransport();
+  await server.connect(stdioTransport);
+  log(`Stdio server ready`);
+
+  return { client, server };
 }
 
 // Main entry point — only runs when executed directly (not imported by tests)

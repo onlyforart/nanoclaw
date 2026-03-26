@@ -5,6 +5,8 @@ const httpTransportInstances: Array<{ url: URL; opts?: unknown }> = [];
 const stdioTransportInstances: Array<unknown> = [];
 const mockClientConnect = vi.fn();
 const mockClientClose = vi.fn();
+const mockClientListTools = vi.fn().mockResolvedValue({ tools: [] });
+const mockClientCallTool = vi.fn();
 
 // Mock the MCP SDK modules
 vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => {
@@ -31,32 +33,43 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => {
   class MockClient {
     connect = mockClientConnect;
     close = mockClientClose;
+    listTools = mockClientListTools;
+    callTool = mockClientCallTool;
     constructor(_opts: unknown) {}
   }
   return { Client: MockClient };
 });
 
-// Mock the server that pipes messages
+// Mock the low-level Server
 const mockServerConnect = vi.fn();
-vi.mock('@modelcontextprotocol/sdk/server/mcp.js', () => {
-  class MockMcpServer {
+const mockSetRequestHandler = vi.fn();
+vi.mock('@modelcontextprotocol/sdk/server/index.js', () => {
+  class MockServer {
     connect = mockServerConnect;
-    constructor(_opts: unknown) {}
+    setRequestHandler = mockSetRequestHandler;
+    constructor(_info: unknown, _opts: unknown) {}
   }
-  return { McpServer: MockMcpServer };
+  return { Server: MockServer };
 });
+
+vi.mock('@modelcontextprotocol/sdk/types.js', () => ({
+  ListToolsRequestSchema: Symbol('ListToolsRequestSchema'),
+  CallToolRequestSchema: Symbol('CallToolRequestSchema'),
+}));
 
 beforeEach(() => {
   httpTransportInstances.length = 0;
   stdioTransportInstances.length = 0;
   mockClientConnect.mockReset();
   mockClientClose.mockReset();
+  mockClientListTools.mockReset().mockResolvedValue({ tools: [] });
+  mockClientCallTool.mockReset();
   mockServerConnect.mockReset();
+  mockSetRequestHandler.mockReset();
 });
 
-// Import the functions we'll test (module under test)
-// The bridge exports parseArgs and createBridge for testability
-import { parseArgs } from './mcp-http-bridge.js';
+// Import the functions we'll test
+import { parseArgs, createBridge } from './mcp-http-bridge.js';
 
 describe('mcp-http-bridge', () => {
   describe('parseArgs', () => {
@@ -99,14 +112,6 @@ describe('mcp-http-bridge', () => {
   });
 
   describe('createBridge', () => {
-    // Dynamically import to avoid top-level side effects
-    let createBridge: typeof import('./mcp-http-bridge.js').createBridge;
-
-    beforeEach(async () => {
-      const mod = await import('./mcp-http-bridge.js');
-      createBridge = mod.createBridge;
-    });
-
     it('creates StreamableHTTPClientTransport with correct URL', async () => {
       await createBridge('http://host.docker.internal:3201/mcp', {});
 
@@ -136,16 +141,22 @@ describe('mcp-http-bridge', () => {
       expect(opts?.requestInit?.headers).toEqual({});
     });
 
-    it('creates StdioServerTransport', async () => {
+    it('connects the MCP client to the HTTP transport', async () => {
+      await createBridge('http://host.docker.internal:3201/mcp', {});
+      expect(mockClientConnect).toHaveBeenCalled();
+    });
+
+    it('registers tools/list and tools/call handlers on the stdio server', async () => {
+      await createBridge('http://host.docker.internal:3201/mcp', {});
+      // tools/list and tools/call handlers
+      expect(mockSetRequestHandler).toHaveBeenCalledTimes(2);
+    });
+
+    it('creates StdioServerTransport and connects server', async () => {
       await createBridge('http://host.docker.internal:3201/mcp', {});
 
       expect(stdioTransportInstances).toHaveLength(1);
-    });
-
-    it('connects the MCP client to the HTTP transport', async () => {
-      await createBridge('http://host.docker.internal:3201/mcp', {});
-
-      expect(mockClientConnect).toHaveBeenCalled();
+      expect(mockServerConnect).toHaveBeenCalled();
     });
   });
 });
