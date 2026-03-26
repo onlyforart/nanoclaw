@@ -2,12 +2,13 @@
 
 Step-by-step plan for implementing the [Remote MCP Servers specification](REMOTE-MCP-SERVERS.md). Each step is a self-contained, testable unit of work. Steps are ordered by dependency: each step builds on the previous ones.
 
-The implementation is split into three phases:
-- **Phase 1 (Steps 1–9):** Remote MCP server connectivity — containers can call MCP servers on the host over HTTP, with credential isolation.
+The implementation is split into four phases:
+- **Phase 1 (Steps 1–9):** Remote MCP server connectivity — containers can call MCP servers on the host over HTTP, with credential isolation. Ollama direct mode uses `StreamableHTTPClientTransport` directly.
 - **Phase 2 (Steps 10–13):** MCP authorization proxy — per-group tool and argument filtering, so different groups have different access levels.
 - **Phase 3 (Step 14):** Skill packaging — bundle as a NanoClaw skill branch for installation into any NanoClaw instance.
+- **Phase 4 (Steps 15–18):** Stdio bridge for Claude SDK — the SDK's native HTTP MCP transport hangs silently ([#183](https://github.com/anthropics/claude-agent-sdk-typescript/issues/183)), so HTTP entries are rewritten to stdio entries that spawn a bridge process using the same `StreamableHTTPClientTransport` as the Ollama path.
 
-Phase 1 is useful on its own (credential isolation). Phase 2 adds per-group access control. Phase 3 makes it distributable.
+Phase 1 is useful on its own (credential isolation, Ollama mode). Phase 2 adds per-group access control. Phase 3 makes it distributable. Phase 4 makes it work with the Claude SDK.
 
 ## Implementation Rules
 
@@ -414,104 +415,11 @@ The existing tests mock `StdioClientTransport`. Add parallel tests that:
 
 ---
 
-## Step 5: Agent-Runner — HTTP Transport for Claude SDK Mode
+## Step 5: Agent-Runner — Claude SDK Mode (Deferred to Phase 4)
 
-**File:** `container/agent-runner/src/index.ts` (lines 411–433 and 462–477)
+The original plan passed `{ type: 'http' }` entries directly to the Claude SDK. This was implemented in Phase 1 but the SDK's HTTP transport silently hangs (see [claude-agent-sdk-typescript#183](https://github.com/anthropics/claude-agent-sdk-typescript/issues/183)). Phase 4 replaces this with a stdio-to-HTTP bridge.
 
-**What to change:**
-
-1. In the MCP config loading block (line 411), handle entries with `type: 'http'`:
-
-> **Note:** The container-side config (`/workspace/mcp-servers-config/config.json`) is a **flat object** keyed by server name — it does NOT have a `servers` wrapper. This differs from the host-side `data/mcp-servers.json` which wraps entries in `{ "servers": { ... } }`. The existing code already iterates `Object.entries(mcpConfig)` (flat), so no unwrapping is needed here.
-
-```typescript
-const mcpConfigPath = '/workspace/mcp-servers-config/config.json';
-if (fs.existsSync(mcpConfigPath)) {
-  try {
-    const mcpConfig = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf-8'));
-    for (const [name, srv] of Object.entries(mcpConfig)) {
-      const server = srv as {
-        type?: 'http';
-        url?: string;
-        headers?: Record<string, string>;
-        command?: string;
-        args?: string[];
-        tools?: string[];
-        env?: Record<string, string>;
-        skillContent?: string;
-      };
-
-      if (server.type === 'http' && server.url) {
-        // Remote MCP server — pass to SDK as HTTP type
-        additionalMcpServers[name] = {
-          type: 'http',
-          url: server.url,
-          ...(server.headers && { headers: server.headers }),
-        };
-      } else if (server.command) {
-        // Stdio MCP server — existing behavior
-        additionalMcpServers[name] = {
-          command: server.command,
-          args: server.args || [],
-          ...(server.env && { env: server.env }),
-        };
-      }
-
-      for (const tool of server.tools || []) {
-        additionalMcpTools.push(`mcp__${name}__${tool}`);
-      }
-    }
-  } catch (err) { /* ... */ }
-}
-```
-
-2. Update the type of `additionalMcpServers` to accept both shapes:
-
-```typescript
-const additionalMcpServers: Record<string,
-  | { command: string; args: string[]; env?: Record<string, string> }
-  | { type: 'http'; url: string; headers?: Record<string, string> }
-> = {};
-```
-
-The Claude Agent SDK already accepts `{ type: 'http'; url: string; headers?: Record<string, string> }` in its `McpServerConfig` type (confirmed in `docs/SDK_DEEP_DIVE.md`). No SDK changes needed.
-
-3. In the skill loading block (line 662), handle `skillContent` for remote servers:
-
-```typescript
-const serverSkills = new Map<string, string>();
-for (const [name, config] of Object.entries(mcpConfig)) {
-  const cfg = config as { skill?: string; skillContent?: string };
-
-  // Remote servers: use pre-assembled skillContent from container config
-  if (cfg.skillContent) {
-    serverSkills.set(name, cfg.skillContent);
-    log(`Loaded inline skill for ${name} (${cfg.skillContent.length} chars)`);
-    continue;
-  }
-
-  // Stdio servers: existing file-based resolution (unchanged)
-  if (!cfg.skill) continue;
-  const candidates = [
-    `/workspace/mcp-servers/${name}/${cfg.skill}`,
-    `/home/node/.claude/skills/${name}/SKILL.md`,
-  ];
-  // ... rest of existing code unchanged
-}
-```
-
-The `skillContent` field is set by the orchestrator's `resolveRemoteSkillContent()` (Step 3) and contains the fully assembled SKILL.md with all referenced markdown files already inlined. The agent-runner uses it directly for lazy injection without filesystem access.
-
-For stdio servers, the existing file-based resolution continues unchanged — `skillContent` is never set for stdio entries, so the existing code path is preserved.
-
-**How to test:**
-
-1. Start a remote MCP server on the host.
-2. Trigger a Claude SDK mode invocation (non-Ollama model) for a group.
-3. Verify the agent can call remote MCP tools.
-4. Check container logs for MCP connection messages.
-5. Verify inline skill content appears in the skill loading log for remote servers.
-6. Verify stdio server skills still load via the existing file-based path.
+See Phase 4 below for the implementation.
 
 ---
 
@@ -1127,6 +1035,76 @@ The `skill/remote-mcp-servers` branch should contain all implementation code plu
 
 ---
 
+# Phase 4: Stdio Bridge for Claude SDK
+
+Phase 1 Step 5 passed `{ type: 'http' }` entries directly to the Claude Agent SDK's `mcpServers` option. The SDK defines `McpHttpServerConfig` in its types, but the HTTP transport silently hangs in practice ([claude-agent-sdk-typescript#183](https://github.com/anthropics/claude-agent-sdk-typescript/issues/183)). This phase replaces the broken direct passthrough with a stdio-to-HTTP bridge that uses the same `StreamableHTTPClientTransport` as the working Ollama direct mode path.
+
+## Step 15: Upgrade Claude Agent SDK
+
+**File:** `container/agent-runner/package.json`
+
+Bump `@anthropic-ai/claude-agent-sdk` from `^0.2.76` to `^0.2.84`. Run `npm install` in `container/agent-runner/`. Verify all existing tests pass — no code changes in this step.
+
+---
+
+## Step 16: Stdio-to-HTTP Bridge
+
+**File:** `container/agent-runner/src/mcp-http-bridge.ts` (new)
+
+A standalone Node.js script that proxies MCP JSON-RPC between stdio and an HTTP MCP server. The Claude SDK spawns it as a child process (like any stdio MCP server).
+
+**CLI interface:**
+- `--url <url>` (required) — HTTP endpoint of the remote MCP server
+- `--header <name>:<value>` (optional, repeatable) — HTTP headers to include in requests
+
+**Implementation:**
+1. Parse argv for `--url` and `--header` flags
+2. Create `StreamableHTTPClientTransport` from `@modelcontextprotocol/sdk/client/streamableHttp.js` with the URL and headers — same transport the Ollama `McpToolExecutor` uses
+3. Create `StdioServerTransport` from `@modelcontextprotocol/sdk/server/stdio.js` for stdin/stdout
+4. Pipe all MCP messages bidirectionally
+5. Log to stderr only (stdout is MCP protocol)
+6. Exit when stdin closes or the HTTP connection drops
+
+**Tests** (`container/agent-runner/src/mcp-http-bridge.test.ts`):
+
+| Test case | What it verifies |
+|-----------|------------------|
+| Parses `--url` correctly | URL extracted from argv |
+| Parses multiple `--header` flags | Headers accumulated into object |
+| Missing `--url` exits with error | Process exits non-zero, stderr message |
+| Creates `StreamableHTTPClientTransport` with URL and headers | Same transport as Ollama path |
+| Creates `StdioServerTransport` | Stdio pipes connected |
+
+---
+
+## Step 17: Agent-Runner SDK Integration
+
+**Files:** `container/agent-runner/src/mcp-config.ts` (new), `container/agent-runner/src/index.ts`
+
+Extract MCP config loading into a testable `buildSdkMcpServers()` function. When an entry has `type: 'http'`, rewrite it to a stdio entry that spawns the bridge.
+
+**Tests** (`container/agent-runner/src/mcp-config.test.ts`):
+
+| Test case | What it verifies |
+|-----------|------------------|
+| HTTP entry → stdio bridge command | `command: 'node'`, args include bridge path and `--url` |
+| Headers → `--header` args | Each header becomes `--header k:v` pair |
+| Stdio entries unchanged | Backward compat: entries with `command` pass through as-is |
+| Tool allowlist unchanged | `additionalMcpTools` identical for HTTP and stdio entries |
+| Mixed HTTP + stdio config | Both entry types coexist in `additionalMcpServers` |
+
+---
+
+## Step 18: Phase 4 Tests and Commit
+
+Run full test suite:
+- `cd container/agent-runner && npx vitest run` — all agent-runner tests
+- `npm test` (root) — all host-side tests
+
+Commit when all tests pass.
+
+---
+
 # Dependency Graph (All Phases)
 
 ```
@@ -1144,7 +1122,7 @@ Step 3: URL rewriting + container config
          │
          ├───▶ Step 4: McpToolExecutor HTTP (Ollama)
          │
-         └───▶ Step 5: Claude SDK mode HTTP
+         └───▶ Step 5: Claude SDK mode (deferred to Phase 4)
                   │
                   ▼
          Step 7: MongoDB deployment ──▶ Step 8: Skill file
@@ -1171,6 +1149,20 @@ Phase 3: Skill Packaging
 
 Step 14: NanoClaw skill bundle
    (depends on all previous steps)
+
+Phase 4: Stdio Bridge for Claude SDK
+═════════════════════════════════════
+
+Step 15: SDK upgrade
+         │
+         ▼
+Step 16: mcp-http-bridge.ts (stdio↔HTTP bridge)
+         │
+         ▼
+Step 17: index.ts rewrite (replaces Phase 1 Step 5)
+         │
+         ▼
+Step 18: Phase 4 tests
 ```
 
 **Parallelizable:**
@@ -1179,11 +1171,13 @@ Step 14: NanoClaw skill bundle
 - Step 7 can start at any time (deployment, not code).
 - Step 6 should be done before Step 2.
 - Step 14 must be last (it packages everything).
+- Phase 4 depends on Phase 1 Steps 1-4 (uses the same HTTP transport).
 
 **Commit points:**
 - After Step 9 (Phase 1 complete, all tests passing) — commit.
 - After Step 13 (Phase 2 complete, all tests passing) — commit.
-- After Step 14 (skill packaging complete) — final commit. Do not push.
+- After Step 14 (skill packaging complete) — commit.
+- After Step 18 (Phase 4 complete, all tests passing) — commit. Do not push.
 
 ---
 

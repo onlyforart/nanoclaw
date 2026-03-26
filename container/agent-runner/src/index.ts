@@ -22,6 +22,7 @@ import { Ollama } from 'ollama';
 import { runOllamaChat } from './ollama-chat-engine.js';
 import { McpToolExecutor, McpServerConfig } from './mcp-tool-executor.js';
 import { buildOllamaSystemPrompt } from './ollama-system-prompt.js';
+import { buildSdkMcpServers } from './mcp-config.js';
 
 interface ContainerInput {
   prompt: string;
@@ -408,51 +409,20 @@ async function runQuery(
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
 
-  // Discover additional MCP servers from host-mounted config
-  const additionalMcpServers: Record<string,
-    | { command: string; args: string[]; env?: Record<string, string> }
-    | { type: 'http'; url: string; headers?: Record<string, string> }
-  > = {};
-  const additionalMcpTools: string[] = [];
+  // Discover additional MCP servers from host-mounted config.
+  // HTTP entries are rewritten to spawn mcp-http-bridge.js as a stdio child
+  // process, so the Claude SDK uses the same StreamableHTTPClientTransport as
+  // the Ollama direct mode path (see docs/REMOTE-MCP-SERVERS.md).
+  let additionalMcpServers: Record<string, { command: string; args: string[]; env?: Record<string, string> }> = {};
+  let additionalMcpTools: string[] = [];
   const mcpConfigPath = '/workspace/mcp-servers-config/config.json';
   if (fs.existsSync(mcpConfigPath)) {
     try {
       const mcpConfig = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf-8'));
-      for (const [name, srv] of Object.entries(mcpConfig)) {
-        const server = srv as {
-          type?: 'http';
-          url?: string;
-          headers?: Record<string, string>;
-          command?: string;
-          args?: string[];
-          tools?: string[];
-          env?: Record<string, string>;
-        };
-
-        if (server.type === 'http' && server.url) {
-          // Remote MCP server — pass to SDK as HTTP type
-          additionalMcpServers[name] = {
-            type: 'http',
-            url: server.url,
-            ...(server.headers && { headers: server.headers }),
-          };
-        } else if (server.command) {
-          // Stdio MCP server — existing behavior
-          additionalMcpServers[name] = {
-            command: server.command,
-            args: server.args || [],
-            ...(server.env && { env: server.env }),
-          };
-        } else {
-          log(`Skipping MCP server ${name}: no command or url`);
-          continue;
-        }
-
-        for (const tool of server.tools || []) {
-          additionalMcpTools.push(`mcp__${name}__${tool}`);
-        }
-        log(`Loaded external MCP server: ${name} (${server.tools?.length || 0} tools, type: ${server.type || 'stdio'})`);
-      }
+      const bridgePath = path.join(path.dirname(mcpServerPath), 'mcp-http-bridge.js');
+      const result = buildSdkMcpServers(mcpConfig, bridgePath);
+      additionalMcpServers = result.mcpServers;
+      additionalMcpTools = result.mcpTools;
     } catch (err) {
       log(`Failed to load MCP servers config: ${err instanceof Error ? err.message : String(err)}`);
     }

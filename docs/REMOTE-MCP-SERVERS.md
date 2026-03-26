@@ -242,24 +242,29 @@ Future work may add periodic health checks and web UI status display, but this i
 
 ### Claude SDK Mode (non-Ollama)
 
-The Claude Agent SDK natively supports HTTP MCP servers:
+The Claude Agent SDK defines `McpHttpServerConfig` (`{ type: 'http', url, headers }`) in its types, but the HTTP transport silently hangs in practice (see [claude-agent-sdk-typescript#183](https://github.com/anthropics/claude-agent-sdk-typescript/issues/183)). Instead, the agent-runner converts HTTP MCP entries into stdio entries that spawn a **stdio-to-HTTP bridge** process.
 
-```typescript
-mcpServers: {
-  mongodb: {
-    type: 'http',
-    url: 'http://host.docker.internal:3200/mcp',
-    headers: { /* optional */ },
-  },
-  nanoclaw: {
-    command: 'node',
-    args: [mcpServerPath],
-    env: { /* ... */ },
-  },
-}
+The bridge (`container/agent-runner/src/mcp-http-bridge.ts`) uses the same `StreamableHTTPClientTransport` from `@modelcontextprotocol/sdk` that the Ollama direct mode path uses — one transport implementation, two invocation modes. This ensures identical MCP communication regardless of which backend runs the prompt.
+
+```
+Claude SDK                     Bridge Process               Remote MCP Server
+┌──────────┐   stdio JSON-RPC  ┌──────────────────┐  HTTP   ┌──────────────┐
+│ query()  │──────────────────▶│ mcp-http-bridge  │────────▶│ eks-kubectl  │
+│          │◀──────────────────│ (child process)  │◀────────│ (host:3201)  │
+└──────────┘                   └──────────────────┘         └──────────────┘
 ```
 
-The agent-runner reads the container-side config and passes remote entries to the SDK with `type: 'http'`. The SDK manages the HTTP transport, connection lifecycle, and tool invocation. No changes to the SDK are required.
+At runtime, the agent-runner rewrites container config entries:
+
+```typescript
+// Container config (from orchestrator):
+{ "eks-kubectl": { "type": "http", "url": "http://172.17.0.1:3201/mcp", ... } }
+
+// Rewritten for SDK mcpServers:
+{ "eks-kubectl": { "command": "node", "args": ["mcp-http-bridge.js", "--url", "http://172.17.0.1:3201/mcp"] } }
+```
+
+The bridge accepts `--url <url>` and optional `--header <name>:<value>` (repeatable) arguments. Headers from the container config (e.g. `X-NanoClaw-Group` for the authorization proxy) are passed through.
 
 ### Ollama Direct Mode
 
