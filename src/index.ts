@@ -4,12 +4,16 @@ import path from 'path';
 import {
   ASSISTANT_NAME,
   CREDENTIAL_PROXY_PORT,
+  DATA_DIR,
   IDLE_TIMEOUT,
+  MCP_PROXY_PORT,
   POLL_INTERVAL,
   TIMEZONE,
   TRIGGER_PATTERN,
 } from './config.js';
 import { startCredentialProxy } from './credential-proxy.js';
+import { startMcpAuthProxy } from './mcp-auth-proxy.js';
+import { loadPolicies, type PolicyAssignments } from './mcp-policy.js';
 import './channels/index.js';
 import {
   getChannelFactory,
@@ -556,10 +560,55 @@ async function main(): Promise<void> {
     PROXY_BIND_HOST,
   );
 
+  // Start MCP authorization proxy if any remote servers have proxy: true
+  let mcpProxyServer: import('http').Server | null = null;
+  const mcpConfigPath = path.join(DATA_DIR, 'mcp-servers.json');
+  if (fs.existsSync(mcpConfigPath)) {
+    try {
+      const mcpConfig = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf-8'));
+      const upstreams = new Map<string, string>();
+      const assignments = new Map<string, PolicyAssignments>();
+
+      for (const [name, srv] of Object.entries(mcpConfig.servers || {})) {
+        const server = srv as {
+          url?: string;
+          proxy?: boolean;
+          policies?: { default?: string; groups?: Record<string, string> };
+        };
+        if (server.url && server.proxy) {
+          upstreams.set(name, server.url);
+          if (server.policies) {
+            assignments.set(name, {
+              defaultTier: server.policies.default,
+              groups: server.policies.groups || {},
+            });
+          }
+        }
+      }
+
+      if (upstreams.size > 0) {
+        const policies = loadPolicies(path.join(DATA_DIR, 'mcp-policies'));
+        const result = await startMcpAuthProxy(MCP_PROXY_PORT, PROXY_BIND_HOST, {
+          upstreams,
+          policies,
+          assignments,
+        });
+        mcpProxyServer = result.server;
+        logger.info(
+          { port: result.port, servers: [...upstreams.keys()] },
+          'MCP authorization proxy started for proxied servers',
+        );
+      }
+    } catch (err) {
+      logger.error({ err }, 'Failed to start MCP authorization proxy');
+    }
+  }
+
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
     proxyServer.close();
+    if (mcpProxyServer) mcpProxyServer.close();
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
     process.exit(0);

@@ -15,6 +15,7 @@ import {
   DATA_DIR,
   GROUPS_DIR,
   IDLE_TIMEOUT,
+  MCP_PROXY_PORT,
   TIMEZONE,
 } from './config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
@@ -30,6 +31,12 @@ import { detectAuthMode } from './credential-proxy.js';
 import { isOllamaModel } from './connection-profiles.js';
 import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
+import {
+  evaluatePolicy,
+  loadPolicies,
+  resolveTier,
+  type PolicyAssignments,
+} from './mcp-policy.js';
 import {
   classifyServerEntry,
   ContainerServerEntry,
@@ -384,6 +391,8 @@ async function buildVolumeMounts(
             url: string;
             tools: ToolsDef;
             readOnly?: boolean;
+            proxy?: boolean;
+            policies?: { default?: string; groups?: Record<string, string> };
             headers?: Record<string, string>;
             skill?: string;
           };
@@ -407,10 +416,50 @@ async function buildVolumeMounts(
             );
           }
 
-          const resolvedTools = resolveTools(
-            server.tools,
-            server.readOnly,
-          );
+          let resolvedTools = resolveTools(server.tools, server.readOnly);
+
+          // Determine URL and headers
+          let containerUrl: string;
+          const containerHeaders: Record<string, string> = {
+            ...(server.headers || {}),
+          };
+
+          if (server.proxy) {
+            // Proxied: point to the MCP auth proxy, inject group header
+            containerUrl = `http://${CONTAINER_HOST_GATEWAY}:${MCP_PROXY_PORT}/${name}`;
+            containerHeaders['X-NanoClaw-Group'] = group.folder;
+
+            // Per-group tool filtering: reduce tool list to what the policy allows
+            if (server.policies) {
+              const policyDir = path.join(DATA_DIR, 'mcp-policies');
+              const policySet = loadPolicies(policyDir);
+              const assignments: PolicyAssignments = {
+                defaultTier: server.policies.default,
+                groups: server.policies.groups || {},
+              };
+              const tier = resolveTier(
+                policySet,
+                name,
+                group.folder,
+                assignments,
+              );
+              if (tier) {
+                resolvedTools = resolvedTools.filter(
+                  (t) => evaluatePolicy(tier, t, {}).allowed,
+                );
+              } else {
+                // No tier = no access (fail-closed)
+                logger.warn(
+                  { server: name, group: group.folder },
+                  'No policy tier found for group, no tools will be available',
+                );
+                resolvedTools = [];
+              }
+            }
+          } else {
+            // Direct: rewrite URL for container access
+            containerUrl = rewriteUrlForContainer(server.url);
+          }
 
           // Filter discovered schemas to only allowed tools
           const filteredSchemas = toolSchemas.filter((s) =>
@@ -418,16 +467,15 @@ async function buildVolumeMounts(
           );
 
           // Resolve skill content (inlined, not file path)
-          const skillContent = resolveRemoteSkillContent(
-            name,
-            server.skill,
-          );
+          const skillContent = resolveRemoteSkillContent(name, server.skill);
 
           containerServers[name] = {
             type: 'http',
-            url: rewriteUrlForContainer(server.url),
+            url: containerUrl,
             tools: resolvedTools,
-            ...(server.headers && { headers: server.headers }),
+            ...(Object.keys(containerHeaders).length > 0 && {
+              headers: containerHeaders,
+            }),
             ...(skillContent && { skillContent }),
             ...(filteredSchemas.length > 0 && {
               toolSchemas: filteredSchemas,

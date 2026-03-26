@@ -8,9 +8,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import {
-  StreamableHTTPClientTransport,
-} from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 import { CONTAINER_HOST_GATEWAY } from './container-runtime.js';
 import { logger } from './logger.js';
@@ -82,9 +80,7 @@ export type ContainerServerEntry =
 // Type guards
 // ---------------------------------------------------------------------------
 
-export function isRemoteEntry(
-  entry: Record<string, unknown>,
-): boolean {
+export function isRemoteEntry(entry: Record<string, unknown>): boolean {
   return 'url' in entry && !('hostPath' in entry);
 }
 
@@ -114,10 +110,7 @@ export function classifyServerEntry(
  * - Access-level object + readOnly=true: only 'read' level tools.
  * - Access-level object + readOnly=false/undefined: all levels flattened.
  */
-export function resolveTools(
-  tools: ToolsDef,
-  readOnly?: boolean,
-): string[] {
+export function resolveTools(tools: ToolsDef, readOnly?: boolean): string[] {
   if (Array.isArray(tools)) return tools;
   if (readOnly) return tools['read'] || [];
   return Object.values(tools).flat();
@@ -226,7 +219,9 @@ export function resolveRemoteSkillContent(
 export async function discoverRemoteToolSchemas(
   url: string,
   headers?: Record<string, string>,
-): Promise<Array<{ name: string; description?: string; inputSchema: unknown }>> {
+): Promise<
+  Array<{ name: string; description?: string; inputSchema: unknown }>
+> {
   const abortController = new AbortController();
   const timeout = setTimeout(() => abortController.abort(), 5_000);
 

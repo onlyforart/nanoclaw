@@ -30,7 +30,11 @@ describe('resolveTools', () => {
   });
 
   it('access-level object with readOnly=true returns only read tools', () => {
-    const tools = { read: ['find', 'count'], write: ['insert'], admin: ['drop'] };
+    const tools = {
+      read: ['find', 'count'],
+      write: ['insert'],
+      admin: ['drop'],
+    };
     expect(resolveTools(tools, true)).toEqual(['find', 'count']);
   });
 
@@ -189,7 +193,9 @@ describe('assembleSkillContent', () => {
       '# Tools\n\nSee [Missing](reference/nonexistent.md) for details.',
     );
     const result = assembleSkillContent(path.join(tmpDir, 'SKILL.md'));
-    expect(result).toBe('# Tools\n\nSee [Missing](reference/nonexistent.md) for details.');
+    expect(result).toBe(
+      '# Tools\n\nSee [Missing](reference/nonexistent.md) for details.',
+    );
   });
 });
 
