@@ -142,6 +142,16 @@ The proxy starts on port 3401 (configurable via `MCP_PROXY_PORT`). Container con
 3. **Arguments not present** in the tool call are skipped
 4. Pattern matching: `"*"` (any), `"prefix*"` (starts-with), exact match
 
+## Behavior Notes
+
+### Policy reload timing
+
+Policies are re-read from `data/mcp-policies/` on every container spawn, not just at orchestrator startup. This means edited YAML policy files take effect on the next agent invocation without restarting NanoClaw. However, the proxy's policy assignments (the `policies.default` and `policies.groups` mapping in `mcp-servers.json`) are loaded once at startup — changing those requires a restart.
+
+### `proxy: true` without `policies`
+
+If a server has `proxy: true` but no `policies` field in `mcp-servers.json`, the proxy starts and routes requests, but **all `tools/call` requests will be denied** (fail-closed). This is because the proxy requires a policy tier for each group, and with no assignments configured, no tier can be resolved. To fix: either add a `policies` field with at least a `default` tier, or remove `proxy: true` for direct (unproxied) access.
+
 ## Troubleshooting
 
 **Schema discovery fails (warning logged, server skipped):**
