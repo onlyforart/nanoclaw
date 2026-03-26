@@ -197,11 +197,24 @@ export class GroupQueue {
   /**
    * Signal the active container to wind down by writing a close sentinel.
    */
-  closeStdin(groupJid: string): void {
+  closeStdin(groupJid: string, reason?: string): void {
     const state = this.getGroup(groupJid);
     // Close whichever slot has a groupFolder (task container for tasks, message for messages)
     const folder = state.task.groupFolder || state.message.groupFolder;
     if (!folder) return;
+
+    const slot = state.task.groupFolder ? 'task' : 'message';
+    logger.debug(
+      {
+        groupJid,
+        groupFolder: folder,
+        slot,
+        taskId: state.runningTaskId,
+        containerName: (slot === 'task' ? state.task : state.message).containerName,
+        reason: reason || 'unspecified',
+      },
+      'Writing close sentinel',
+    );
 
     const inputDir = path.join(DATA_DIR, 'ipc', folder, 'input');
     try {
