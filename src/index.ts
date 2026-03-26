@@ -486,35 +486,10 @@ async function startMessageLoop(): Promise<void> {
             if (!hasTrigger) continue;
           }
 
-          // Pull all messages since lastAgentTimestamp so non-trigger
-          // context that accumulated between triggers is included.
-          const allPending = getMessagesSince(
-            chatJid,
-            lastAgentTimestamp[chatJid] || '',
-            ASSISTANT_NAME,
-          );
-          const messagesToSend =
-            allPending.length > 0 ? allPending : groupMessages;
-          const formatted = formatMessages(messagesToSend, TIMEZONE);
-
-          if (queue.sendMessage(chatJid, formatted)) {
-            logger.debug(
-              { chatJid, count: messagesToSend.length },
-              'Piped messages to active container',
-            );
-            lastAgentTimestamp[chatJid] =
-              messagesToSend[messagesToSend.length - 1].timestamp;
-            saveState();
-            // Show typing indicator while the container processes the piped message
-            channel
-              .setTyping?.(chatJid, true)
-              ?.catch((err) =>
-                logger.warn({ chatJid, err }, 'Failed to set typing indicator'),
-              );
-          } else {
-            // No active container — enqueue for a new one
-            queue.enqueueMessageCheck(chatJid);
-          }
+          // Always queue — never pipe into an active container.
+          // The message will be processed after the current container
+          // (task or message) finishes, before the next scheduled task.
+          queue.enqueueMessageCheck(chatJid);
         }
       }
     } catch (err) {
@@ -744,7 +719,7 @@ async function main(): Promise<void> {
     getSessions: () => sessions,
     queue,
     onProcess: (groupJid, proc, containerName, groupFolder) =>
-      queue.registerProcess(groupJid, proc, containerName, groupFolder),
+      queue.registerProcess(groupJid, proc, containerName, groupFolder, true),
     sendMessage: async (jid, rawText) => {
       const channel = findChannel(channels, jid);
       if (!channel) {

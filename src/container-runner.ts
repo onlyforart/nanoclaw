@@ -190,6 +190,7 @@ function discoverToolSchemas(
 async function buildVolumeMounts(
   group: RegisteredGroup,
   isMain: boolean,
+  input?: ContainerInput,
 ): Promise<VolumeMount[]> {
   const mounts: VolumeMount[] = [];
   const projectRoot = process.cwd();
@@ -244,14 +245,20 @@ async function buildVolumeMounts(
     }
   }
 
-  // Per-group Claude sessions directory (isolated from other groups)
-  // Each group gets their own .claude/ to prevent cross-group session access
-  const groupSessionsDir = path.join(
-    DATA_DIR,
-    'sessions',
-    group.folder,
-    '.claude',
-  );
+  // Claude sessions directory — isolated per group, and per task within the group.
+  // Messages use the group-level .claude/ (supports session resumption).
+  // Isolated tasks get their own .claude/ subdirectory, cleared before each run,
+  // so stale session files don't accumulate and slow down SDK startup.
+  const isIsolatedTask = input?.isScheduledTask && !input?.sessionId;
+  const groupSessionsBase = path.join(DATA_DIR, 'sessions', group.folder);
+  const groupSessionsDir = isIsolatedTask
+    ? path.join(groupSessionsBase, '.claude-task')
+    : path.join(groupSessionsBase, '.claude');
+
+  if (isIsolatedTask) {
+    // Clean the task session directory before each isolated run
+    fs.rmSync(groupSessionsDir, { recursive: true, force: true });
+  }
   fs.mkdirSync(groupSessionsDir, { recursive: true });
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
   if (!fs.existsSync(settingsFile)) {
@@ -653,7 +660,7 @@ export async function runContainerAgent(
   const groupDir = resolveGroupFolderPath(group.folder);
   fs.mkdirSync(groupDir, { recursive: true });
 
-  const mounts = await buildVolumeMounts(group, input.isMain);
+  const mounts = await buildVolumeMounts(group, input.isMain, input);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
   const containerArgs = buildContainerArgs(mounts, containerName, input.model);
