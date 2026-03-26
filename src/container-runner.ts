@@ -4,7 +4,6 @@
  */
 import { ChildProcess, exec, spawn } from 'child_process';
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 
 import {
@@ -489,7 +488,6 @@ async function buildVolumeMounts(
             args: string[];
             tools: string[];
             env?: string[];
-            awsAuth?: boolean;
             skill?: string;
           };
           const resolvedHostPath = path.resolve(server.hostPath);
@@ -506,22 +504,6 @@ async function buildVolumeMounts(
             containerPath,
             readonly: true,
           });
-          // Mount host ~/.aws/ read-only so the MCP server can use AWS credentials
-          if (server.awsAuth) {
-            const awsDir = path.join(os.homedir(), '.aws');
-            if (fs.existsSync(awsDir)) {
-              mounts.push({
-                hostPath: awsDir,
-                containerPath: '/home/node/.aws',
-                readonly: true,
-              });
-            } else {
-              logger.warn(
-                { server: name },
-                'awsAuth enabled but ~/.aws/ not found on host',
-              );
-            }
-          }
           // Resolve whitelisted env vars from .env file
           const resolvedEnv: Record<string, string> = {};
           if (server.env) {
