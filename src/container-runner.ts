@@ -245,19 +245,21 @@ async function buildVolumeMounts(
     }
   }
 
-  // Claude sessions directory — isolated per group, and per task within the group.
-  // Messages use the group-level .claude/ (supports session resumption).
-  // Isolated tasks get their own .claude/ subdirectory, cleared before each run,
-  // so stale session files don't accumulate and slow down SDK startup.
+  // Session directory isolation:
+  // - Messages use the group-level .claude/ (supports session resumption)
+  // - Isolated tasks use .claude-task/ (wiped before each run to prevent
+  //   stale session file accumulation that caused SDK startup hangs)
   const isIsolatedTask = input?.isScheduledTask && !input?.sessionId;
   const groupSessionsBase = path.join(DATA_DIR, 'sessions', group.folder);
-  const groupSessionsDir = isIsolatedTask
-    ? path.join(groupSessionsBase, '.claude-task')
-    : path.join(groupSessionsBase, '.claude');
+  // Isolated tasks get a separate base directory for all per-run state,
+  // preventing races with concurrent message containers and other tasks.
+  const sessionSubdir = isIsolatedTask ? 'task-run' : 'message-run';
+  const runBase = path.join(groupSessionsBase, sessionSubdir);
+  const groupSessionsDir = path.join(runBase, '.claude');
 
   if (isIsolatedTask) {
-    // Clean the task session directory before each isolated run
-    fs.rmSync(groupSessionsDir, { recursive: true, force: true });
+    // Clean entire task-run directory before each isolated run
+    fs.rmSync(runBase, { recursive: true, force: true });
   }
   fs.mkdirSync(groupSessionsDir, { recursive: true });
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
@@ -313,21 +315,16 @@ async function buildVolumeMounts(
     readonly: false,
   });
 
-  // Copy agent-runner source into a per-group writable location so agents
-  // can customize it (add tools, change behavior) without affecting other
-  // groups. Recompiled on container startup via entrypoint.sh.
+  // Copy agent-runner source into a per-run writable location so agents
+  // can customize it without affecting other groups or concurrent containers.
+  // Recompiled on container startup via entrypoint.sh.
   const agentRunnerSrc = path.join(
     projectRoot,
     'container',
     'agent-runner',
     'src',
   );
-  const groupAgentRunnerDir = path.join(
-    DATA_DIR,
-    'sessions',
-    group.folder,
-    'agent-runner-src',
-  );
+  const groupAgentRunnerDir = path.join(runBase, 'agent-runner-src');
   if (!fs.existsSync(groupAgentRunnerDir) && fs.existsSync(agentRunnerSrc)) {
     fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
   }
@@ -356,12 +353,7 @@ async function buildVolumeMounts(
   if (fs.existsSync(mcpConfigPath)) {
     try {
       const mcpConfig = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf-8'));
-      const containerMcpDir = path.join(
-        DATA_DIR,
-        'sessions',
-        group.folder,
-        'mcp-servers',
-      );
+      const containerMcpDir = path.join(runBase, 'mcp-servers');
       fs.mkdirSync(containerMcpDir, { recursive: true });
 
       const containerServers: Record<string, ContainerServerEntry> = {};

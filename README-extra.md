@@ -99,16 +99,24 @@ These are the primary place to look when debugging a specific agent invocation. 
 
 ### Per-Session Runtime State
 
-Each group's container session generates runtime state under `data/sessions/{groupName}/`:
+Each group's container session generates runtime state under `data/sessions/{groupName}/`. Message and task containers use separate subdirectories to prevent race conditions:
 
-- `agent-runner-src/` — per-group copy of the agent-runner TypeScript source, recompiled on each container startup
-- `mcp-servers/config.json` — container-side MCP server configuration (pre-resolved paths, no host paths)
-- `.claude/` — Claude Code project state and backups
+```
+data/sessions/{groupName}/
+├── message-run/             # Message container state
+│   ├── agent-runner-src/    # Agent-runner source (recompiled on startup)
+│   ├── mcp-servers/         # Container-side MCP config
+│   └── .claude/             # Claude SDK sessions (preserved for continuity)
+└── task-run/                # Task container state (wiped before each isolated run)
+    ├── agent-runner-src/
+    ├── mcp-servers/
+    └── .claude/
+```
 
 > **Important:** `agent-runner-src/` is only created once per group and never auto-updated. After changing any code in `container/agent-runner/src/`, you **must** delete the stale copies or they will shadow your changes:
 >
 > ```bash
-> rm -rf data/sessions/*/agent-runner-src/
+> rm -rf data/sessions/*/task-run/agent-runner-src data/sessions/*/message-run/agent-runner-src/
 > ```
 >
 > Then restart nanoclaw. The fresh source will be copied on the next container spawn.
@@ -320,17 +328,23 @@ Every agent invocation spawns an isolated container:
 
 Each group has two independent container slots:
 
-- **Message slot** — for user-initiated messages; uses `.claude/` for session continuity across conversations
-- **Task slot** — for scheduled tasks; uses `.claude-task/` which is wiped before each isolated task run
+- **Message slot** — for user-initiated messages; uses `message-run/` for all per-container state, with `.claude/` preserved across runs for session continuity
+- **Task slot** — for scheduled tasks; uses `task-run/` for all per-container state, wiped entirely before each isolated task run to guarantee clean state
 
 Message and task containers run **concurrently** — a scheduled task never blocks a user message, and vice versa. Both count toward the global `MAX_CONCURRENT_CONTAINERS` limit. Tasks queue behind other tasks; messages queue behind other messages.
+
+### Concurrency invariant — one task container per group
+
+**IMPORTANT:** The current design assumes at most **one task container per group** at any time. The `task-run/` directory is shared by all task runs for a group and is wiped (`rm -rf`) before each isolated run. This is safe only because the `GroupQueue` serialises task execution per group — the next task cannot start until the previous task's container has fully exited.
+
+If concurrent task containers per group are ever needed, the `task-run/` directory model must be replaced with **per-run unique directories** (e.g. `task-run-{taskId}-{timestamp}/`) with cleanup after the container exits rather than before the next one starts. Without this change, concurrent tasks would wipe each other's mounted directories mid-execution.
 
 ### Stale Build Cache
 
 After rebuilding the container image, always delete stale `agent-runner-src` copies:
 
 ```bash
-rm -rf data/sessions/*/agent-runner-src
+rm -rf data/sessions/*/task-run/agent-runner-src data/sessions/*/message-run/agent-runner-src
 ```
 
 Then restart the service. Otherwise containers may run old code.
