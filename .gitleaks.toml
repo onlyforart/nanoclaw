@@ -45,6 +45,10 @@ description = "Slack channel ID (real, not test fixtures)"
 regex = '''(?:^|[^A-Z0-9_])C0[A-Z0-9]{7,10}(?:[^A-Z0-9_]|$)'''
 tags = ["pii", "slack"]
 
+# Installation-specific rules (e.g. proprietary identifiers) go in
+# .gitleaks-local.toml (gitignored). The pre-commit hook uses the local
+# file if present, which extends this one via [extend] path.
+
 # Global allowlist — paths and patterns that are safe to skip
 [allowlist]
 paths = [

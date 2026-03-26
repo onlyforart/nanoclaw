@@ -175,7 +175,7 @@ Rationale:
 
 ```bash
 ./container/build.sh
-rm -rf data/sessions/*/agent-runner-src  # Clear stale copies
+rm -rf data/sessions/*/task-run/agent-runner-src data/sessions/*/message-run/agent-runner-src  # Clear stale copies
 ```
 
 No Dockerfile changes needed — the `ollama` dependency is picked up by `npm install`.

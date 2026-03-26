@@ -25,17 +25,27 @@ Type `/setup` when Claude Code starts inside the sandbox.
 
 ## What This Fork Adds
 
-Compared to upstream `main`, this fork includes:
+### Merged from upstream skill branches
+
+These features are delivered as upstream NanoClaw skill branches and merged into this fork:
 
 - **Slack channel** (merged from `slack` remote)
 - **WhatsApp channel** (merged from `whatsapp` remote)
-- **External MCP server support** — domain-specific tools loaded from `data/mcp-servers.json`, mounted into containers at runtime
+- **Web UI task management** — create, edit, and delete scheduled tasks from the browser; tab persistence via URL hash; flexible "once" schedule dates (merged from `skill/web-ui`)
+
+### Fork-specific additions
+
+These features are unique to this fork:
+
+- **External MCP server support** — domain-specific tools loaded from `data/mcp-servers.json`, mounted into containers at runtime. Supports both stdio and remote HTTP servers.
+- **Reset scripts** — YAML-defined multi-step restart procedures in `data/reset-scripts/`, executed via the `run_reset_script` MCP tool. Handles ordering, readiness waits, and failure recovery.
 - **Ollama integration** — local model inference with full MCP tool-calling, plus direct mode that bypasses Claude entirely (see below)
 - **Per-task and per-group model selection** with configurable tool-round limits and timeouts
 - **Per-task timezone support**
 - **Credential proxy rate limiting**
 - **Agent teams disabled** (to reduce token usage)
-- **Web UI task management** — create, edit, and delete scheduled tasks from the browser; tab persistence via URL hash; flexible "once" schedule dates
+- **Dual container slots** — message and task containers run independently per group; tasks never block user messages
+- **Task session isolation** — isolated tasks use a separate `.claude-task/` directory, wiped before each run, preventing stale session file accumulation
 - **Temperature and context mode** — configurable per-group temperature for Ollama models; editable context mode in the UI
 
 ## Where Things Live
@@ -89,16 +99,24 @@ These are the primary place to look when debugging a specific agent invocation. 
 
 ### Per-Session Runtime State
 
-Each group's container session generates runtime state under `data/sessions/{groupName}/`:
+Each group's container session generates runtime state under `data/sessions/{groupName}/`. Message and task containers use separate subdirectories to prevent race conditions:
 
-- `agent-runner-src/` — per-group copy of the agent-runner TypeScript source, recompiled on each container startup
-- `mcp-servers/config.json` — container-side MCP server configuration (pre-resolved paths, no host paths)
-- `.claude/` — Claude Code project state and backups
+```
+data/sessions/{groupName}/
+├── message-run/             # Message container state
+│   ├── agent-runner-src/    # Agent-runner source (recompiled on startup)
+│   ├── mcp-servers/         # Container-side MCP config
+│   └── .claude/             # Claude SDK sessions (preserved for continuity)
+└── task-run/                # Task container state (wiped before each isolated run)
+    ├── agent-runner-src/
+    ├── mcp-servers/
+    └── .claude/
+```
 
 > **Important:** `agent-runner-src/` is only created once per group and never auto-updated. After changing any code in `container/agent-runner/src/`, you **must** delete the stale copies or they will shadow your changes:
 >
 > ```bash
-> rm -rf data/sessions/*/agent-runner-src/
+> rm -rf data/sessions/*/task-run/agent-runner-src data/sessions/*/message-run/agent-runner-src/
 > ```
 >
 > Then restart nanoclaw. The fresh source will be copied on the next container spawn.
@@ -276,6 +294,26 @@ Domain-specific tools are defined in `data/mcp-servers.json`. Each entry specifi
 
 The container-side config (generated at `data/sessions/{group}/mcp-servers/config.json`) strips `hostPath` and pre-resolves environment variables.
 
+## Reset Scripts
+
+Multi-step restart procedures are defined as YAML files in `data/reset-scripts/`, organised by cluster:
+
+```
+data/reset-scripts/
+├── staging/
+│   ├── perps-mdv.yaml
+│   └── md-perps.yaml
+├── prod1/
+│   ├── perps-mdv.yaml
+│   └── md-perpld.yaml
+└── prod2/
+    └── md-perpld.yaml
+```
+
+These scripts are loaded by the `eks-kubectl` MCP server at startup (via the `RESET_SCRIPTS_DIR` environment variable on the `eks-kubectl-mcp` systemd unit). They provide `list_reset_scripts` and `run_reset_script` tools that handle restart ordering, readiness waits, and failure recovery in a single tool call.
+
+Scripts use the [k8s-restart-scripts](../reset-language/) YAML format. The cluster is inferred from the directory name (e.g. `staging/` → cluster `staging`).
+
 ## Container System
 
 Every agent invocation spawns an isolated container:
@@ -286,12 +324,27 @@ Every agent invocation spawns an isolated container:
 - **Concurrency:** max 5 simultaneous containers (configurable via `MAX_CONCURRENT_CONTAINERS`)
 - **Security:** non-root user, read-only project mount, credential proxy for API access
 
+### Dual container slots
+
+Each group has two independent container slots:
+
+- **Message slot** — for user-initiated messages; uses `message-run/` for all per-container state, with `.claude/` preserved across runs for session continuity
+- **Task slot** — for scheduled tasks; uses `task-run/` for all per-container state, wiped entirely before each isolated task run to guarantee clean state
+
+Message and task containers run **concurrently** — a scheduled task never blocks a user message, and vice versa. Both count toward the global `MAX_CONCURRENT_CONTAINERS` limit. Tasks queue behind other tasks; messages queue behind other messages.
+
+### Concurrency invariant — one task container per group
+
+**IMPORTANT:** The current design assumes at most **one task container per group** at any time. The `task-run/` directory is shared by all task runs for a group and is wiped (`rm -rf`) before each isolated run. This is safe only because the `GroupQueue` serialises task execution per group — the next task cannot start until the previous task's container has fully exited.
+
+If concurrent task containers per group are ever needed, the `task-run/` directory model must be replaced with **per-run unique directories** (e.g. `task-run-{taskId}-{timestamp}/`) with cleanup after the container exits rather than before the next one starts. Without this change, concurrent tasks would wipe each other's mounted directories mid-execution.
+
 ### Stale Build Cache
 
 After rebuilding the container image, always delete stale `agent-runner-src` copies:
 
 ```bash
-rm -rf data/sessions/*/agent-runner-src
+rm -rf data/sessions/*/task-run/agent-runner-src data/sessions/*/message-run/agent-runner-src
 ```
 
 Then restart the service. Otherwise containers may run old code.
