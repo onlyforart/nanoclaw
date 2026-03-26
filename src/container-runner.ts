@@ -30,6 +30,15 @@ import { detectAuthMode } from './credential-proxy.js';
 import { isOllamaModel } from './connection-profiles.js';
 import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
+import {
+  classifyServerEntry,
+  ContainerServerEntry,
+  discoverRemoteToolSchemas,
+  resolveRemoteSkillContent,
+  resolveTools,
+  rewriteUrlForContainer,
+  type ToolsDef,
+} from './remote-mcp.js';
 import { RegisteredGroup } from './types.js';
 
 // Sentinel markers for robust output parsing (must match agent-runner)
@@ -342,112 +351,179 @@ async function buildVolumeMounts(
       );
       fs.mkdirSync(containerMcpDir, { recursive: true });
 
-      const containerServers: Record<
-        string,
-        {
-          command: string;
-          args: string[];
-          tools: string[];
-          env?: Record<string, string>;
-          skill?: string;
-          toolSchemas?: Array<{
-            name: string;
-            description?: string;
-            inputSchema: unknown;
-          }>;
-        }
-      > = {};
+      const containerServers: Record<string, ContainerServerEntry> = {};
       for (const [name, srv] of Object.entries(mcpConfig.servers || {})) {
-        const server = srv as {
-          hostPath: string;
-          command: string;
-          args: string[];
-          tools: string[];
-          env?: string[];
-          awsAuth?: boolean;
-          skill?: string;
-        };
-        const resolvedHostPath = path.resolve(server.hostPath);
-        if (!fs.existsSync(resolvedHostPath)) {
-          logger.warn(
-            { server: name, path: resolvedHostPath },
-            'MCP server path not found, skipping',
+        const entry = srv as Record<string, unknown>;
+        const entryType = classifyServerEntry(entry);
+
+        if (entryType === 'invalid-both') {
+          logger.error(
+            { server: name },
+            'MCP server entry has both url and hostPath, skipping',
           );
           continue;
         }
-        const containerPath = `/workspace/mcp-servers/${name}`;
-        mounts.push({
-          hostPath: resolvedHostPath,
-          containerPath,
-          readonly: true,
-        });
-        // Mount host ~/.aws/ read-only so the MCP server can use AWS credentials
-        if (server.awsAuth) {
-          const awsDir = path.join(os.homedir(), '.aws');
-          if (fs.existsSync(awsDir)) {
-            mounts.push({
-              hostPath: awsDir,
-              containerPath: '/home/node/.aws',
-              readonly: true,
-            });
-          } else {
-            logger.warn(
-              { server: name },
-              'awsAuth enabled but ~/.aws/ not found on host',
-            );
-          }
-        }
-        // Resolve whitelisted env vars from .env file
-        const resolvedEnv: Record<string, string> = {};
-        if (server.env) {
-          const envValues = readEnvFile(server.env);
-          for (const varName of server.env) {
-            if (envValues[varName]) {
-              resolvedEnv[varName] = envValues[varName];
-            } else {
-              logger.warn(
-                { server: name, envVar: varName },
-                'Whitelisted env var not found in .env, skipping',
-              );
-            }
-          }
+        if (entryType === 'invalid-neither') {
+          logger.error(
+            { server: name },
+            'MCP server entry has neither url nor hostPath, skipping',
+          );
+          continue;
         }
 
-        // Discover tool schemas by briefly spawning the server on the host
+        // Discover tool schemas (shared across both types)
         let toolSchemas: Array<{
           name: string;
           description?: string;
           inputSchema: unknown;
         }> = [];
-        try {
-          toolSchemas = await discoverToolSchemas(
-            server.command,
-            server.args,
-            resolvedHostPath,
-            resolvedEnv,
-          );
-          if (toolSchemas.length > 0) {
-            logger.info(
-              { server: name, tools: toolSchemas.map((t) => t.name) },
-              'Discovered MCP tool schemas',
+
+        if (entryType === 'remote') {
+          // --- Remote MCP server ---
+          const server = entry as {
+            url: string;
+            tools: ToolsDef;
+            readOnly?: boolean;
+            headers?: Record<string, string>;
+            skill?: string;
+          };
+
+          // Discover schemas over HTTP
+          try {
+            toolSchemas = await discoverRemoteToolSchemas(
+              server.url,
+              server.headers,
+            );
+            if (toolSchemas.length > 0) {
+              logger.info(
+                { server: name, tools: toolSchemas.map((t) => t.name) },
+                'Discovered remote MCP tool schemas',
+              );
+            }
+          } catch (err) {
+            logger.warn(
+              { server: name, err },
+              'Failed to discover remote tool schemas',
             );
           }
-        } catch (err) {
-          logger.warn({ server: name, err }, 'Failed to discover tool schemas');
-        }
 
-        containerServers[name] = {
-          command: server.command,
-          args: server.args.map((a) =>
-            a
-              .replace(/^\.\//, `${containerPath}/`)
-              .replace(/^build\//, `${containerPath}/build/`),
-          ),
-          tools: server.tools || [],
-          ...(Object.keys(resolvedEnv).length > 0 && { env: resolvedEnv }),
-          ...(server.skill && { skill: server.skill }),
-          ...(toolSchemas.length > 0 && { toolSchemas }),
-        };
+          const resolvedTools = resolveTools(
+            server.tools,
+            server.readOnly,
+          );
+
+          // Filter discovered schemas to only allowed tools
+          const filteredSchemas = toolSchemas.filter((s) =>
+            resolvedTools.includes(s.name),
+          );
+
+          // Resolve skill content (inlined, not file path)
+          const skillContent = resolveRemoteSkillContent(
+            name,
+            server.skill,
+          );
+
+          containerServers[name] = {
+            type: 'http',
+            url: rewriteUrlForContainer(server.url),
+            tools: resolvedTools,
+            ...(server.headers && { headers: server.headers }),
+            ...(skillContent && { skillContent }),
+            ...(filteredSchemas.length > 0 && {
+              toolSchemas: filteredSchemas,
+            }),
+          };
+        } else {
+          // --- Stdio MCP server (existing behavior) ---
+          const server = entry as {
+            hostPath: string;
+            command: string;
+            args: string[];
+            tools: string[];
+            env?: string[];
+            awsAuth?: boolean;
+            skill?: string;
+          };
+          const resolvedHostPath = path.resolve(server.hostPath);
+          if (!fs.existsSync(resolvedHostPath)) {
+            logger.warn(
+              { server: name, path: resolvedHostPath },
+              'MCP server path not found, skipping',
+            );
+            continue;
+          }
+          const containerPath = `/workspace/mcp-servers/${name}`;
+          mounts.push({
+            hostPath: resolvedHostPath,
+            containerPath,
+            readonly: true,
+          });
+          // Mount host ~/.aws/ read-only so the MCP server can use AWS credentials
+          if (server.awsAuth) {
+            const awsDir = path.join(os.homedir(), '.aws');
+            if (fs.existsSync(awsDir)) {
+              mounts.push({
+                hostPath: awsDir,
+                containerPath: '/home/node/.aws',
+                readonly: true,
+              });
+            } else {
+              logger.warn(
+                { server: name },
+                'awsAuth enabled but ~/.aws/ not found on host',
+              );
+            }
+          }
+          // Resolve whitelisted env vars from .env file
+          const resolvedEnv: Record<string, string> = {};
+          if (server.env) {
+            const envValues = readEnvFile(server.env);
+            for (const varName of server.env) {
+              if (envValues[varName]) {
+                resolvedEnv[varName] = envValues[varName];
+              } else {
+                logger.warn(
+                  { server: name, envVar: varName },
+                  'Whitelisted env var not found in .env, skipping',
+                );
+              }
+            }
+          }
+
+          // Discover tool schemas by briefly spawning the server on the host
+          try {
+            toolSchemas = await discoverToolSchemas(
+              server.command,
+              server.args,
+              resolvedHostPath,
+              resolvedEnv,
+            );
+            if (toolSchemas.length > 0) {
+              logger.info(
+                { server: name, tools: toolSchemas.map((t) => t.name) },
+                'Discovered MCP tool schemas',
+              );
+            }
+          } catch (err) {
+            logger.warn(
+              { server: name, err },
+              'Failed to discover tool schemas',
+            );
+          }
+
+          containerServers[name] = {
+            command: server.command,
+            args: server.args.map((a) =>
+              a
+                .replace(/^\.\//, `${containerPath}/`)
+                .replace(/^build\//, `${containerPath}/build/`),
+            ),
+            tools: server.tools || [],
+            ...(Object.keys(resolvedEnv).length > 0 && { env: resolvedEnv }),
+            ...(server.skill && { skill: server.skill }),
+            ...(toolSchemas.length > 0 && { toolSchemas }),
+          };
+        }
       }
 
       if (Object.keys(containerServers).length > 0) {

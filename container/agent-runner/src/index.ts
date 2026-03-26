@@ -409,23 +409,49 @@ async function runQuery(
   }
 
   // Discover additional MCP servers from host-mounted config
-  const additionalMcpServers: Record<string, { command: string; args: string[]; env?: Record<string, string> }> = {};
+  const additionalMcpServers: Record<string,
+    | { command: string; args: string[]; env?: Record<string, string> }
+    | { type: 'http'; url: string; headers?: Record<string, string> }
+  > = {};
   const additionalMcpTools: string[] = [];
   const mcpConfigPath = '/workspace/mcp-servers-config/config.json';
   if (fs.existsSync(mcpConfigPath)) {
     try {
       const mcpConfig = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf-8'));
       for (const [name, srv] of Object.entries(mcpConfig)) {
-        const server = srv as { command: string; args: string[]; tools: string[]; env?: Record<string, string> };
-        additionalMcpServers[name] = {
-          command: server.command,
-          args: server.args,
-          ...(server.env && { env: server.env }),
+        const server = srv as {
+          type?: 'http';
+          url?: string;
+          headers?: Record<string, string>;
+          command?: string;
+          args?: string[];
+          tools?: string[];
+          env?: Record<string, string>;
         };
+
+        if (server.type === 'http' && server.url) {
+          // Remote MCP server — pass to SDK as HTTP type
+          additionalMcpServers[name] = {
+            type: 'http',
+            url: server.url,
+            ...(server.headers && { headers: server.headers }),
+          };
+        } else if (server.command) {
+          // Stdio MCP server — existing behavior
+          additionalMcpServers[name] = {
+            command: server.command,
+            args: server.args || [],
+            ...(server.env && { env: server.env }),
+          };
+        } else {
+          log(`Skipping MCP server ${name}: no command or url`);
+          continue;
+        }
+
         for (const tool of server.tools || []) {
           additionalMcpTools.push(`mcp__${name}__${tool}`);
         }
-        log(`Loaded external MCP server: ${name} (${server.tools?.length || 0} tools)`);
+        log(`Loaded external MCP server: ${name} (${server.tools?.length || 0} tools, type: ${server.type || 'stdio'})`);
       }
     } catch (err) {
       log(`Failed to load MCP servers config: ${err instanceof Error ? err.message : String(err)}`);
@@ -660,7 +686,16 @@ async function runOllamaDirectMode(containerInput: ContainerInput): Promise<void
   // keeping the initial context small.
   const serverSkills = new Map<string, string>();
   for (const [name, config] of Object.entries(mcpConfig)) {
-    const cfg = config as { skill?: string };
+    const cfg = config as { skill?: string; skillContent?: string };
+
+    // Remote servers: use pre-assembled skillContent from container config
+    if (cfg.skillContent) {
+      serverSkills.set(name, cfg.skillContent);
+      log(`Loaded inline skill for ${name} (${cfg.skillContent.length} chars)`);
+      continue;
+    }
+
+    // Stdio servers: existing file-based resolution
     if (!cfg.skill) continue;
     const candidates = [
       `/workspace/mcp-servers/${name}/${cfg.skill}`,

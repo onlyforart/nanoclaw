@@ -14,24 +14,38 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => {
   return { Client: MockClient };
 });
 
-const transportInstances: Array<{ command: string; args: string[]; env?: Record<string, string> }> = [];
+const stdioTransportInstances: Array<{ command: string; args: string[]; env?: Record<string, string> }> = [];
+const httpTransportInstances: Array<{ url: URL; opts?: unknown }> = [];
 
 vi.mock('@modelcontextprotocol/sdk/client/stdio.js', () => {
   class MockStdioClientTransport {
     constructor(opts: { command: string; args: string[]; env?: Record<string, string> }) {
-      transportInstances.push(opts);
+      stdioTransportInstances.push(opts);
     }
   }
   return { StdioClientTransport: MockStdioClientTransport };
 });
 
+vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => {
+  class MockStreamableHTTPClientTransport {
+    constructor(url: URL, opts?: unknown) {
+      httpTransportInstances.push({ url, opts });
+    }
+  }
+  return { StreamableHTTPClientTransport: MockStreamableHTTPClientTransport };
+});
+
 import { McpToolExecutor, McpServerConfig } from './mcp-tool-executor.js';
+
+// Keep backward-compat alias for existing tests
+const transportInstances = stdioTransportInstances;
 
 beforeEach(() => {
   mockConnect.mockReset();
   mockCallTool.mockReset();
   mockClose.mockReset();
-  transportInstances.length = 0;
+  stdioTransportInstances.length = 0;
+  httpTransportInstances.length = 0;
 });
 
 function sampleConfig(): Record<string, McpServerConfig> {
@@ -187,6 +201,131 @@ describe('McpToolExecutor', () => {
     it('closes all connected servers', async () => {
       const executor = new McpToolExecutor();
       await executor.initialize(sampleConfig());
+
+      await executor.close();
+      expect(mockClose).toHaveBeenCalled();
+    });
+  });
+
+  describe('HTTP transport (remote MCP servers)', () => {
+    function httpConfig(): Record<string, McpServerConfig> {
+      return {
+        mongodb: {
+          type: 'http',
+          url: 'http://host.docker.internal:3200/mcp',
+          tools: ['find', 'aggregate'],
+          toolSchemas: [
+            {
+              name: 'find',
+              description: 'Run a find query',
+              inputSchema: { type: 'object', properties: { collection: { type: 'string' } } },
+            },
+            {
+              name: 'aggregate',
+              description: 'Run an aggregation pipeline',
+              inputSchema: { type: 'object', properties: { pipeline: { type: 'array' } } },
+            },
+          ],
+        },
+      };
+    }
+
+    it('creates StreamableHTTPClientTransport for type:http entries', async () => {
+      const executor = new McpToolExecutor();
+      await executor.initialize(httpConfig());
+
+      expect(httpTransportInstances).toHaveLength(1);
+      expect(httpTransportInstances[0].url.toString()).toBe(
+        'http://host.docker.internal:3200/mcp',
+      );
+      expect(stdioTransportInstances).toHaveLength(0);
+      expect(mockConnect).toHaveBeenCalled();
+    });
+
+    it('passes headers to HTTP transport', async () => {
+      const config: Record<string, McpServerConfig> = {
+        mongodb: {
+          type: 'http',
+          url: 'http://host.docker.internal:3200/mcp',
+          tools: ['find'],
+          headers: { 'X-NanoClaw-Group': 'main' },
+          toolSchemas: [
+            { name: 'find', description: 'Find', inputSchema: {} },
+          ],
+        },
+      };
+
+      const executor = new McpToolExecutor();
+      await executor.initialize(config);
+
+      expect(httpTransportInstances).toHaveLength(1);
+      const opts = httpTransportInstances[0].opts as { requestInit?: { headers?: Record<string, string> } };
+      expect(opts?.requestInit?.headers).toEqual({ 'X-NanoClaw-Group': 'main' });
+    });
+
+    it('builds Ollama tool schemas from HTTP server config', async () => {
+      const executor = new McpToolExecutor();
+      await executor.initialize(httpConfig());
+
+      const tools = executor.getOllamaTools();
+      expect(tools).toHaveLength(2);
+      expect(tools[0].function.name).toBe('mongodb__find');
+      expect(tools[1].function.name).toBe('mongodb__aggregate');
+    });
+
+    it('routes tool calls to HTTP-connected server', async () => {
+      mockCallTool.mockResolvedValue({
+        content: [{ type: 'text', text: '{"_id": "test"}' }],
+      });
+
+      const executor = new McpToolExecutor();
+      await executor.initialize(httpConfig());
+
+      const result = await executor.callTool('mcp__mongodb__find', {
+        collection: 'users',
+      });
+
+      expect(mockCallTool).toHaveBeenCalledWith({
+        name: 'find',
+        arguments: { collection: 'users' },
+      });
+      expect(result).toBe('{"_id": "test"}');
+    });
+
+    it('handles mixed stdio and HTTP servers', async () => {
+      const mixedConfig: Record<string, McpServerConfig> = {
+        ...sampleConfig(),
+        ...httpConfig(),
+      };
+
+      const executor = new McpToolExecutor();
+      await executor.initialize(mixedConfig);
+
+      expect(stdioTransportInstances).toHaveLength(1);
+      expect(httpTransportInstances).toHaveLength(1);
+
+      const tools = executor.getOllamaTools();
+      expect(tools).toHaveLength(4); // 2 stdio + 2 http
+    });
+
+    it('skips entry with no command and no url', async () => {
+      const config: Record<string, McpServerConfig> = {
+        broken: {
+          tools: ['something'],
+          toolSchemas: [],
+        } as McpServerConfig,
+      };
+
+      const executor = new McpToolExecutor();
+      await executor.initialize(config);
+
+      expect(stdioTransportInstances).toHaveLength(0);
+      expect(httpTransportInstances).toHaveLength(0);
+    });
+
+    it('close works for HTTP servers', async () => {
+      const executor = new McpToolExecutor();
+      await executor.initialize(httpConfig());
 
       await executor.close();
       expect(mockClose).toHaveBeenCalled();

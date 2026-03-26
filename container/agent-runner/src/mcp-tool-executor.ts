@@ -10,13 +10,22 @@
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import {
+  StreamableHTTPClientTransport,
+} from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Tool } from 'ollama';
 
 export interface McpServerConfig {
-  command: string;
-  args: string[];
-  tools: string[];
+  // Stdio (existing)
+  command?: string;
+  args?: string[];
   env?: Record<string, string>;
+  // HTTP (new — remote MCP servers)
+  type?: 'http';
+  url?: string;
+  headers?: Record<string, string>;
+  // Common
+  tools: string[];
   toolSchemas?: Array<{
     name: string;
     description?: string;
@@ -26,8 +35,9 @@ export interface McpServerConfig {
 
 interface ConnectedServer {
   client: Client;
-  transport: StdioClientTransport;
+  transport: StdioClientTransport | StreamableHTTPClientTransport;
   tools: string[];
+  transportType: 'stdio' | 'http';
 }
 
 function log(msg: string): void {
@@ -53,17 +63,37 @@ export class McpToolExecutor {
   ): Promise<void> {
     for (const [name, config] of Object.entries(mcpConfig)) {
       try {
-        const env: Record<string, string> = {
-          ...process.env as Record<string, string>,
-          ...(config.env || {}),
-          ...(extraEnv || {}),
-        };
+        let transport: StdioClientTransport | StreamableHTTPClientTransport;
+        let transportType: 'stdio' | 'http';
 
-        const transport = new StdioClientTransport({
-          command: config.command,
-          args: config.args,
-          env,
-        });
+        if (config.type === 'http' && config.url) {
+          // Remote MCP server — connect over HTTP
+          transport = new StreamableHTTPClientTransport(
+            new URL(config.url),
+            {
+              requestInit: config.headers
+                ? { headers: config.headers }
+                : undefined,
+            },
+          );
+          transportType = 'http';
+        } else if (config.command) {
+          // Stdio MCP server — spawn child process
+          const env: Record<string, string> = {
+            ...process.env as Record<string, string>,
+            ...(config.env || {}),
+            ...(extraEnv || {}),
+          };
+          transport = new StdioClientTransport({
+            command: config.command,
+            args: config.args || [],
+            env,
+          });
+          transportType = 'stdio';
+        } else {
+          log(`Skipping MCP server ${name}: no command or url`);
+          continue;
+        }
 
         const client = new Client({
           name: `nanoclaw-ollama-${name}`,
@@ -72,7 +102,12 @@ export class McpToolExecutor {
 
         await client.connect(transport);
 
-        this.servers.set(name, { client, transport, tools: config.tools });
+        this.servers.set(name, {
+          client,
+          transport,
+          tools: config.tools,
+          transportType,
+        });
 
         // Register tool mappings
         for (const toolName of config.tools) {
