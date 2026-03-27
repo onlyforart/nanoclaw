@@ -180,6 +180,14 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  try {
+    database.exec(
+      `ALTER TABLE registered_groups ADD COLUMN show_thinking INTEGER DEFAULT NULL`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
   // Add per-task configurable limits (Ollama direct mode)
   try {
     database.exec(
@@ -702,8 +710,8 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
     throw new Error(`Invalid group folder "${group.folder}" for JID ${jid}`);
   }
   db.prepare(
-    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main, model, temperature, max_tool_rounds, timeout_ms)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main, model, temperature, max_tool_rounds, timeout_ms, show_thinking)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     jid,
     group.name,
@@ -717,6 +725,7 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
     group.temperature ?? null,
     group.maxToolRounds ?? null,
     group.timeoutMs ?? null,
+    group.showThinking ? 1 : null,
   );
 }
 
@@ -734,6 +743,7 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
     temperature: number | null;
     max_tool_rounds: number | null;
     timeout_ms: number | null;
+    show_thinking: number | null;
   }>;
   const result: Record<string, RegisteredGroup> = {};
   for (const row of rows) {
@@ -759,6 +769,7 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
       temperature: row.temperature ?? undefined,
       maxToolRounds: row.max_tool_rounds ?? undefined,
       timeoutMs: row.timeout_ms ?? undefined,
+      showThinking: row.show_thinking === 1 ? true : undefined,
     };
   }
   return result;
@@ -769,7 +780,7 @@ export function updateRegisteredGroup(
   updates: Partial<
     Pick<
       RegisteredGroup,
-      'model' | 'temperature' | 'maxToolRounds' | 'timeoutMs'
+      'model' | 'temperature' | 'maxToolRounds' | 'timeoutMs' | 'showThinking'
     >
   >,
 ): void {
@@ -791,6 +802,10 @@ export function updateRegisteredGroup(
   if (updates.timeoutMs !== undefined) {
     fields.push('timeout_ms = ?');
     values.push(updates.timeoutMs ?? null);
+  }
+  if (updates.showThinking !== undefined) {
+    fields.push('show_thinking = ?');
+    values.push(updates.showThinking ? 1 : null);
   }
 
   if (fields.length === 0) return;

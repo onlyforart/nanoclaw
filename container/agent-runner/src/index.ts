@@ -36,6 +36,7 @@ interface ContainerInput {
   temperature?: number;
   maxToolRounds?: number;
   timeoutMs?: number;
+  showThinking?: boolean;
 }
 
 interface ContainerOutput {
@@ -742,6 +743,10 @@ async function runOllamaDirectMode(containerInput: ContainerInput): Promise<void
         tools: executor.getOllamaTools(),
         toolNameMap: executor.getToolNameMap(),
         executeTool: (name, args) => executor.callTool(name, args),
+        onThinking: containerInput.showThinking ? (thinking) => {
+          const quoted = thinking.split('\n').map((l) => `> ${l}`).join('\n');
+          writeIpcNotification(containerInput.chatJid, containerInput.groupFolder, quoted);
+        } : undefined,
         serverSkills,
       });
 

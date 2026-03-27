@@ -22,6 +22,8 @@ export interface OllamaChatOptions {
   executeTool: (mcpToolName: string, args: Record<string, unknown>) => Promise<string>;
   /** Called with status updates (e.g. "Calling model...", "Executing tool X...") */
   onStatus?: (status: string) => void;
+  /** Called with thinking content from reasoning models (e.g. deepseek). Fires each round. */
+  onThinking?: (thinking: string) => void;
   /** Server skill content to inject lazily on first tool call from each server */
   serverSkills?: Map<string, string>;
 }
@@ -86,6 +88,7 @@ export async function runOllamaChat(
     toolNameMap,
     executeTool,
     onStatus,
+    onThinking,
     serverSkills,
   } = options;
 
@@ -139,6 +142,9 @@ export async function runOllamaChat(
   let repeatToolResult = '';
   let repeatCount = 0;
 
+  // Accumulate thinking across all rounds (for thinking models like deepseek)
+  const allThinking: string[] = [];
+
   while (true) {
     // Check timeout
     if (Date.now() - startTime > timeoutMs) {
@@ -184,10 +190,14 @@ export async function runOllamaChat(
     });
 
     let content = '';
+    let thinking = '';
     let toolCalls: Array<{ function: { name: string; arguments: Record<string, unknown> } }> = [];
     for await (const chunk of stream) {
       if (chunk.message.content) {
         content += chunk.message.content;
+      }
+      if ((chunk.message as { thinking?: string }).thinking) {
+        thinking += (chunk.message as { thinking?: string }).thinking;
       }
       if (chunk.message.tool_calls?.length) {
         toolCalls = chunk.message.tool_calls;
@@ -195,6 +205,27 @@ export async function runOllamaChat(
     }
     const inferenceMs = Date.now() - inferenceStart;
     log(`  Model inference: ${(inferenceMs / 1000).toFixed(1)}s`);
+    if (thinking) {
+      allThinking.push(thinking);
+      const MAX_THINKING_LOG = 2000;
+      const truncated = thinking.length > MAX_THINKING_LOG
+        ? thinking.slice(0, MAX_THINKING_LOG) + '... [truncated]'
+        : thinking;
+      log(`  Thinking: ${truncated}`);
+      onThinking?.(thinking);
+    }
+    if (content && toolCalls.length > 0) {
+      log(`  Assistant content with tool call: ${content.slice(0, 500)}`);
+    }
+
+    // For thinking models (e.g. deepseek), if the model returned thinking
+    // but no content AND no tool calls, use the thinking as the final response.
+    // Do NOT inject thinking into the conversation history when tool calls are
+    // present — it corrupts the message flow and causes empty subsequent rounds.
+    if (!content && thinking && toolCalls.length === 0) {
+      content = thinking;
+      log(`  [using thinking as content (model returned empty content)]`);
+    }
 
     const response = {
       message: {

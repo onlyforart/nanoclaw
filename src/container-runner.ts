@@ -63,6 +63,7 @@ export interface ContainerInput {
   temperature?: number;
   maxToolRounds?: number;
   timeoutMs?: number;
+  showThinking?: boolean;
 }
 
 export interface ContainerOutput {

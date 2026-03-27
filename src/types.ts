@@ -44,6 +44,7 @@ export interface RegisteredGroup {
   temperature?: number; // Sampling temperature (0.0–2.0). Ollama only. NULL = use model default.
   maxToolRounds?: number; // Max tool-calling rounds. NULL = use backend default.
   timeoutMs?: number; // Per-invocation timeout in ms. NULL = use backend default.
+  showThinking?: boolean; // Send thinking/reasoning to channel. Ollama only. Default: false.
 }
 
 export interface NewMessage {

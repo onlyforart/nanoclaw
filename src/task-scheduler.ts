@@ -192,6 +192,7 @@ async function runTask(
             : null) ?? group.temperature,
         maxToolRounds: task.maxToolRounds ?? group.maxToolRounds,
         timeoutMs: task.timeoutMs ?? group.timeoutMs,
+        showThinking: group.showThinking,
       },
       (proc, containerName) =>
         deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),

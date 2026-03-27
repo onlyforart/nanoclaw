@@ -19,7 +19,7 @@ beforeEach(() => {
 });
 
 /** Wrap a chat response as a single-chunk async iterable (mimics stream: true) */
-function streamOf(response: { message: { role: string; content: string | null; tool_calls?: unknown[] } }) {
+function streamOf(response: { message: { role: string; content: string | null; tool_calls?: unknown[]; thinking?: string } }) {
   return {
     async *[Symbol.asyncIterator]() {
       yield response;
@@ -877,6 +877,160 @@ describe('repeated tool failure detection', () => {
     // 2 + 1 + 3 = 6 tool calls (breaks on the 3rd consecutive fetch after reset)
     expect(executeTool).toHaveBeenCalledTimes(6);
     expect(result.response).toContain('repeated');
+  });
+});
+
+describe('thinking model support', () => {
+  it('uses thinking as content when model returns empty content and no tool calls', async () => {
+    // Round 1: tool call with thinking (thinking should NOT become content)
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: {
+        role: 'assistant',
+        content: '',
+        thinking: 'Let me call the check tool first.',
+        tool_calls: [{ function: { name: 'srv__check', arguments: {} } }],
+      },
+    }));
+    // Round 2: final response with thinking but empty content, no tool calls
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: {
+        role: 'assistant',
+        content: '',
+        thinking: 'All good. The answer is: healthy.',
+      },
+    }));
+
+    const executeTool = vi.fn().mockResolvedValue('{"status":"ok"}');
+    const toolNameMap = new Map([
+      ['srv__check', { mcpTool: 'mcp__srv__check', serverName: 'srv' }],
+    ]);
+    const tools = [
+      { type: 'function' as const, function: { name: 'srv__check', description: 'Check', parameters: { type: 'object', properties: {} } } },
+    ];
+
+    const result = await runOllamaChat('check status', baseOptions({
+      tools,
+      toolNameMap,
+      executeTool,
+    }));
+
+    expect(result.response).toBe('All good. The answer is: healthy.');
+    expect(result.iterations).toBe(2);
+  });
+
+  it('does not inject thinking into content when tool calls are present', async () => {
+    // Round 1: tool call with thinking
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: {
+        role: 'assistant',
+        content: '',
+        thinking: 'I should call the tool.',
+        tool_calls: [{ function: { name: 'srv__check', arguments: {} } }],
+      },
+    }));
+    // Round 2: normal content response
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: {
+        role: 'assistant',
+        content: 'Everything is fine.',
+      },
+    }));
+
+    const executeTool = vi.fn().mockResolvedValue('ok');
+    const toolNameMap = new Map([
+      ['srv__check', { mcpTool: 'mcp__srv__check', serverName: 'srv' }],
+    ]);
+    const tools = [
+      { type: 'function' as const, function: { name: 'srv__check', description: 'Check', parameters: { type: 'object', properties: {} } } },
+    ];
+
+    const result = await runOllamaChat('check', baseOptions({
+      tools,
+      toolNameMap,
+      executeTool,
+    }));
+
+    // Round 2's content should be the response, not round 1's thinking
+    expect(result.response).toBe('Everything is fine.');
+
+    // Verify thinking was NOT injected into the assistant message sent to model in round 2
+    const round2Messages = mockChat.mock.calls[1][0].messages;
+    const assistantMsg = round2Messages.find(
+      (m: { role: string; content: string; tool_calls?: unknown[] }) =>
+        m.role === 'assistant' && m.tool_calls,
+    );
+    // The assistant message with tool_calls should have empty content, not thinking
+    expect(assistantMsg.content).toBe('');
+  });
+
+  it('calls onThinking callback each round with thinking content', async () => {
+    const onThinking = vi.fn();
+
+    // Round 1: thinking with tool call
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: {
+        role: 'assistant',
+        content: '',
+        thinking: 'Round 1 reasoning',
+        tool_calls: [{ function: { name: 'srv__check', arguments: {} } }],
+      },
+    }));
+    // Round 2: thinking with final answer
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: {
+        role: 'assistant',
+        content: '',
+        thinking: 'Round 2 reasoning with answer',
+      },
+    }));
+
+    const executeTool = vi.fn().mockResolvedValue('ok');
+    const toolNameMap = new Map([
+      ['srv__check', { mcpTool: 'mcp__srv__check', serverName: 'srv' }],
+    ]);
+    const tools = [
+      { type: 'function' as const, function: { name: 'srv__check', description: 'Check', parameters: { type: 'object', properties: {} } } },
+    ];
+
+    await runOllamaChat('check', baseOptions({
+      tools,
+      toolNameMap,
+      executeTool,
+      onThinking,
+    }));
+
+    expect(onThinking).toHaveBeenCalledTimes(2);
+    expect(onThinking).toHaveBeenCalledWith('Round 1 reasoning');
+    expect(onThinking).toHaveBeenCalledWith('Round 2 reasoning with answer');
+  });
+
+  it('does not call onThinking when model returns no thinking', async () => {
+    const onThinking = vi.fn();
+
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: { role: 'assistant', content: 'Just a normal response' },
+    }));
+
+    await runOllamaChat('hello', baseOptions({ onThinking }));
+
+    expect(onThinking).not.toHaveBeenCalled();
+  });
+
+  it('prefers content over thinking when both are present and no tool calls', async () => {
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: {
+        role: 'assistant',
+        content: 'The actual answer',
+        thinking: 'Some internal reasoning',
+      },
+    }));
+
+    const onThinking = vi.fn();
+    const result = await runOllamaChat('test', baseOptions({ onThinking }));
+
+    expect(result.response).toBe('The actual answer');
+    // Thinking callback still fires
+    expect(onThinking).toHaveBeenCalledWith('Some internal reasoning');
   });
 });
 

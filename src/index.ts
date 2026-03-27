@@ -397,6 +397,7 @@ async function runAgent(
         temperature: group.temperature,
         maxToolRounds: group.maxToolRounds,
         timeoutMs: group.timeoutMs,
+        showThinking: group.showThinking,
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
