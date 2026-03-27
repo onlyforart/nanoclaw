@@ -713,6 +713,13 @@ async function main(): Promise<void> {
   refreshAllGroupSnapshots();
   refreshAllTaskSnapshots();
 
+  // Periodically reload group settings from DB so changes made by the web UI
+  // (a separate process that writes directly to SQLite) are picked up without
+  // requiring an orchestrator restart.
+  setInterval(() => {
+    registeredGroups = getAllRegisteredGroups();
+  }, 60_000);
+
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({
     registeredGroups: () => registeredGroups,
