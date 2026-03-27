@@ -80,7 +80,7 @@ export class McpToolExecutor {
         } else if (config.command) {
           // Stdio MCP server — spawn child process.
           // Only forward safe env vars — never spread process.env wholesale.
-          const SAFE_ENV_KEYS = ['PATH', 'HOME', 'NODE_ENV', 'TZ', 'LANG', 'LC_ALL'];
+          const SAFE_ENV_KEYS = ['PATH', 'HOME', 'NODE_ENV', 'TZ', 'LANG', 'LC_ALL', 'PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH', 'AGENT_BROWSER_EXECUTABLE_PATH'];
           const env: Record<string, string> = {};
           for (const key of SAFE_ENV_KEYS) {
             if (process.env[key]) env[key] = process.env[key]!;

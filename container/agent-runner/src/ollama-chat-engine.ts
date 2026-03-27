@@ -39,23 +39,34 @@ function log(msg: string): void {
 
 /**
  * Resolve a short model name against the list of installed models.
- * Prefers exact match (before the tag), then prefix match.
+ * Prefers exact match, then prefix match on the full name (including tag).
  * Returns the original name if no match is found (Ollama will error).
+ *
+ * Examples:
+ *   "mistral"       matches "mistral-small3.2:latest"  (name prefix)
+ *   "lfm2:24b-q8"   matches "lfm2:24b-q8_0"           (full-string prefix)
+ *   "lfm2:24b-bf16"  matches "lfm2:24b-bf16"           (exact)
  */
 export function resolveOllamaModel(
   requested: string,
   installedModels: string[],
 ): string {
-  // Strip tag from installed names for matching (e.g. "mistral-small3.2:latest" -> "mistral-small3.2")
+  // 1. Exact match on full name (e.g. "lfm2:24b-bf16" === "lfm2:24b-bf16")
+  const exactFull = installedModels.find((m) => m === requested);
+  if (exactFull) return exactFull;
+
+  // 2. Exact match on name-before-tag (e.g. "lfm2" matches "lfm2:latest")
   const nameOnly = (m: string) => m.split(':')[0];
+  const exactName = installedModels.find((m) => nameOnly(m) === requested);
+  if (exactName) return exactName;
 
-  // Exact match on name part
-  const exact = installedModels.find((m) => nameOnly(m) === requested);
-  if (exact) return exact;
+  // 3. Prefix match on full string (e.g. "lfm2:24b-q8" matches "lfm2:24b-q8_0")
+  const prefixFull = installedModels.find((m) => m.startsWith(requested));
+  if (prefixFull) return prefixFull;
 
-  // Prefix match: "mistral" matches "mistral-small3.2:latest"
-  const prefix = installedModels.find((m) => nameOnly(m).startsWith(requested));
-  if (prefix) return prefix;
+  // 4. Prefix match on name part (e.g. "mistral" matches "mistral-small3.2:latest")
+  const prefixName = installedModels.find((m) => nameOnly(m).startsWith(requested));
+  if (prefixName) return prefixName;
 
   return requested;
 }

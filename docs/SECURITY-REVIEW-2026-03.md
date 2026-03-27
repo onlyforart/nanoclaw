@@ -136,11 +136,9 @@ method: req.method,
 
 ### MEDIUM — Defense-in-Depth Gaps
 
-#### M1. Hardcoded P12 Certificate Password
+#### ~~M1. Hardcoded P12 Certificate Password~~ — Not Applicable
 
-**File:** `webui/tls.ts:165,172,301`
-
-Client certificates exported with hardcoded password `"nanoclaw"`. The password is also logged in cleartext during first-run setup. Anyone with the source code or access to logs knows the extraction password.
+Passwordless P12 client certificates are used in practice (required for macOS Safari compatibility). The password-protected export path is vestigial and unused. No action needed.
 
 #### M2. MCP Server Names Not Validated for Path Traversal
 

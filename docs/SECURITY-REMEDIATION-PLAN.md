@@ -298,20 +298,9 @@ req.on('data', (chunk) => {
 
 ## Phase 3 — Medium (this month)
 
-### 3.1 P12 Certificate Password
+### ~~3.1 P12 Certificate Password~~ — Not Applicable
 
-**Finding:** M1
-**File:** `webui/tls.ts:165,172,301`
-**Effort:** Small (20 min)
-
-Generate a random password per installation and store it alongside the certificate:
-
-```typescript
-const password = crypto.randomBytes(16).toString('hex');
-fs.writeFileSync(path.join(clientDir, 'password.txt'), password, { mode: 0o600 });
-```
-
-Use this password in the `openssl pkcs12` commands. Update the setup log message to reference the password file rather than printing it inline.
+**Finding:** M1 — Withdrawn. Passwordless P12 client certificates are used in practice (required for macOS Safari compatibility). The password-protected export path is vestigial. No action needed.
 
 ---
 
@@ -585,7 +574,7 @@ Phase 2 — High (this sprint)
 [ ] 2.7  MCP auth proxy body size limit
 
 Phase 3 — Medium (this month)
-[ ] 3.1   Random P12 password per installation
+[x] 3.1   N/A — passwordless P12 required for macOS Safari
 [ ] 3.2   MCP server name validation
 [ ] 3.3   Skill file path containment
 [ ] 3.4   IPC JSON schema validation (zod)
