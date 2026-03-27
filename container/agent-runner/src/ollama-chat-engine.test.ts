@@ -235,7 +235,7 @@ describe('runOllamaChat', () => {
   });
 
   it('stops at maxIterations limit', async () => {
-    // Model keeps calling tools forever
+    // Model keeps calling tools forever (different results each time to avoid repeat detection)
     mockChat.mockResolvedValue(streamOf({
       message: {
         role: 'assistant',
@@ -246,7 +246,8 @@ describe('runOllamaChat', () => {
       },
     }));
 
-    const executeTool = vi.fn().mockResolvedValue('ok');
+    let callCount = 0;
+    const executeTool = vi.fn().mockImplementation(async () => `result-${++callCount}`);
 
     const result = await runOllamaChat('loop', baseOptions({
       maxIterations: 3,
@@ -726,6 +727,156 @@ describe('lazy skill injection', () => {
     expect(skillIdx).toBeGreaterThan(-1);
     expect(toolResultIdx).toBeGreaterThan(-1);
     expect(skillIdx).toBeLessThan(toolResultIdx);
+  });
+});
+
+describe('repeated tool failure detection', () => {
+  it('breaks out early when same tool returns same result 3 times in a row', async () => {
+    const executeTool = vi.fn().mockResolvedValue('HTTP 404 Not Found');
+    const toolNameMap = new Map([
+      ['web-fetch__web_fetch', { mcpTool: 'mcp__web-fetch__web_fetch', serverName: 'web-fetch' }],
+    ]);
+    const tools = [
+      { type: 'function' as const, function: { name: 'web-fetch__web_fetch', description: 'Fetch a URL', parameters: { type: 'object', properties: {} } } },
+    ];
+
+    // Model calls web_fetch every round with the same result
+    mockChat.mockResolvedValue(streamOf({
+      message: {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ function: { name: 'web-fetch__web_fetch', arguments: { url: 'https://example.com/foo' } } }],
+      },
+    }));
+
+    const result = await runOllamaChat('list your tools', baseOptions({
+      tools,
+      toolNameMap,
+      executeTool,
+      maxIterations: 10,
+    }));
+
+    // Should stop after 3 rounds, not 10
+    expect(executeTool).toHaveBeenCalledTimes(3);
+    expect(result.response).toContain('repeated');
+    expect(result.maxIterationsReached).toBe(false);
+  });
+
+  it('does not break when same tool returns different results each time', async () => {
+    let callNum = 0;
+    const executeTool = vi.fn().mockImplementation(async () => {
+      callNum++;
+      return `Result ${callNum}`;
+    });
+    const toolNameMap = new Map([
+      ['srv__query', { mcpTool: 'mcp__srv__query', serverName: 'srv' }],
+    ]);
+    const tools = [
+      { type: 'function' as const, function: { name: 'srv__query', description: 'Query', parameters: { type: 'object', properties: {} } } },
+    ];
+
+    // 4 rounds of tool calls with different results, then final text
+    for (let i = 0; i < 4; i++) {
+      mockChat.mockResolvedValueOnce(streamOf({
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{ function: { name: 'srv__query', arguments: {} } }],
+        },
+      }));
+    }
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: { role: 'assistant', content: 'All done.' },
+    }));
+
+    const result = await runOllamaChat('query 4 things', baseOptions({
+      tools,
+      toolNameMap,
+      executeTool,
+      maxIterations: 10,
+    }));
+
+    expect(executeTool).toHaveBeenCalledTimes(4);
+    expect(result.response).toBe('All done.');
+  });
+
+  it('does not break when different tools return the same result', async () => {
+    const executeTool = vi.fn().mockResolvedValue('HTTP 404 Not Found');
+    const toolNameMap = new Map([
+      ['srv__tool_a', { mcpTool: 'mcp__srv__tool_a', serverName: 'srv' }],
+      ['srv__tool_b', { mcpTool: 'mcp__srv__tool_b', serverName: 'srv' }],
+    ]);
+    const tools = [
+      { type: 'function' as const, function: { name: 'srv__tool_a', description: 'Tool A', parameters: { type: 'object', properties: {} } } },
+      { type: 'function' as const, function: { name: 'srv__tool_b', description: 'Tool B', parameters: { type: 'object', properties: {} } } },
+    ];
+
+    // Alternating tools with same result
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: { role: 'assistant', content: '', tool_calls: [{ function: { name: 'srv__tool_a', arguments: {} } }] },
+    }));
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: { role: 'assistant', content: '', tool_calls: [{ function: { name: 'srv__tool_b', arguments: {} } }] },
+    }));
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: { role: 'assistant', content: '', tool_calls: [{ function: { name: 'srv__tool_a', arguments: {} } }] },
+    }));
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: { role: 'assistant', content: 'Gave up.' },
+    }));
+
+    const result = await runOllamaChat('try stuff', baseOptions({
+      tools,
+      toolNameMap,
+      executeTool,
+      maxIterations: 10,
+    }));
+
+    expect(executeTool).toHaveBeenCalledTimes(3);
+    expect(result.response).toBe('Gave up.');
+  });
+
+  it('resets streak when a different tool is called mid-streak', async () => {
+    const executeTool = vi.fn().mockResolvedValue('HTTP 404 Not Found');
+    const toolNameMap = new Map([
+      ['srv__fetch', { mcpTool: 'mcp__srv__fetch', serverName: 'srv' }],
+      ['srv__other', { mcpTool: 'mcp__srv__other', serverName: 'srv' }],
+    ]);
+    const tools = [
+      { type: 'function' as const, function: { name: 'srv__fetch', description: 'Fetch', parameters: { type: 'object', properties: {} } } },
+      { type: 'function' as const, function: { name: 'srv__other', description: 'Other', parameters: { type: 'object', properties: {} } } },
+    ];
+
+    // fetch x2, then other, then fetch x3 (should trigger on the 3rd consecutive fetch)
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: { role: 'assistant', content: '', tool_calls: [{ function: { name: 'srv__fetch', arguments: {} } }] },
+    }));
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: { role: 'assistant', content: '', tool_calls: [{ function: { name: 'srv__fetch', arguments: {} } }] },
+    }));
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: { role: 'assistant', content: '', tool_calls: [{ function: { name: 'srv__other', arguments: {} } }] },
+    }));
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: { role: 'assistant', content: '', tool_calls: [{ function: { name: 'srv__fetch', arguments: {} } }] },
+    }));
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: { role: 'assistant', content: '', tool_calls: [{ function: { name: 'srv__fetch', arguments: {} } }] },
+    }));
+    mockChat.mockResolvedValueOnce(streamOf({
+      message: { role: 'assistant', content: '', tool_calls: [{ function: { name: 'srv__fetch', arguments: {} } }] },
+    }));
+
+    const result = await runOllamaChat('try stuff', baseOptions({
+      tools,
+      toolNameMap,
+      executeTool,
+      maxIterations: 10,
+    }));
+
+    // 2 + 1 + 3 = 6 tool calls (breaks on the 3rd consecutive fetch after reset)
+    expect(executeTool).toHaveBeenCalledTimes(6);
+    expect(result.response).toContain('repeated');
   });
 });
 

@@ -132,6 +132,13 @@ export async function runOllamaChat(
   let hasCalledAnyTool = false;
   let hasNudged = false;
 
+  // Repeated-failure detection: track consecutive calls to the same tool
+  // that return the same result. If this happens 3 times, the model is stuck.
+  const REPEAT_THRESHOLD = 3;
+  let repeatToolName = '';
+  let repeatToolResult = '';
+  let repeatCount = 0;
+
   while (true) {
     // Check timeout
     if (Date.now() - startTime > timeoutMs) {
@@ -273,22 +280,44 @@ export async function runOllamaChat(
       }
 
       const toolStart = Date.now();
+      let toolResult: string;
       try {
-        const result = await executeTool(mcpName, args);
+        toolResult = await executeTool(mcpName, args);
         const toolMs = Date.now() - toolStart;
         log(`  Tool executed: ${ollamaName} in ${(toolMs / 1000).toFixed(1)}s`);
         const MAX_RESULT_LOG = 2000;
-        const truncated = result.length > MAX_RESULT_LOG
-          ? result.slice(0, MAX_RESULT_LOG) + '... [truncated]'
-          : result;
+        const truncated = toolResult.length > MAX_RESULT_LOG
+          ? toolResult.slice(0, MAX_RESULT_LOG) + '... [truncated]'
+          : toolResult;
         log(`  Tool result: ${truncated}`);
-        messages.push({ role: 'tool', content: result });
+        messages.push({ role: 'tool', content: toolResult });
       } catch (err) {
         const toolMs = Date.now() - toolStart;
-        const errMsg = `Tool execution failed: ${err instanceof Error ? err.message : String(err)}`;
-        log(`  ${errMsg} (after ${(toolMs / 1000).toFixed(1)}s)`);
-        messages.push({ role: 'tool', content: errMsg });
+        toolResult = `Tool execution failed: ${err instanceof Error ? err.message : String(err)}`;
+        log(`  ${toolResult} (after ${(toolMs / 1000).toFixed(1)}s)`);
+        messages.push({ role: 'tool', content: toolResult });
       }
+
+      // Track repeated same-tool-same-result streaks
+      if (ollamaName === repeatToolName && toolResult === repeatToolResult) {
+        repeatCount++;
+      } else {
+        repeatToolName = ollamaName;
+        repeatToolResult = toolResult;
+        repeatCount = 1;
+      }
+    }
+
+    // Break if model is stuck calling the same tool with the same result
+    if (repeatCount >= REPEAT_THRESHOLD) {
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+      log(`Aborting: ${repeatToolName} returned the same result ${repeatCount} times (repeated failure detected) | ${elapsed}s | ${iterations} round(s)`);
+      return {
+        response: `Stopped: ${repeatToolName} returned the same result ${repeatCount} times in a row (repeated failure). The model appears stuck in a loop.`,
+        iterations,
+        timedOut: false,
+        maxIterationsReached: false,
+      };
     }
   }
 }
