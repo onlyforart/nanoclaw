@@ -38,7 +38,8 @@ beforeEach(() => {
       model TEXT DEFAULT NULL,
       temperature REAL DEFAULT NULL,
       max_tool_rounds INTEGER DEFAULT NULL,
-      timeout_ms INTEGER DEFAULT NULL
+      timeout_ms INTEGER DEFAULT NULL,
+      show_thinking INTEGER DEFAULT NULL
     );
 
     CREATE TABLE IF NOT EXISTS scheduled_tasks (

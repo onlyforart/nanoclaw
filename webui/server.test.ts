@@ -82,7 +82,8 @@ beforeEach(async () => {
       container_config TEXT, requires_trigger INTEGER DEFAULT 1,
       is_main INTEGER DEFAULT 0, model TEXT DEFAULT NULL,
       temperature REAL DEFAULT NULL,
-      max_tool_rounds INTEGER DEFAULT NULL, timeout_ms INTEGER DEFAULT NULL
+      max_tool_rounds INTEGER DEFAULT NULL, timeout_ms INTEGER DEFAULT NULL,
+      show_thinking INTEGER DEFAULT NULL
     );
     CREATE TABLE scheduled_tasks (
       id TEXT PRIMARY KEY, group_folder TEXT NOT NULL, chat_jid TEXT NOT NULL,
@@ -98,10 +99,10 @@ beforeEach(async () => {
       result TEXT, error TEXT
     );
   `);
-  db.prepare(`INSERT INTO registered_groups VALUES (?, ?, ?, ?, ?, NULL, 1, 1, NULL, NULL, NULL, NULL)`).run(
+  db.prepare(`INSERT INTO registered_groups VALUES (?, ?, ?, ?, ?, NULL, 1, 1, NULL, NULL, NULL, NULL, NULL)`).run(
     'main@s.whatsapp.net', 'Main Chat', 'whatsapp_main', '@Andy', '2024-01-01T00:00:00.000Z',
   );
-  db.prepare(`INSERT INTO registered_groups VALUES (?, ?, ?, ?, ?, NULL, 1, 0, ?, NULL, ?, ?)`).run(
+  db.prepare(`INSERT INTO registered_groups VALUES (?, ?, ?, ?, ?, NULL, 1, 0, ?, NULL, ?, ?, NULL)`).run(
     'slack@main', 'Slack Main', 'slack_main', '@Andy', '2024-01-02T00:00:00.000Z', 'sonnet', 10, 300000,
   );
   db.prepare(`INSERT INTO scheduled_tasks VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, NULL, NULL, NULL, NULL, NULL)`).run(

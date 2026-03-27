@@ -519,6 +519,13 @@ const AppGroupDetail = {
                   class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
               </div>
             </div>
+            <div class="mb-4">
+              <label class="flex items-center gap-2 text-sm font-medium cursor-pointer">
+                <input v-model="form.showThinking" type="checkbox"
+                  class="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500">
+                Show thinking (send model reasoning to channel as blockquote)
+              </label>
+            </div>
             <button @click="saveSettings" :disabled="saving"
               class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors">
               {{ saving ? 'Saving...' : 'Save Settings' }}
@@ -670,7 +677,7 @@ const AppGroupDetail = {
     const activeTab = ref(props.initialTab || 'settings');
     let taskInterval = null;
 
-    const form = Vue.reactive({ model: '', temperature: null, maxToolRounds: null, timeoutMs: null });
+    const form = Vue.reactive({ model: '', temperature: null, maxToolRounds: null, timeoutMs: null, showThinking: false });
     const showNewTask = ref(false);
     const newTask = Vue.reactive({
       prompt: '', scheduleType: 'cron', scheduleValue: '', contextMode: 'isolated',
@@ -702,6 +709,7 @@ const AppGroupDetail = {
         form.temperature = g.temperature;
         form.maxToolRounds = g.maxToolRounds;
         form.timeoutMs = g.timeoutMs;
+        form.showThinking = g.showThinking ?? false;
         claude.value = p.claude;
         ollama.value = p.ollama || '';
         tasks.value = t;
@@ -720,6 +728,7 @@ const AppGroupDetail = {
         if (form.temperature != null) body.temperature = form.temperature;
         if (form.maxToolRounds != null) body.maxToolRounds = form.maxToolRounds;
         if (form.timeoutMs != null) body.timeoutMs = form.timeoutMs;
+        body.showThinking = form.showThinking;
         await api(`/groups/${props.folder}`, { method: 'PATCH', body });
         showToast('Settings saved');
       } catch (e) { showToast(e.message, 'error'); }

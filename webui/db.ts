@@ -28,6 +28,7 @@ export interface GroupRow {
   temperature: number | null;
   max_tool_rounds: number | null;
   timeout_ms: number | null;
+  show_thinking: number | null;
 }
 
 export interface TaskRow {
@@ -64,7 +65,7 @@ export function getAllGroups(): GroupRow[] {
   return db
     .prepare(
       `SELECT jid, name, folder, trigger_pattern, is_main, requires_trigger,
-              model, temperature, max_tool_rounds, timeout_ms
+              model, temperature, max_tool_rounds, timeout_ms, show_thinking
        FROM registered_groups ORDER BY name`,
     )
     .all() as GroupRow[];
@@ -74,7 +75,7 @@ export function getGroupByFolder(folder: string): GroupRow | undefined {
   return db
     .prepare(
       `SELECT jid, name, folder, trigger_pattern, is_main, requires_trigger,
-              model, temperature, max_tool_rounds, timeout_ms
+              model, temperature, max_tool_rounds, timeout_ms, show_thinking
        FROM registered_groups WHERE folder = ?`,
     )
     .get(folder) as GroupRow | undefined;
@@ -82,7 +83,7 @@ export function getGroupByFolder(folder: string): GroupRow | undefined {
 
 export function updateGroup(
   folder: string,
-  updates: { model?: string; temperature?: number | null; max_tool_rounds?: number; timeout_ms?: number },
+  updates: { model?: string; temperature?: number | null; max_tool_rounds?: number; timeout_ms?: number; show_thinking?: number | null },
 ): boolean {
   const setClauses: string[] = [];
   const values: unknown[] = [];
@@ -102,6 +103,10 @@ export function updateGroup(
   if (updates.timeout_ms !== undefined) {
     setClauses.push('timeout_ms = ?');
     values.push(updates.timeout_ms);
+  }
+  if (updates.show_thinking !== undefined) {
+    setClauses.push('show_thinking = ?');
+    values.push(updates.show_thinking);
   }
 
   if (setClauses.length === 0) return false;
