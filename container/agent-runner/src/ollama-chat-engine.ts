@@ -132,8 +132,6 @@ export async function runOllamaChat(
   messages.push({ role: 'user', content: userMessage });
 
   let iterations = 0;
-  let hasCalledAnyTool = false;
-  let hasNudged = false;
 
   // Repeated-failure detection: track consecutive calls to the same tool
   // that return the same result. If this happens 3 times, the model is stuck.
@@ -237,25 +235,8 @@ export async function runOllamaChat(
 
     messages.push(response.message);
 
-    // No tool calls — check if we should nudge before treating as final
+    // No tool calls — treat as final response
     if (!response.message.tool_calls?.length) {
-      // Nudge once: if the model made tool calls earlier but stopped making
-      // them despite tools being available AND the response indicates an issue
-      // was found, re-prompt to trigger any remaining tool calls (e.g.
-      // conditional notification steps). Only nudge when the output suggests
-      // there's more work to do — not on healthy/clean results.
-      const responseText = response.message.content || '';
-      const looksLikeIssue = /(:warning:|anomal|unhealthy|degraded|error|failed|red)/i.test(responseText);
-      if (hasCalledAnyTool && !hasNudged && tools.length > 0 && looksLikeIssue) {
-        hasNudged = true;
-        log('  [nudging model to make next tool call]');
-        messages.push({
-          role: 'user',
-          content: 'Now call the next tool as instructed.',
-        });
-        continue;
-      }
-
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
       const content = response.message.content || '';
       log(`Done: ${resolvedModel} | ${elapsed}s | ${iterations} round(s) | ${content.length} chars`);
@@ -266,8 +247,6 @@ export async function runOllamaChat(
         maxIterationsReached: false,
       };
     }
-
-    hasCalledAnyTool = true;
 
     // Execute tool calls
     for (const tc of response.message.tool_calls) {

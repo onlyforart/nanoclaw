@@ -408,12 +408,11 @@ describe('runOllamaChat', () => {
   });
 });
 
-describe('tool call nudge', () => {
-  it('nudges model once when it produces text after a tool call without making further tool calls', async () => {
+describe('text-only response after tool calls', () => {
+  it('treats text-only response as final even when it contains warning keywords', async () => {
     const executeTool = vi.fn().mockResolvedValue('ok');
     const toolNameMap = new Map([
       ['srv__check', { mcpTool: 'mcp__srv__check', serverName: 'srv' }],
-      ['srv__notify', { mcpTool: 'mcp__srv__notify', serverName: 'srv' }],
     ]);
     const tools = [
       { type: 'function' as const, function: { name: 'srv__check', description: 'Check', parameters: { type: 'object', properties: {} } } },
@@ -428,19 +427,7 @@ describe('tool call nudge', () => {
         tool_calls: [{ function: { name: 'srv__check', arguments: {} } }],
       },
     }));
-    // Round 2: model produces text without calling notify (should trigger nudge)
-    mockChat.mockResolvedValueOnce(streamOf({
-      message: { role: 'assistant', content: ':warning: something is wrong' },
-    }));
-    // Round 3 (after nudge): model calls notify
-    mockChat.mockResolvedValueOnce(streamOf({
-      message: {
-        role: 'assistant',
-        content: '',
-        tool_calls: [{ function: { name: 'srv__notify', arguments: { text: 'alert' } } }],
-      },
-    }));
-    // Round 4: final response
+    // Round 2: model produces text with warning — should be treated as final (no nudge)
     mockChat.mockResolvedValueOnce(streamOf({
       message: { role: 'assistant', content: ':warning: something is wrong' },
     }));
@@ -451,88 +438,19 @@ describe('tool call nudge', () => {
       executeTool,
     }));
 
-    // Should have called both tools
-    expect(executeTool).toHaveBeenCalledTimes(2);
-    expect(executeTool).toHaveBeenCalledWith('mcp__srv__check', {});
-    expect(executeTool).toHaveBeenCalledWith('mcp__srv__notify', { text: 'alert' });
-    // Nudge message should be in the messages sent to round 3
-    const round3Messages = mockChat.mock.calls[2][0].messages;
-    const nudgeMsg = round3Messages.find(
-      (m: { role: string; content: string }) =>
-        m.role === 'user' && m.content.includes('next tool'),
-    );
-    expect(nudgeMsg).toBeDefined();
-  });
-
-  it('does not nudge when no tools are available', async () => {
-    mockChat.mockResolvedValueOnce(streamOf({
-      message: { role: 'assistant', content: 'Just a text response' },
-    }));
-
-    const result = await runOllamaChat('hello', baseOptions());
-
-    expect(result.response).toBe('Just a text response');
-    expect(result.iterations).toBe(1);
-    expect(mockChat).toHaveBeenCalledTimes(1);
-  });
-
-  it('does not nudge when model never made any tool calls', async () => {
-    const tools = [
-      { type: 'function' as const, function: { name: 'srv__check', description: 'Check', parameters: { type: 'object', properties: {} } } },
-    ];
-
-    mockChat.mockResolvedValueOnce(streamOf({
-      message: { role: 'assistant', content: 'I can answer without tools' },
-    }));
-
-    const result = await runOllamaChat('hello', baseOptions({ tools }));
-
-    expect(result.response).toBe('I can answer without tools');
-    expect(mockChat).toHaveBeenCalledTimes(1);
-  });
-
-  it('does not nudge when response looks healthy (no warning indicators)', async () => {
-    const executeTool = vi.fn().mockResolvedValue('ok');
-    const toolNameMap = new Map([
-      ['srv__check', { mcpTool: 'mcp__srv__check', serverName: 'srv' }],
-    ]);
-    const tools = [
-      { type: 'function' as const, function: { name: 'srv__check', description: 'Check', parameters: { type: 'object', properties: {} } } },
-      { type: 'function' as const, function: { name: 'srv__notify', description: 'Notify', parameters: { type: 'object', properties: {} } } },
-    ];
-
-    // Round 1: tool call
-    mockChat.mockResolvedValueOnce(streamOf({
-      message: {
-        role: 'assistant',
-        content: '',
-        tool_calls: [{ function: { name: 'srv__check', arguments: {} } }],
-      },
-    }));
-    // Round 2: healthy result text — should NOT nudge
-    mockChat.mockResolvedValueOnce(streamOf({
-      message: { role: 'assistant', content: ':white_check_mark: All systems healthy' },
-    }));
-
-    const result = await runOllamaChat('check stuff', baseOptions({
-      tools,
-      toolNameMap,
-      executeTool,
-    }));
-
-    expect(result.response).toBe(':white_check_mark: All systems healthy');
-    // 2 rounds only: tool call, then final text (no nudge)
+    expect(result.response).toBe(':warning: something is wrong');
+    expect(executeTool).toHaveBeenCalledTimes(1);
+    // 2 rounds only: tool call, then final text
     expect(mockChat).toHaveBeenCalledTimes(2);
   });
 
-  it('only nudges once to prevent infinite loops', async () => {
+  it('treats text-only response as final when result mentions 0 anomalies', async () => {
     const executeTool = vi.fn().mockResolvedValue('ok');
     const toolNameMap = new Map([
       ['srv__check', { mcpTool: 'mcp__srv__check', serverName: 'srv' }],
     ]);
     const tools = [
       { type: 'function' as const, function: { name: 'srv__check', description: 'Check', parameters: { type: 'object', properties: {} } } },
-      { type: 'function' as const, function: { name: 'srv__notify', description: 'Notify', parameters: { type: 'object', properties: {} } } },
     ];
 
     // Round 1: tool call
@@ -543,24 +461,19 @@ describe('tool call nudge', () => {
         tool_calls: [{ function: { name: 'srv__check', arguments: {} } }],
       },
     }));
-    // Round 2: warning text (triggers nudge)
+    // Round 2: healthy result that contains "anomalies" keyword
     mockChat.mockResolvedValueOnce(streamOf({
-      message: { role: 'assistant', content: ':warning: something is degraded' },
-    }));
-    // Round 3 (after nudge): still just text (should NOT nudge again)
-    mockChat.mockResolvedValueOnce(streamOf({
-      message: { role: 'assistant', content: ':warning: final report' },
+      message: { role: 'assistant', content: ':white_check_mark: 49 venues checked, 0 anomalies' },
     }));
 
-    const result = await runOllamaChat('check stuff', baseOptions({
+    const result = await runOllamaChat('check venues', baseOptions({
       tools,
       toolNameMap,
       executeTool,
     }));
 
-    expect(result.response).toBe(':warning: final report');
-    // 3 rounds: tool call, text+nudge, final text
-    expect(mockChat).toHaveBeenCalledTimes(3);
+    expect(result.response).toBe(':white_check_mark: 49 venues checked, 0 anomalies');
+    expect(mockChat).toHaveBeenCalledTimes(2);
   });
 });
 
