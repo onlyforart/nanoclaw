@@ -47,6 +47,7 @@ These features are unique to this fork:
 - **Dual container slots** — message and task containers run independently per group; tasks never block user messages
 - **Task session isolation** — isolated tasks use a separate `.claude-task/` directory, wiped before each run, preventing stale session file accumulation
 - **Temperature and context mode** — configurable per-group temperature for Ollama models; editable context mode in the UI
+- **Show thinking** — per-group `showThinking` toggle (Ollama only) that relays reasoning/thinking output from reasoning models to the channel as quoted text
 
 ## Where Things Live
 
@@ -225,7 +226,10 @@ In direct mode:
 | `container/agent-runner/src/ollama-system-prompt.ts` | System prompt builder (reads OLLAMA.md / CLAUDE.md) |
 | `container/agent-runner/src/ollama-mcp-stdio.ts` | MCP server for delegated mode (`ollama_chat` tool) |
 | `container/agent-runner/src/ipc-mcp-stdio.ts` | Stdio MCP server for NanoClaw IPC (messages, tasks, groups) |
+| `container/agent-runner/src/mcp-config.ts` | Converts container-side MCP config to Claude SDK format |
+| `container/agent-runner/src/mcp-http-bridge.ts` | Stdio-to-HTTP proxy so Claude SDK can use remote MCP servers |
 | `src/connection-profiles.ts` | Model string parsing and backend-specific defaults |
+| `src/remote-mcp.ts` | Host-side remote MCP server discovery and URL rewriting |
 | `data/backend-defaults.json` | Installation-specific default limits per backend |
 | `docs/OLLAMA-DIRECT-MODE.md` | Design spec for direct mode |
 | `docs/OLLAMA-MCP-INTEGRATION.md` | Design spec for delegated mode |
@@ -274,7 +278,9 @@ Example `data/backend-defaults.json`:
 
 ## External MCP Servers
 
-Domain-specific tools are defined in `data/mcp-servers.json`. Each entry specifies:
+Domain-specific tools are defined in `data/mcp-servers.json`. Two types are supported:
+
+**Stdio servers** (mounted into the container):
 
 ```json
 {
@@ -291,6 +297,19 @@ Domain-specific tools are defined in `data/mcp-servers.json`. Each entry specifi
 - `env` lists environment variable names to forward from `.env` (values are never hardcoded)
 - `skill` points to an instruction file (relative to the server directory) that gets injected into the Ollama context on first use
 - `awsAuth: true` enables AWS credential forwarding via the credential proxy
+
+**Remote HTTP servers** (accessed over the network):
+
+```json
+{
+  "type": "remote",
+  "url": "http://host:3201/mcp",
+  "tools": ["tool_name_1"],
+  "headers": { "Authorization": "Bearer ..." }
+}
+```
+
+Remote servers run on the host (or elsewhere on the network). At container launch, `src/container-runner.ts` discovers tool schemas from the remote URL and rewrites the URL so the container can reach it via the Docker bridge gateway. For the Claude SDK path, `mcp-http-bridge.ts` wraps the HTTP transport as a stdio process (because the SDK's native HTTP MCP transport silently hangs). The Ollama direct mode path uses `StreamableHTTPClientTransport` in-process.
 
 The container-side config (generated at `data/sessions/{group}/mcp-servers/config.json`) strips `hostPath` and pre-resolves environment variables.
 
