@@ -153,8 +153,8 @@ export class RateLimiter {
     return 10_000;
   }
 
-  getState(): Readonly<RateLimitState> {
-    return { ...this.state };
+  getState(): Readonly<RateLimitState> & { queued: number } {
+    return { ...this.state, queued: this.queue.length };
   }
 
   private canProceed(): boolean {

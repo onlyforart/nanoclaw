@@ -30,6 +30,8 @@ export interface ProxyConfig {
 }
 
 const MAX_429_RETRIES = 3;
+const UPSTREAM_TIMEOUT_MS = 60_000; // 60s — abort if upstream doesn't respond
+const ACQUIRE_TIMEOUT_MS = 120_000; // 120s — give up waiting for a rate-limiter slot
 
 export function startCredentialProxy(
   port: number,
@@ -150,6 +152,10 @@ export function startCredentialProxy(
       },
     );
 
+    upstream.setTimeout(UPSTREAM_TIMEOUT_MS, () => {
+      upstream.destroy(new Error(`Upstream timeout after ${UPSTREAM_TIMEOUT_MS}ms`));
+    });
+
     upstream.on('error', (err) => {
       rateLimiter.release();
       logger.error({ err, url: req.url }, 'Credential proxy upstream error');
@@ -172,11 +178,18 @@ export function startCredentialProxy(
         const headers = buildHeaders(req, body);
 
         try {
-          // Wait for rate limiter to grant a slot
-          await rateLimiter.acquire();
+          // Wait for rate limiter to grant a slot (with timeout)
+          await Promise.race([
+            rateLimiter.acquire(),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error(
+                `Rate limiter acquire timeout after ${ACQUIRE_TIMEOUT_MS}ms (inflight: ${rateLimiter.getState().inflight}, queued: ${rateLimiter.getState().queued ?? '?'})`,
+              )), ACQUIRE_TIMEOUT_MS),
+            ),
+          ]);
           sendUpstream(req, res, body, headers, 0);
         } catch (err) {
-          logger.error({ err, url: req.url }, 'Rate limiter error');
+          logger.error({ err, url: req.url }, 'Credential proxy request failed');
           if (!res.headersSent) {
             res.writeHead(503);
             res.end('Service Unavailable');
