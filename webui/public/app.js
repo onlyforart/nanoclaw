@@ -186,7 +186,7 @@ const AppToast = {
 
 // Sidebar
 const AppSidebar = {
-  props: ['groups', 'currentHash', 'open', 'darkMode'],
+  props: ['groups', 'currentHash', 'activeGroupFolder', 'open', 'darkMode'],
   emits: ['toggle', 'toggleDark'],
   template: `
     <!-- Mobile overlay -->
@@ -252,7 +252,9 @@ const AppSidebar = {
   `,
   setup(props) {
     const isActive = (path) => {
-      return props.currentHash === path || props.currentHash.startsWith(path + '/');
+      if (props.currentHash === path || props.currentHash.startsWith(path + '/')) return true;
+      if (props.activeGroupFolder && path === '/groups/' + props.activeGroupFolder) return true;
+      return false;
     };
     return { isActive };
   },
@@ -794,12 +796,13 @@ const AppGroupDetail = {
 // Task Detail (Tabbed)
 const AppTaskDetail = {
   props: ['taskId'],
+  emits: ['group-loaded'],
   template: `
     <div>
       <!-- Back link -->
       <a v-if="task" :href="'#/groups/' + task.groupFolder + '?tab=tasks'" class="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 mb-4 transition-colors">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons.back}</svg>
-        Back to group
+        Back to {{ group?.name || task.groupFolder }}
       </a>
 
       <h2 class="text-2xl font-bold mb-1">Task</h2>
@@ -963,7 +966,7 @@ const AppTaskDetail = {
       </div>
     </div>
   `,
-  setup(props) {
+  setup(props, { emit }) {
     const task = ref(null);
     const group = ref(null);
     const runs = ref([]);
@@ -1011,6 +1014,7 @@ const AppTaskDetail = {
           api(`/tasks/${props.taskId}/runs?limit=20`),
         ]);
         task.value = t;
+        emit('group-loaded', t.groupFolder);
         promptText.value = t.prompt;
         form.scheduleType = t.scheduleType;
         form.scheduleValue = t.scheduleValue;
@@ -1085,6 +1089,7 @@ const app = createApp({
       <app-sidebar
         :groups="groups"
         :current-hash="currentHash"
+        :active-group-folder="activeGroupFolder"
         :open="sidebarOpen"
         :dark-mode="darkMode"
         @toggle="sidebarOpen = !sidebarOpen"
@@ -1095,7 +1100,7 @@ const app = createApp({
           <app-dashboard v-if="route.view === 'dashboard'" :groups="groups" />
           <app-global-prompts v-if="route.view === 'global-prompts'" />
           <app-group-detail v-if="route.view === 'group-detail'" :folder="route.folder" :initial-tab="route.tab" :key="route.folder + (route.tab || '')" />
-          <app-task-detail v-if="route.view === 'task-detail'" :task-id="route.id" :key="route.id" />
+          <app-task-detail v-if="route.view === 'task-detail'" :task-id="route.id" :key="route.id" @group-loaded="taskGroupFolder = $event" />
           <div v-if="route.view === 'not-found'" class="text-center py-20 text-gray-400">
             <p class="text-lg">Page not found</p>
           </div>
@@ -1110,6 +1115,7 @@ const app = createApp({
     const groups = ref([]);
     const sidebarOpen = ref(false);
     const darkMode = ref(document.documentElement.classList.contains('dark'));
+    const taskGroupFolder = ref('');
 
     const route = computed(() => {
       const [path, qs] = currentHash.value.split('?');
@@ -1121,6 +1127,11 @@ const app = createApp({
       const tm = path.match(/^\/tasks\/([^/]+)$/);
       if (tm) return { view: 'task-detail', id: tm[1] };
       return { view: 'not-found' };
+    });
+
+    const activeGroupFolder = computed(() => {
+      if (route.value.view === 'group-detail') return route.value.folder;
+      return taskGroupFolder.value;
     });
 
     // Close sidebar on navigation (mobile)
@@ -1145,7 +1156,7 @@ const app = createApp({
       window.removeEventListener('hashchange', onHashChange);
     });
 
-    return { currentHash, groups, route, sidebarOpen, darkMode, toggleDark };
+    return { currentHash, groups, route, sidebarOpen, darkMode, toggleDark, taskGroupFolder, activeGroupFolder };
   },
 });
 
