@@ -38,7 +38,6 @@ These features are delivered as upstream NanoClaw skill branches and merged into
 These features are unique to this fork:
 
 - **External MCP server support** — domain-specific tools loaded from `data/mcp-servers.json`, mounted into containers at runtime. Supports both stdio and remote HTTP servers.
-- **Reset scripts** — YAML-defined multi-step restart procedures in `data/reset-scripts/`, executed via the `run_reset_script` MCP tool. Handles ordering, readiness waits, and failure recovery.
 - **Ollama integration** — local model inference with full MCP tool-calling, plus direct mode that bypasses Claude entirely (see below)
 - **Per-task and per-group model selection** with configurable tool-round limits and timeouts
 - **Per-task timezone support**
@@ -312,26 +311,6 @@ Domain-specific tools are defined in `data/mcp-servers.json`. Two types are supp
 Remote servers run on the host (or elsewhere on the network). At container launch, `src/container-runner.ts` discovers tool schemas from the remote URL and rewrites the URL so the container can reach it via the Docker bridge gateway. For the Claude SDK path, `mcp-http-bridge.ts` wraps the HTTP transport as a stdio process (because the SDK's native HTTP MCP transport silently hangs). The Ollama direct mode path uses `StreamableHTTPClientTransport` in-process.
 
 The container-side config (generated at `data/sessions/{group}/mcp-servers/config.json`) strips `hostPath` and pre-resolves environment variables.
-
-## Reset Scripts
-
-Multi-step restart procedures are defined as YAML files in `data/reset-scripts/`, organised by cluster:
-
-```
-data/reset-scripts/
-├── staging/
-│   ├── perps-mdv.yaml
-│   └── md-perps.yaml
-├── prod1/
-│   ├── perps-mdv.yaml
-│   └── md-perpld.yaml
-└── prod2/
-    └── md-perpld.yaml
-```
-
-These scripts are loaded by the `eks-kubectl` MCP server at startup (via the `RESET_SCRIPTS_DIR` environment variable on the `eks-kubectl-mcp` systemd unit). They provide `list_reset_scripts` and `run_reset_script` tools that handle restart ordering, readiness waits, and failure recovery in a single tool call.
-
-Scripts use the [k8s-restart-scripts](../reset-language/) YAML format. The cluster is inferred from the directory name (e.g. `staging/` → cluster `staging`).
 
 ## Container System
 
