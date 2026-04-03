@@ -44,6 +44,13 @@ interface ContainerOutput {
   result: string | null;
   newSessionId?: string;
   error?: string;
+  usage?: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadInputTokens?: number;
+    cacheCreationInputTokens?: number;
+    costUSD?: number;
+  };
 }
 
 interface SessionEntry {
@@ -498,12 +505,28 @@ async function runQuery(
     if (message.type === 'result') {
       resultCount++;
       const textResult = 'result' in message ? (message as { result?: string }).result : null;
+      const msg = message as Record<string, unknown>;
       log(`Result #${resultCount}: subtype=${message.subtype}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`);
-      writeOutput({
+      const output: ContainerOutput = {
         status: 'success',
         result: textResult || null,
-        newSessionId
-      });
+        newSessionId,
+      };
+      if (msg.usage) {
+        const usage = msg.usage as Record<string, unknown>;
+        const baseInput = (usage.input_tokens as number) || 0;
+        const cacheRead = (usage.cache_read_input_tokens as number) || 0;
+        const cacheCreation = (usage.cache_creation_input_tokens as number) || 0;
+        output.usage = {
+          inputTokens: baseInput + cacheRead + cacheCreation,
+          outputTokens: (usage.output_tokens as number) || 0,
+          cacheReadInputTokens: cacheRead,
+          cacheCreationInputTokens: cacheCreation,
+          costUSD: msg.total_cost_usd as number | undefined,
+        };
+        log(`  Usage: ${output.usage.inputTokens} in (${cacheRead} cached), ${output.usage.outputTokens} out, $${output.usage.costUSD?.toFixed(4) ?? 'n/a'}`);
+      }
+      writeOutput(output);
     }
   }
 
@@ -647,7 +670,9 @@ async function runOllamaDirectMode(containerInput: ContainerInput): Promise<void
   // Initialize MCP tool executor
   const executor = new McpToolExecutor();
   try {
-    await executor.initialize(mcpConfig);
+    await executor.initialize(mcpConfig, undefined, {
+      callTimeoutMs: containerInput.timeoutMs,
+    });
   } catch (err) {
     log(`MCP executor init failed: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -757,7 +782,12 @@ async function runOllamaDirectMode(containerInput: ContainerInput): Promise<void
       writeOutput({
         status: 'success',
         result: result.response || null,
+        usage: {
+          inputTokens: result.inputTokens,
+          outputTokens: result.outputTokens,
+        },
       });
+      log(`  Usage: ${result.inputTokens} in, ${result.outputTokens} out`);
 
       if (meta) {
         log(`Chat ended${meta} after ${result.iterations} round(s)`);

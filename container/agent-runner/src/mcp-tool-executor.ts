@@ -52,6 +52,8 @@ export class McpToolExecutor {
   private ollamaToolMap = new Map<string, { mcpTool: string; serverName: string }>();
   /** Ollama-format tool schemas */
   private ollamaTools: Tool[] = [];
+  /** Per-call timeout inherited from task/container timeout */
+  private callTimeoutMs: number | undefined;
 
   /**
    * Initialize MCP server connections.
@@ -60,7 +62,9 @@ export class McpToolExecutor {
   async initialize(
     mcpConfig: Record<string, McpServerConfig>,
     extraEnv?: Record<string, string>,
+    options?: { callTimeoutMs?: number },
   ): Promise<void> {
+    this.callTimeoutMs = options?.callTimeoutMs;
     for (const [name, config] of Object.entries(mcpConfig)) {
       try {
         let transport: StdioClientTransport | StreamableHTTPClientTransport;
@@ -190,6 +194,8 @@ export class McpToolExecutor {
     const result = await server.client.callTool({
       name: toolName,
       arguments: args,
+    }, undefined, {
+      timeout: this.callTimeoutMs,
     });
     const callMs = Date.now() - callStart;
 

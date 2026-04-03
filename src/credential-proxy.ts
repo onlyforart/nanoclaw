@@ -153,7 +153,9 @@ export function startCredentialProxy(
     );
 
     upstream.setTimeout(UPSTREAM_TIMEOUT_MS, () => {
-      upstream.destroy(new Error(`Upstream timeout after ${UPSTREAM_TIMEOUT_MS}ms`));
+      upstream.destroy(
+        new Error(`Upstream timeout after ${UPSTREAM_TIMEOUT_MS}ms`),
+      );
     });
 
     upstream.on('error', (err) => {
@@ -182,14 +184,23 @@ export function startCredentialProxy(
           await Promise.race([
             rateLimiter.acquire(),
             new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error(
-                `Rate limiter acquire timeout after ${ACQUIRE_TIMEOUT_MS}ms (inflight: ${rateLimiter.getState().inflight}, queued: ${rateLimiter.getState().queued ?? '?'})`,
-              )), ACQUIRE_TIMEOUT_MS),
+              setTimeout(
+                () =>
+                  reject(
+                    new Error(
+                      `Rate limiter acquire timeout after ${ACQUIRE_TIMEOUT_MS}ms (inflight: ${rateLimiter.getState().inflight}, queued: ${rateLimiter.getState().queued ?? '?'})`,
+                    ),
+                  ),
+                ACQUIRE_TIMEOUT_MS,
+              ),
             ),
           ]);
           sendUpstream(req, res, body, headers, 0);
         } catch (err) {
-          logger.error({ err, url: req.url }, 'Credential proxy request failed');
+          logger.error(
+            { err, url: req.url },
+            'Credential proxy request failed',
+          );
           if (!res.headersSent) {
             res.writeHead(503);
             res.end('Service Unavailable');
