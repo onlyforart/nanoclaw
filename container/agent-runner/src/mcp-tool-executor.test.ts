@@ -149,7 +149,7 @@ describe('McpToolExecutor', () => {
       expect(mockCallTool).toHaveBeenCalledWith({
         name: 'send_message',
         arguments: { text: 'hello' },
-      });
+      }, undefined, { timeout: undefined });
       expect(result).toBe('Message sent.');
     });
 
@@ -288,7 +288,7 @@ describe('McpToolExecutor', () => {
       expect(mockCallTool).toHaveBeenCalledWith({
         name: 'find',
         arguments: { collection: 'users' },
-      });
+      }, undefined, { timeout: undefined });
       expect(result).toBe('{"_id": "test"}');
     });
 

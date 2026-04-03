@@ -3,7 +3,7 @@ import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
 
 import { ASSISTANT_NAME, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
-import { isOllamaModel } from './connection-profiles.js';
+import { isOllamaModel, resolveProfile } from './connection-profiles.js';
 import {
   ContainerOutput,
   runContainerAgent,
@@ -151,6 +151,7 @@ async function runTask(
 
   let result: string | null = null;
   let error: string | null = null;
+  let lastUsage: ContainerOutput['usage'] | undefined;
 
   // For group context mode, use the group's current session
   const sessions = deps.getSessions();
@@ -174,6 +175,12 @@ async function runTask(
     }, TASK_CLOSE_DELAY_MS);
   };
 
+  const effectiveModel = task.model || group.model || undefined;
+  const profile = resolveProfile(effectiveModel, {
+    maxToolRounds: task.maxToolRounds ?? group.maxToolRounds,
+    timeoutMs: task.timeoutMs ?? group.timeoutMs,
+  });
+
   try {
     const output = await runContainerAgent(
       group,
@@ -185,20 +192,20 @@ async function runTask(
         isMain,
         isScheduledTask: true,
         assistantName: ASSISTANT_NAME,
-        model: task.model || group.model || undefined,
+        model: effectiveModel,
         temperature:
           (task.temperature != null && String(task.temperature) !== ''
             ? task.temperature
             : null) ?? group.temperature,
-        maxToolRounds: task.maxToolRounds ?? group.maxToolRounds,
-        timeoutMs: task.timeoutMs ?? group.timeoutMs,
+        maxToolRounds: profile.maxToolRounds,
+        timeoutMs: profile.timeoutMs,
         showThinking: group.showThinking,
       },
       (proc, containerName) =>
         deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),
       async (streamedOutput: ContainerOutput) => {
+        if (streamedOutput.usage) lastUsage = streamedOutput.usage;
         if (streamedOutput.result) {
-          const effectiveModel = task.model || group.model || undefined;
           const prefix =
             !result && !isOllamaModel(effectiveModel) ? ':cloud: ' : '';
           result = streamedOutput.result;
@@ -220,6 +227,7 @@ async function runTask(
 
     if (closeTimer) clearTimeout(closeTimer);
 
+    if (output.usage) lastUsage = output.usage;
     if (output.status === 'error') {
       error = output.error || 'Unknown error';
     } else if (output.result) {
@@ -253,6 +261,9 @@ async function runTask(
     status: error ? 'error' : 'success',
     result,
     error,
+    input_tokens: lastUsage?.inputTokens ?? null,
+    output_tokens: lastUsage?.outputTokens ?? null,
+    cost_usd: lastUsage?.costUSD ?? null,
   });
 
   const nextRun = computeNextRun(task);

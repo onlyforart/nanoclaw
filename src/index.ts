@@ -19,7 +19,7 @@ import {
   getChannelFactory,
   getRegisteredChannelNames,
 } from './channels/registry.js';
-import { isOllamaModel } from './connection-profiles.js';
+import { isOllamaModel, resolveProfile } from './connection-profiles.js';
 import {
   ContainerOutput,
   runContainerAgent,
@@ -383,6 +383,8 @@ async function runAgent(
       }
     : undefined;
 
+  const profile = resolveProfile(group.model, { maxToolRounds: group.maxToolRounds, timeoutMs: group.timeoutMs });
+
   try {
     const output = await runContainerAgent(
       group,
@@ -395,8 +397,8 @@ async function runAgent(
         assistantName: ASSISTANT_NAME,
         model: group.model || undefined,
         temperature: group.temperature,
-        maxToolRounds: group.maxToolRounds,
-        timeoutMs: group.timeoutMs,
+        maxToolRounds: profile.maxToolRounds,
+        timeoutMs: profile.timeoutMs,
         showThinking: group.showThinking,
       },
       (proc, containerName) =>

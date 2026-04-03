@@ -33,6 +33,8 @@ export interface OllamaChatResult {
   iterations: number;
   timedOut: boolean;
   maxIterationsReached: boolean;
+  inputTokens: number;
+  outputTokens: number;
 }
 
 function log(msg: string): void {
@@ -143,6 +145,10 @@ export async function runOllamaChat(
   // Accumulate thinking across all rounds (for thinking models like deepseek)
   const allThinking: string[] = [];
 
+  // Accumulate token usage across all rounds
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+
   while (true) {
     // Check timeout
     if (Date.now() - startTime > timeoutMs) {
@@ -154,6 +160,8 @@ export async function runOllamaChat(
         iterations,
         timedOut: true,
         maxIterationsReached: false,
+        inputTokens: totalInputTokens,
+        outputTokens: totalOutputTokens,
       };
     }
 
@@ -167,6 +175,8 @@ export async function runOllamaChat(
         iterations,
         timedOut: false,
         maxIterationsReached: true,
+        inputTokens: totalInputTokens,
+        outputTokens: totalOutputTokens,
       };
     }
 
@@ -190,6 +200,7 @@ export async function runOllamaChat(
     let content = '';
     let thinking = '';
     let toolCalls: Array<{ function: { name: string; arguments: Record<string, unknown> } }> = [];
+    let lastChunk: Record<string, unknown> | null = null;
     for await (const chunk of stream) {
       if (chunk.message.content) {
         content += chunk.message.content;
@@ -200,6 +211,12 @@ export async function runOllamaChat(
       if (chunk.message.tool_calls?.length) {
         toolCalls = chunk.message.tool_calls;
       }
+      lastChunk = chunk as unknown as Record<string, unknown>;
+    }
+    // The final streaming chunk includes aggregate token counts for this round
+    if (lastChunk) {
+      totalInputTokens += (lastChunk.prompt_eval_count as number) || 0;
+      totalOutputTokens += (lastChunk.eval_count as number) || 0;
     }
     const inferenceMs = Date.now() - inferenceStart;
     log(`  Model inference: ${(inferenceMs / 1000).toFixed(1)}s`);
@@ -245,6 +262,8 @@ export async function runOllamaChat(
         iterations,
         timedOut: false,
         maxIterationsReached: false,
+        inputTokens: totalInputTokens,
+        outputTokens: totalOutputTokens,
       };
     }
 
@@ -327,6 +346,8 @@ export async function runOllamaChat(
         iterations,
         timedOut: false,
         maxIterationsReached: false,
+        inputTokens: totalInputTokens,
+        outputTokens: totalOutputTokens,
       };
     }
   }

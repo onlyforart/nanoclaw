@@ -47,6 +47,8 @@ These features are unique to this fork:
 - **Task session isolation** — isolated tasks use a separate `.claude-task/` directory, wiped before each run, preventing stale session file accumulation
 - **Temperature and context mode** — configurable per-group temperature for Ollama models; editable context mode in the UI
 - **Show thinking** — per-group `showThinking` toggle (Ollama only) that relays reasoning/thinking output from reasoning models to the channel as quoted text
+- **Token usage tracking** — every task run logs `input_tokens`, `output_tokens`, and `cost_usd` (Claude only) to `task_run_logs`. Both Claude SDK and Ollama paths report token counts. Claude input totals include cache read and creation tokens.
+- **MCP call timeout inheritance** — individual MCP tool calls inherit the task/container `timeoutMs` instead of the MCP SDK's 60s default, preventing premature timeouts on long-running tools
 
 ## Where Things Live
 
@@ -57,7 +59,7 @@ The **primary database** is `store/messages.db` (SQLite). This is the only datab
 - `chats` — chat/group metadata
 - `messages` — full message history
 - `scheduled_tasks` — recurring tasks with cron expressions
-- `task_run_logs` — task execution history
+- `task_run_logs` — task execution history (includes `input_tokens`, `output_tokens`, `cost_usd`)
 - `router_state` — timestamps and agent state
 - `sessions` — session IDs per group
 - `registered_groups` — group-to-folder mappings
@@ -267,6 +269,30 @@ Example `data/backend-defaults.json`:
 ```
 
 `maxToolRounds: 0` means unlimited (SDK manages). For Ollama, the default is 10 rounds.
+
+### MCP Tool Call Timeout
+
+Individual MCP tool calls inherit the task or container `timeoutMs` rather than the MCP SDK's default 60s. This prevents long-running tools (e.g. PagePilot scripts with 60s+ observation periods) from being killed prematurely. The timeout flows from `data/backend-defaults.json` → per-group/task override → container input → MCP executor.
+
+### Token Usage Tracking
+
+Every task run records token usage in `task_run_logs`:
+
+- `input_tokens` — total input tokens (for Claude: includes cache read + cache creation tokens)
+- `output_tokens` — output tokens generated
+- `cost_usd` — API cost (Claude only; null for Ollama)
+
+Both the Claude Agent SDK and Ollama direct mode paths report token counts. The Claude SDK's `total_cost_usd` is captured directly from the API response.
+
+```sql
+-- Daily token usage and cost by task
+SELECT t.id, date(r.run_at) as day,
+  sum(r.input_tokens) as total_in, sum(r.output_tokens) as total_out,
+  round(sum(r.cost_usd), 4) as total_cost, count(*) as runs
+FROM task_run_logs r JOIN scheduled_tasks t ON r.task_id = t.id
+WHERE r.run_at >= date('now', '-7 days')
+GROUP BY t.id, day ORDER BY day DESC, total_cost DESC;
+```
 
 ### Limits (legacy defaults)
 
