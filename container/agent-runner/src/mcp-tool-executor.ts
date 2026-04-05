@@ -14,6 +14,7 @@ import {
   StreamableHTTPClientTransport,
 } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Tool } from 'ollama';
+import type { AnthropicTool } from './anthropic-api-engine.js';
 
 export interface McpServerConfig {
   // Stdio (existing)
@@ -52,6 +53,8 @@ export class McpToolExecutor {
   private ollamaToolMap = new Map<string, { mcpTool: string; serverName: string }>();
   /** Ollama-format tool schemas */
   private ollamaTools: Tool[] = [];
+  /** Anthropic API format tool schemas */
+  private anthropicTools: AnthropicTool[] = [];
   /** Per-call timeout inherited from task/container timeout */
   private callTimeoutMs: number | undefined;
 
@@ -161,6 +164,12 @@ export class McpToolExecutor {
               parameters: schema.inputSchema as Tool['function']['parameters'],
             },
           });
+
+          this.anthropicTools.push({
+            name: ollamaToolName,
+            description: schema.description ?? '',
+            input_schema: schema.inputSchema as Record<string, unknown>,
+          });
         }
 
         log(`Connected to MCP server: ${name} (${config.tools.length} tools, ${schemas.length} schemas)`);
@@ -212,6 +221,11 @@ export class McpToolExecutor {
   /** Get all tools in Ollama format for passing to ollama.chat(). */
   getOllamaTools(): Tool[] {
     return this.ollamaTools;
+  }
+
+  /** Get all tools in Anthropic API format for passing to messages.create(). */
+  getAnthropicTools(): AnthropicTool[] {
+    return this.anthropicTools;
   }
 
   /** Get the mapping from Ollama tool names to MCP tool names. */

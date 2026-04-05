@@ -1222,3 +1222,78 @@ describe('scheduled task defense-in-depth', () => {
     expect(getAllTasks()).toHaveLength(0);
   });
 });
+
+// --- useAgentSdk passthrough ---
+
+describe('schedule_task useAgentSdk', () => {
+  it('passes useAgentSdk=true through to the created task', async () => {
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'sdk task',
+        schedule_type: 'once',
+        schedule_value: '2025-06-01T00:00:00',
+        targetJid: 'other@g.us',
+        useAgentSdk: true,
+      },
+      'whatsapp_main',
+      true,
+      deps,
+    );
+
+    const tasks = getAllTasks();
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].useAgentSdk).toBe(1); // SQLite stores as integer
+  });
+
+  it('defaults useAgentSdk to false when not specified', async () => {
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'default task',
+        schedule_type: 'once',
+        schedule_value: '2025-06-01T00:00:00',
+        targetJid: 'other@g.us',
+      },
+      'whatsapp_main',
+      true,
+      deps,
+    );
+
+    const tasks = getAllTasks();
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].useAgentSdk).toBeFalsy();
+  });
+});
+
+describe('update_task useAgentSdk', () => {
+  it('can update useAgentSdk on an existing task', async () => {
+    createTask({
+      id: 'task-sdk-update',
+      group_folder: 'other-group',
+      chat_jid: 'other@g.us',
+      prompt: 'original',
+      schedule_type: 'once',
+      schedule_value: '2025-06-01T00:00:00',
+      context_mode: 'isolated',
+      next_run: '2025-06-01T00:00:00.000Z',
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    await processTaskIpc(
+      {
+        type: 'update_task',
+        taskId: 'task-sdk-update',
+        useAgentSdk: true,
+      },
+      'whatsapp_main',
+      true,
+      deps,
+    );
+
+    const task = getTaskById('task-sdk-update');
+    expect(task).toBeDefined();
+    expect(task!.useAgentSdk).toBe(1);
+  });
+});

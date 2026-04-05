@@ -39,6 +39,7 @@ These features are unique to this fork:
 
 - **External MCP server support** — domain-specific tools loaded from `data/mcp-servers.json`, mounted into containers at runtime. Supports both stdio and remote HTTP servers.
 - **Ollama integration** — local model inference with full MCP tool-calling, plus direct mode that bypasses Claude entirely (see below)
+- **Lightweight Anthropic API engine** — third execution path using the raw Messages API instead of the full Agent SDK, reducing token usage ~92% for scheduled tasks. Also available for interactive groups via the `anthropic:` model prefix. See [docs/LIGHTWEIGHT-TASK-ENGINE.md](docs/LIGHTWEIGHT-TASK-ENGINE.md).
 - **Per-task and per-group model selection** with configurable tool-round limits and timeouts
 - **Per-task timezone support**
 - **Credential proxy rate limiting**
@@ -58,7 +59,7 @@ The **primary database** is `store/messages.db` (SQLite). This is the only datab
 
 - `chats` — chat/group metadata
 - `messages` — full message history
-- `scheduled_tasks` — recurring tasks with cron expressions
+- `scheduled_tasks` — recurring tasks with cron expressions (includes `use_agent_sdk` to opt specific tasks into the full Agent SDK)
 - `task_run_logs` — task execution history (includes `input_tokens`, `output_tokens`, `cost_usd`)
 - `router_state` — timestamps and agent state
 - `sessions` — session IDs per group
@@ -177,7 +178,9 @@ The `model` field on groups and tasks selects the backend:
 
 | Model string | Backend | Example |
 |--------------|---------|---------|
-| `haiku`, `sonnet`, `opus` | Claude (existing) | `sonnet` |
+| `haiku`, `sonnet`, `opus` | Claude Agent SDK | `sonnet` |
+| `claude:modelname` | Claude Agent SDK (explicit) | `claude:sonnet` |
+| `anthropic:modelname` | Anthropic API (lightweight) | `anthropic:haiku` |
 | `ollama:modelname` | Ollama direct (local) | `ollama:qwen3` |
 | `ollama-remote:modelname` | Ollama direct (remote) | `ollama-remote:mistral` |
 
@@ -201,13 +204,16 @@ Claude Agent (in container)
 ### Direct Mode (Ollama as primary agent)
 
 ```
-Agent Runner (in container)
-  ├─ Detects ollama: or ollama-remote: model prefix
-  ├─ Skips Claude SDK entirely (no Anthropic API calls)
-  ├─ Spawns MCP server processes (nanoclaw IPC, external servers)
-  ├─ Builds system prompt from OLLAMA.md (or CLAUDE.md fallback)
-  ├─ Runs ollama-chat-engine loop with tool calling
-  └─ Outputs results in same format as Claude path
+Agent Runner (in container) — three-way routing:
+  ├─ ollama: / ollama-remote: prefix → Ollama engine
+  │   ├─ Skips Claude SDK (no Anthropic API calls)
+  │   ├─ Builds system prompt from OLLAMA.md (or CLAUDE.md fallback)
+  │   └─ Runs ollama-chat-engine loop with tool calling
+  ├─ anthropic: prefix or (scheduled task && !useAgentSdk) → Anthropic API engine
+  │   ├─ Uses raw Messages API (minimal system prompt, MCP tools only)
+  │   ├─ Builds system prompt from CLAUDE.md only
+  │   └─ Runs anthropic-api-engine loop with session continuity
+  └─ else (bare model name or claude: prefix) → Claude Agent SDK
 ```
 
 In direct mode:
@@ -264,11 +270,15 @@ Example `data/backend-defaults.json`:
   "ollama": {
     "maxToolRounds": 10,
     "timeoutMs": 300000
+  },
+  "anthropic-api": {
+    "maxToolRounds": 15,
+    "timeoutMs": 300000
   }
 }
 ```
 
-`maxToolRounds: 0` means unlimited (SDK manages). For Ollama, the default is 10 rounds.
+`maxToolRounds: 0` means unlimited (SDK manages). For Ollama, the default is 10 rounds. For the Anthropic API engine, the default is 15 rounds.
 
 ### MCP Tool Call Timeout
 
@@ -300,6 +310,53 @@ GROUP BY t.id, day ORDER BY day DESC, total_cost DESC;
 - 5-minute timeout per Ollama invocation (configurable)
 - 30-minute timeout per Claude invocation (configurable)
 - Status written to `data/ipc/{group}/ollama_status.json` in real time
+
+## Anthropic API Engine (Lightweight)
+
+A third execution path that uses the raw Anthropic Messages API (`@anthropic-ai/sdk`) instead of the full Claude Agent SDK. This eliminates ~50K tokens of system prompt overhead per call, reducing costs ~92% for scheduled tasks.
+
+### When it's used
+
+1. **Scheduled tasks** — all scheduled tasks use the lightweight engine by default (unless `useAgentSdk` is set to true on the task)
+2. **Interactive groups with `anthropic:` prefix** — groups configured with a model like `anthropic:haiku` use the lightweight engine for all messages
+
+### What it provides
+
+- Minimal system prompt (from `CLAUDE.md` only, no SDK bloat)
+- MCP tool calling (same tools as Ollama path)
+- Session continuity for interactive groups (conversation history carried across IPC iterations)
+- Auto-compaction at 75% of model context window
+- Interactive `/compact` command
+- Stuck loop detection (same algorithm as Ollama engine)
+- Lazy skill injection (system prompt grows as tools from new servers are called)
+- Token usage tracking (input, output, cache read, cache creation)
+
+### What it does NOT provide
+
+- No built-in tools (no Bash, Read, Write, Edit, Glob, Grep, etc.)
+- No web search or web fetch
+- No file system access
+- No agent teams / subagents
+
+Tasks that need these capabilities should set `useAgentSdk: true`.
+
+### Key files
+
+| File | Purpose |
+|------|---------|
+| `container/agent-runner/src/anthropic-api-engine.ts` | Core chat loop with tool calling |
+| `container/agent-runner/src/task-system-prompt.ts` | System prompt builder (CLAUDE.md only) |
+| `src/connection-profiles.ts` | `anthropic:` prefix routing, `anthropic-api` backend defaults |
+| `docs/LIGHTWEIGHT-TASK-ENGINE.md` | Full design spec |
+
+### Per-task SDK override
+
+The `useAgentSdk` boolean on scheduled tasks (default `false`) controls which engine runs:
+
+- `false` (default) — lightweight Anthropic API engine
+- `true` — full Claude Agent SDK with all built-in tools
+
+Set via IPC chat: include `use_agent_sdk: true` when creating or updating a task. Also configurable in the web UI as the "Use full Agent SDK" checkbox.
 
 ## External MCP Servers
 

@@ -207,6 +207,33 @@ describe('McpToolExecutor', () => {
     });
   });
 
+  describe('getAnthropicTools', () => {
+    it('returns tools in Anthropic SDK format', async () => {
+      const executor = new McpToolExecutor();
+      await executor.initialize(sampleConfig());
+
+      const tools = executor.getAnthropicTools();
+      expect(tools).toHaveLength(2);
+      expect(tools[0]).toEqual({
+        name: 'nanoclaw__send_message',
+        description: 'Send a message',
+        input_schema: { type: 'object', properties: { text: { type: 'string' } } },
+      });
+      expect(tools[1]).toEqual({
+        name: 'nanoclaw__schedule_task',
+        description: 'Schedule a task',
+        input_schema: { type: 'object', properties: { prompt: { type: 'string' } } },
+      });
+    });
+
+    it('returns empty array when no tools configured', async () => {
+      const executor = new McpToolExecutor();
+      await executor.initialize({});
+
+      expect(executor.getAnthropicTools()).toEqual([]);
+    });
+  });
+
   describe('HTTP transport (remote MCP servers)', () => {
     function httpConfig(): Record<string, McpServerConfig> {
       return {

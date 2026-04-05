@@ -71,6 +71,7 @@ export interface ScheduledTask {
   timezone?: string | null;
   maxToolRounds?: number | null;
   timeoutMs?: number | null;
+  useAgentSdk?: boolean | number | null;
   next_run: string | null;
   last_run: string | null;
   last_result: string | null;

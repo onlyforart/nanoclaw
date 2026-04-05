@@ -6,6 +6,7 @@ import {
   computeNextRun,
   startSchedulerLoop,
 } from './task-scheduler.js';
+import type { ScheduledTask } from './types.js';
 
 describe('task scheduler', () => {
   beforeEach(() => {
@@ -94,6 +95,44 @@ describe('task scheduler', () => {
     };
 
     expect(computeNextRun(task)).toBeNull();
+  });
+
+  it('persists and reads useAgentSdk from the database', () => {
+    createTask({
+      id: 'task-sdk-true',
+      group_folder: 'test-group',
+      chat_jid: 'test@g.us',
+      prompt: 'run with sdk',
+      schedule_type: 'once',
+      schedule_value: '2026-02-22T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: new Date(Date.now() + 60_000).toISOString(),
+      status: 'active',
+      created_at: '2026-02-22T00:00:00.000Z',
+      useAgentSdk: true,
+    });
+
+    const task = getTaskById('task-sdk-true');
+    expect(task).toBeDefined();
+    expect(task!.useAgentSdk).toBe(1); // SQLite stores booleans as integers
+
+    // Default (not specified) should be falsy
+    createTask({
+      id: 'task-sdk-default',
+      group_folder: 'test-group',
+      chat_jid: 'test@g.us',
+      prompt: 'run without sdk',
+      schedule_type: 'once',
+      schedule_value: '2026-02-22T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: new Date(Date.now() + 60_000).toISOString(),
+      status: 'active',
+      created_at: '2026-02-22T00:00:00.000Z',
+    });
+
+    const task2 = getTaskById('task-sdk-default');
+    expect(task2).toBeDefined();
+    expect(task2!.useAgentSdk).toBeFalsy();
   });
 
   it('computeNextRun skips missed intervals without infinite loop', () => {
