@@ -196,14 +196,36 @@ export async function runAnthropicApiChat(
     iterations++;
     onStatus?.(`Iteration ${iterations}`);
 
-    // Build API request
+    // Build API request with cache_control breakpoints for prompt caching.
+    // The system prompt and tool definitions are stable across runs —
+    // caching them avoids re-processing ~12-14K tokens every call.
+    const systemBlocks = currentSystemPrompt
+      ? [
+          {
+            type: 'text' as const,
+            text: currentSystemPrompt,
+            cache_control: { type: 'ephemeral' as const },
+          },
+        ]
+      : undefined;
+
+    // Add cache_control to the last tool (marks end of cacheable tool prefix)
+    let cachedTools: Anthropic.Tool[] | undefined;
+    if (tools.length > 0) {
+      cachedTools = tools.map((t, i) =>
+        i === tools.length - 1
+          ? { ...t, cache_control: { type: 'ephemeral' as const } } as Anthropic.Tool
+          : t as Anthropic.Tool,
+      );
+    }
+
     const createParams: Anthropic.MessageCreateParamsNonStreaming = {
       model,
       messages,
       max_tokens: 4096,
-      ...(currentSystemPrompt ? { system: currentSystemPrompt } : {}),
+      ...(systemBlocks ? { system: systemBlocks } : {}),
       ...(temperature !== undefined ? { temperature } : {}),
-      ...(tools.length > 0 ? { tools: tools as Anthropic.Tool[] } : {}),
+      ...(cachedTools ? { tools: cachedTools } : {}),
     };
 
     const response = await client.messages.create(createParams);
