@@ -549,7 +549,7 @@ describe('runAnthropicApiChat', () => {
     expect(toolResultMsg).toBeDefined();
   });
 
-  it('passes system prompt and temperature to API', async () => {
+  it('passes system prompt as content block array with cache_control', async () => {
     mockCreate.mockResolvedValueOnce(
       makeResponse({
         content: [{ type: 'text', text: 'Hello' }],
@@ -566,10 +566,36 @@ describe('runAnthropicApiChat', () => {
     );
 
     const callArgs = mockCreate.mock.calls[0][0];
-    expect(callArgs.system).toBe('You are a helpful bot.');
+    // System prompt should be a content block array with cache_control on last block
+    expect(Array.isArray(callArgs.system)).toBe(true);
+    expect(callArgs.system).toHaveLength(1);
+    expect(callArgs.system[0].type).toBe('text');
+    expect(callArgs.system[0].text).toBe('You are a helpful bot.');
+    expect(callArgs.system[0].cache_control).toEqual({ type: 'ephemeral' });
     expect(callArgs.temperature).toBe(0.7);
     expect(callArgs.model).toBe('claude-haiku-4-5-20251001');
     expect(callArgs.max_tokens).toBe(4096);
+  });
+
+  it('adds cache_control to the last tool definition', async () => {
+    mockCreate.mockResolvedValueOnce(
+      makeResponse({
+        content: [{ type: 'text', text: 'Done' }],
+        stop_reason: 'end_turn',
+      }),
+    );
+
+    const tools = [
+      { name: 'tool_a', description: 'First', input_schema: { type: 'object' } },
+      { name: 'tool_b', description: 'Second', input_schema: { type: 'object' } },
+    ];
+
+    await runAnthropicApiChat('Hi', baseOptions({ tools }));
+
+    const callArgs = mockCreate.mock.calls[0][0];
+    // Only the last tool should have cache_control
+    expect(callArgs.tools[0].cache_control).toBeUndefined();
+    expect(callArgs.tools[1].cache_control).toEqual({ type: 'ephemeral' });
   });
 
   it('resolves short model name "haiku" to full model ID via /v1/models', async () => {
