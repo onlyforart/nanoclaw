@@ -5,7 +5,7 @@ import { CONTAINER_TIMEOUT, DATA_DIR, IDLE_TIMEOUT } from './config.js';
 import { readEnvFile } from './env.js';
 
 export interface ConnectionProfile {
-  backend: 'claude' | 'ollama';
+  backend: 'claude' | 'ollama' | 'anthropic-api';
   ollamaHost?: string;
   ollamaModel?: string;
   maxToolRounds: number;
@@ -22,6 +22,7 @@ interface BackendDefaults {
 interface BackendDefaultsConfig {
   claude?: BackendDefaults;
   ollama?: BackendDefaults;
+  'anthropic-api'?: BackendDefaults;
 }
 
 // Hardcoded fallbacks when no config file exists
@@ -32,6 +33,11 @@ const HARDCODED_CLAUDE: Required<BackendDefaults> = {
 
 const HARDCODED_OLLAMA: Required<BackendDefaults> = {
   maxToolRounds: 10,
+  timeoutMs: 300_000, // 5 min
+};
+
+const HARDCODED_ANTHROPIC_API: Required<BackendDefaults> = {
+  maxToolRounds: 15,
   timeoutMs: 300_000, // 5 min
 };
 
@@ -94,6 +100,30 @@ export function resolveProfile(
     };
   }
 
+  // anthropic: prefix → lightweight Anthropic API engine
+  if (model?.startsWith('anthropic:')) {
+    const defaults = config['anthropic-api'] ?? {};
+    const maxToolRounds =
+      overrides?.maxToolRounds ??
+      defaults.maxToolRounds ??
+      HARDCODED_ANTHROPIC_API.maxToolRounds;
+    const timeoutMs =
+      overrides?.timeoutMs ??
+      defaults.timeoutMs ??
+      HARDCODED_ANTHROPIC_API.timeoutMs;
+
+    return {
+      backend: 'anthropic-api',
+      maxToolRounds,
+      timeoutMs,
+      containerTimeoutMs: timeoutMs + 60_000, // timeout + 1 min grace
+      idleTimeoutMs: IDLE_TIMEOUT,
+    };
+  }
+
+  // claude: prefix → strip prefix, route to Agent SDK (same as bare model name)
+  // No need to strip here — the prefix is stripped in the agent-runner routing.
+
   const defaults = config.claude ?? {};
   const maxToolRounds =
     overrides?.maxToolRounds ??
@@ -117,4 +147,9 @@ export function isOllamaModel(model: string | undefined): boolean {
     model?.startsWith('ollama:') === true ||
     model?.startsWith('ollama-remote:') === true
   );
+}
+
+/** Returns true if the model string selects the lightweight Anthropic API backend. */
+export function isAnthropicApiModel(model: string | undefined): boolean {
+  return model?.startsWith('anthropic:') === true;
 }

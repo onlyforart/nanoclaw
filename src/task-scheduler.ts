@@ -200,6 +200,7 @@ async function runTask(
         maxToolRounds: profile.maxToolRounds,
         timeoutMs: profile.timeoutMs,
         showThinking: group.showThinking,
+        useAgentSdk: !!task.useAgentSdk,
       },
       (proc, containerName) =>
         deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),

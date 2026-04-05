@@ -64,6 +64,7 @@ export interface ContainerInput {
   maxToolRounds?: number;
   timeoutMs?: number;
   showThinking?: boolean;
+  useAgentSdk?: boolean;
 }
 
 export interface ContainerOutput {

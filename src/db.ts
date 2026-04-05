@@ -204,6 +204,15 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  // Add use_agent_sdk column (lightweight task engine: default false)
+  try {
+    database.exec(
+      `ALTER TABLE scheduled_tasks ADD COLUMN use_agent_sdk INTEGER DEFAULT 0`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
   // Add channel and is_group columns if they don't exist (migration for existing DBs)
   try {
     database.exec(`ALTER TABLE chats ADD COLUMN channel TEXT`);
@@ -227,15 +236,9 @@ function createSchema(database: Database.Database): void {
 
   // Add token usage columns to task_run_logs
   try {
-    database.exec(
-      `ALTER TABLE task_run_logs ADD COLUMN input_tokens INTEGER`,
-    );
-    database.exec(
-      `ALTER TABLE task_run_logs ADD COLUMN output_tokens INTEGER`,
-    );
-    database.exec(
-      `ALTER TABLE task_run_logs ADD COLUMN cost_usd REAL`,
-    );
+    database.exec(`ALTER TABLE task_run_logs ADD COLUMN input_tokens INTEGER`);
+    database.exec(`ALTER TABLE task_run_logs ADD COLUMN output_tokens INTEGER`);
+    database.exec(`ALTER TABLE task_run_logs ADD COLUMN cost_usd REAL`);
   } catch {
     /* columns already exist */
   }
@@ -468,8 +471,8 @@ export function createTask(
 ): void {
   db.prepare(
     `
-    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, model, temperature, timezone, max_tool_rounds, timeout_ms, next_run, status, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, model, temperature, timezone, max_tool_rounds, timeout_ms, use_agent_sdk, next_run, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `,
   ).run(
     task.id,
@@ -484,13 +487,14 @@ export function createTask(
     task.timezone || null,
     task.maxToolRounds ?? null,
     task.timeoutMs ?? null,
+    task.useAgentSdk ? 1 : 0,
     task.next_run,
     task.status,
     task.created_at,
   );
 }
 
-const TASK_SELECT = `SELECT id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, model, temperature, timezone, max_tool_rounds AS maxToolRounds, timeout_ms AS timeoutMs, next_run, last_run, last_result, status, created_at FROM scheduled_tasks`;
+const TASK_SELECT = `SELECT id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, model, temperature, timezone, max_tool_rounds AS maxToolRounds, timeout_ms AS timeoutMs, use_agent_sdk AS useAgentSdk, next_run, last_run, last_result, status, created_at FROM scheduled_tasks`;
 
 export function getTaskById(id: string): ScheduledTask | undefined {
   return db.prepare(`${TASK_SELECT} WHERE id = ?`).get(id) as
@@ -525,6 +529,7 @@ export function updateTask(
       | 'timezone'
       | 'maxToolRounds'
       | 'timeoutMs'
+      | 'useAgentSdk'
     >
   >,
 ): void {
@@ -570,6 +575,10 @@ export function updateTask(
   if (updates.timeoutMs !== undefined) {
     fields.push('timeout_ms = ?');
     values.push(updates.timeoutMs);
+  }
+  if (updates.useAgentSdk !== undefined) {
+    fields.push('use_agent_sdk = ?');
+    values.push(updates.useAgentSdk ? 1 : 0);
   }
 
   if (fields.length === 0) return;

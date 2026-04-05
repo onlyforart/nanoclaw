@@ -26,7 +26,11 @@ vi.mock('fs', async () => {
   };
 });
 
-import { resolveProfile, isOllamaModel } from './connection-profiles.js';
+import {
+  resolveProfile,
+  isOllamaModel,
+  isAnthropicApiModel,
+} from './connection-profiles.js';
 import { readEnvFile } from './env.js';
 
 const mockedReadEnvFile = vi.mocked(readEnvFile);
@@ -55,6 +59,29 @@ describe('isOllamaModel', () => {
 
   it('returns true for ollama-remote: prefix', () => {
     expect(isOllamaModel('ollama-remote:mistral')).toBe(true);
+  });
+});
+
+describe('isAnthropicApiModel', () => {
+  it('returns false for undefined', () => {
+    expect(isAnthropicApiModel(undefined)).toBe(false);
+  });
+
+  it('returns false for Claude model aliases', () => {
+    expect(isAnthropicApiModel('haiku')).toBe(false);
+    expect(isAnthropicApiModel('sonnet')).toBe(false);
+  });
+
+  it('returns false for ollama: prefix', () => {
+    expect(isAnthropicApiModel('ollama:qwen3')).toBe(false);
+  });
+
+  it('returns true for anthropic: prefix', () => {
+    expect(isAnthropicApiModel('anthropic:haiku')).toBe(true);
+  });
+
+  it('returns false for claude: prefix', () => {
+    expect(isAnthropicApiModel('claude:sonnet')).toBe(false);
   });
 });
 
@@ -173,6 +200,72 @@ describe('resolveProfile', () => {
     });
   });
 
+  describe('Anthropic API backend (anthropic: prefix)', () => {
+    it('returns anthropic-api backend for anthropic: prefix', () => {
+      const profile = resolveProfile('anthropic:haiku');
+      expect(profile.backend).toBe('anthropic-api');
+    });
+
+    it('strips the anthropic: prefix from model name', () => {
+      const profile = resolveProfile('anthropic:haiku');
+      expect(profile.ollamaModel).toBeUndefined();
+      expect(profile.ollamaHost).toBeUndefined();
+    });
+
+    it('uses hardcoded 5 min default timeout when no config file', () => {
+      const profile = resolveProfile('anthropic:haiku');
+      expect(profile.timeoutMs).toBe(300_000);
+    });
+
+    it('sets containerTimeoutMs to timeout + 1 min grace', () => {
+      const profile = resolveProfile('anthropic:haiku');
+      expect(profile.containerTimeoutMs).toBe(360_000);
+    });
+
+    it('uses IDLE_TIMEOUT as idleTimeoutMs (persistent sessions)', () => {
+      const profile = resolveProfile('anthropic:haiku');
+      expect(profile.idleTimeoutMs).toBe(1_800_000);
+    });
+
+    it('defaults maxToolRounds to 15', () => {
+      const profile = resolveProfile('anthropic:haiku');
+      expect(profile.maxToolRounds).toBe(15);
+    });
+
+    it('applies per-group/task overrides', () => {
+      const profile = resolveProfile('anthropic:haiku', {
+        maxToolRounds: 8,
+        timeoutMs: 120_000,
+      });
+      expect(profile.maxToolRounds).toBe(8);
+      expect(profile.timeoutMs).toBe(120_000);
+      expect(profile.containerTimeoutMs).toBe(180_000);
+    });
+  });
+
+  describe('Claude explicit prefix (claude: prefix)', () => {
+    it('returns claude backend for claude: prefix', () => {
+      const profile = resolveProfile('claude:sonnet');
+      expect(profile.backend).toBe('claude');
+    });
+
+    it('uses Claude defaults (same as bare model name)', () => {
+      const profile = resolveProfile('claude:sonnet');
+      expect(profile.timeoutMs).toBe(1_800_000);
+      expect(profile.maxToolRounds).toBe(0);
+      expect(profile.idleTimeoutMs).toBe(1_800_000);
+    });
+
+    it('applies per-group/task overrides', () => {
+      const profile = resolveProfile('claude:sonnet', {
+        maxToolRounds: 5,
+        timeoutMs: 60_000,
+      });
+      expect(profile.maxToolRounds).toBe(5);
+      expect(profile.timeoutMs).toBe(60_000);
+    });
+  });
+
   describe('backend-defaults.json config file', () => {
     function mockConfigFile(config: Record<string, unknown>) {
       mockedExistsSync.mockReturnValue(true);
@@ -233,6 +326,28 @@ describe('resolveProfile', () => {
 
       const profile = resolveProfile('ollama:qwen3');
       expect(profile.maxToolRounds).toBe(10);
+      expect(profile.timeoutMs).toBe(300_000);
+    });
+
+    it('reads anthropic-api defaults from config file', () => {
+      mockConfigFile({
+        'anthropic-api': { maxToolRounds: 20, timeoutMs: 600_000 },
+      });
+
+      const profile = resolveProfile('anthropic:haiku');
+      expect(profile.maxToolRounds).toBe(20);
+      expect(profile.timeoutMs).toBe(600_000);
+      expect(profile.containerTimeoutMs).toBe(660_000);
+    });
+
+    it('falls back to hardcoded defaults for missing anthropic-api section', () => {
+      mockConfigFile({
+        claude: { maxToolRounds: 25 },
+        // no anthropic-api section
+      });
+
+      const profile = resolveProfile('anthropic:haiku');
+      expect(profile.maxToolRounds).toBe(15);
       expect(profile.timeoutMs).toBe(300_000);
     });
 
