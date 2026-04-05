@@ -5,6 +5,70 @@ const REPEAT_THRESHOLD = 3;
 const DEFAULT_CONTEXT_WINDOW = 150_000;
 const COMPACTION_RATIO = 0.75;
 
+/**
+ * Resolve short model aliases to full Anthropic model IDs.
+ * The raw Messages API doesn't accept aliases like "haiku" — it needs
+ * the full ID. We try /v1/models first (via credential proxy), falling
+ * back to a static mapping if that fails.
+ */
+let cachedModels: Array<{ id: string; context_window?: number }> | null = null;
+
+/** @internal — for tests only */
+export function _resetModelCacheForTests(): void {
+  cachedModels = null;
+}
+
+async function fetchModels(client: Anthropic): Promise<typeof cachedModels> {
+  if (cachedModels) return cachedModels;
+  try {
+    const response = await client.models.list({ limit: 100 });
+    cachedModels = response.data.map((m) => ({
+      id: m.id,
+      context_window: (m as unknown as Record<string, unknown>).context_window as number | undefined,
+    }));
+    return cachedModels;
+  } catch {
+    return null;
+  }
+}
+
+const STATIC_MODEL_MAP: Record<string, string> = {
+  haiku: 'claude-haiku-4-5-20251001',
+  sonnet: 'claude-sonnet-4-5-20250929',
+  opus: 'claude-opus-4-0-20250514',
+};
+
+function resolveModelId(
+  shortName: string,
+  models: Array<{ id: string }> | null,
+): string {
+  // Already a full ID
+  if (shortName.startsWith('claude-')) return shortName;
+
+  // Try dynamic resolution from /v1/models
+  if (models) {
+    const lower = shortName.toLowerCase();
+    const matches = models
+      .filter((m) => m.id.includes(lower))
+      .sort((a, b) => b.id.localeCompare(a.id)); // latest by date suffix
+    if (matches.length > 0) return matches[0].id;
+  }
+
+  // Fall back to static mapping
+  return STATIC_MODEL_MAP[shortName.toLowerCase()] || shortName;
+}
+
+function getContextWindow(
+  modelId: string,
+  models: Array<{ id: string; context_window?: number }> | null,
+): number {
+  if (models) {
+    const match = models.find((m) => m.id === modelId);
+    if (match?.context_window) return match.context_window;
+  }
+  return DEFAULT_CONTEXT_WINDOW;
+}
+
 export interface AnthropicApiOptions {
   model: string;
   systemPrompt?: string;
@@ -54,7 +118,7 @@ export async function runAnthropicApiChat(
   });
 
   const {
-    model,
+    model: rawModel,
     systemPrompt,
     temperature,
     maxIterations,
@@ -65,8 +129,13 @@ export async function runAnthropicApiChat(
     onStatus,
     serverSkills,
     existingMessages,
-    contextWindowSize = DEFAULT_CONTEXT_WINDOW,
   } = options;
+
+  // Resolve short model names (e.g. "haiku" → "claude-haiku-4-5-20251001")
+  const models = await fetchModels(client);
+  const model = resolveModelId(rawModel, models);
+  const contextWindowSize =
+    options.contextWindowSize ?? getContextWindow(model, models);
 
   const startTime = Date.now();
   let iterations = 0;
