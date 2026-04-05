@@ -631,6 +631,13 @@ const AppGroupDetail = {
                   class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
               </div>
             </div>
+            <div class="mb-4">
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" v-model="newTask.useAgentSdk" class="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                <span class="text-sm font-medium">Use full Agent SDK</span>
+                <span class="text-xs text-gray-500 dark:text-gray-400">Enable for tasks needing file access, bash, or web search</span>
+              </label>
+            </div>
             <div class="flex gap-3">
               <button @click="createNewTask" :disabled="saving || !newTask.prompt.trim() || !newTask.scheduleValue.trim() || !!newTaskScheduleError"
                 class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors">
@@ -683,7 +690,7 @@ const AppGroupDetail = {
     const showNewTask = ref(false);
     const newTask = Vue.reactive({
       prompt: '', scheduleType: 'cron', scheduleValue: '', contextMode: 'isolated',
-      model: '', temperature: null, timezone: '', maxToolRounds: null, timeoutMs: null,
+      model: '', temperature: null, timezone: '', maxToolRounds: null, timeoutMs: null, useAgentSdk: false,
     });
 
     const newTaskScheduleError = computed(() => validateSchedule(newTask.scheduleType, newTask.scheduleValue));
@@ -769,6 +776,7 @@ const AppGroupDetail = {
         if (newTask.timezone) body.timezone = newTask.timezone;
         if (newTask.maxToolRounds != null) body.maxToolRounds = newTask.maxToolRounds;
         if (newTask.timeoutMs != null) body.timeoutMs = newTask.timeoutMs;
+        if (newTask.useAgentSdk) body.useAgentSdk = true;
         const created = await api(`/groups/${props.folder}/tasks`, { method: 'POST', body });
         tasks.value.push(created);
         showNewTask.value = false;
@@ -782,6 +790,7 @@ const AppGroupDetail = {
         newTask.timezone = '';
         newTask.maxToolRounds = null;
         newTask.timeoutMs = null;
+        newTask.useAgentSdk = false;
         showToast('Task created');
       } catch (e) { showToast(e.message, 'error'); }
       saving.value = false;
@@ -890,13 +899,22 @@ const AppTaskDetail = {
                   class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
               </div>
             </div>
-            <div class="mb-4">
-              <label class="block text-sm font-medium mb-1">Status</label>
-              <select v-model="form.status"
-                class="w-full md:w-1/2 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
-                <option value="active">Active</option>
-                <option value="paused">Paused</option>
-              </select>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+              <div>
+                <label class="block text-sm font-medium mb-1">Status</label>
+                <select v-model="form.status"
+                  class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
+                  <option value="active">Active</option>
+                  <option value="paused">Paused</option>
+                </select>
+              </div>
+              <div class="flex items-end">
+                <label class="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" v-model="form.useAgentSdk" class="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                  <span class="text-sm font-medium">Use full Agent SDK</span>
+                </label>
+                <span class="ml-2 text-xs text-gray-500 dark:text-gray-400">Enable for tasks needing file access, bash, or web search</span>
+              </div>
             </div>
             <button @click="save" :disabled="saving || !!scheduleError"
               class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors">
@@ -981,7 +999,7 @@ const AppTaskDetail = {
 
     const form = Vue.reactive({
       scheduleType: '', scheduleValue: '', contextMode: 'isolated', model: '', temperature: null, timezone: '',
-      maxToolRounds: null, timeoutMs: null, status: 'active',
+      maxToolRounds: null, timeoutMs: null, useAgentSdk: false, status: 'active',
     });
 
     const modelPlaceholder = computed(() => {
@@ -1024,6 +1042,7 @@ const AppTaskDetail = {
         form.timezone = t.timezone || '';
         form.maxToolRounds = t.maxToolRounds;
         form.timeoutMs = t.timeoutMs;
+        form.useAgentSdk = !!t.useAgentSdk;
         form.status = t.status;
         runs.value = r;
         // Fetch group to show inherited model as placeholder
@@ -1047,6 +1066,7 @@ const AppTaskDetail = {
         if (form.timezone) body.timezone = form.timezone;
         if (form.maxToolRounds != null) body.maxToolRounds = form.maxToolRounds;
         if (form.timeoutMs != null) body.timeoutMs = form.timeoutMs;
+        body.useAgentSdk = form.useAgentSdk;
         body.status = form.status;
         const updated = await api(`/tasks/${props.taskId}`, { method: 'PATCH', body });
         task.value = updated;
