@@ -2,11 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock the Anthropic SDK
 const mockCreate = vi.fn();
+const mockModelsList = vi.fn();
 
 vi.mock('@anthropic-ai/sdk', () => {
   return {
     default: class MockAnthropic {
       messages = { create: mockCreate };
+      models = { list: mockModelsList };
       constructor(_opts?: unknown) {}
     },
   };
@@ -14,6 +16,7 @@ vi.mock('@anthropic-ai/sdk', () => {
 
 import {
   runAnthropicApiChat,
+  _resetModelCacheForTests,
   type AnthropicApiOptions,
   type AnthropicApiResult,
 } from './anthropic-api-engine.js';
@@ -63,6 +66,16 @@ function baseOptions(
 
 beforeEach(() => {
   mockCreate.mockReset();
+  mockModelsList.mockReset();
+  _resetModelCacheForTests();
+  // Default: models list returns common models
+  mockModelsList.mockResolvedValue({
+    data: [
+      { id: 'claude-haiku-4-5-20251001', context_window: 200000 },
+      { id: 'claude-sonnet-4-5-20250929', context_window: 200000 },
+      { id: 'claude-opus-4-0-20250514', context_window: 200000 },
+    ],
+  });
 });
 
 describe('runAnthropicApiChat', () => {
@@ -434,6 +447,7 @@ describe('runAnthropicApiChat', () => {
     const result = await runAnthropicApiChat(
       'Tell me about X',
       baseOptions({
+        contextWindowSize: 150_000,
         existingMessages: [
           { role: 'user' as const, content: 'Previous long conversation...' },
           { role: 'assistant' as const, content: 'Previous long response...' },
@@ -482,7 +496,7 @@ describe('runAnthropicApiChat', () => {
 
     const result = await runAnthropicApiChat(
       'Latest question',
-      baseOptions({ existingMessages: longHistory }),
+      baseOptions({ contextWindowSize: 150_000, existingMessages: longHistory }),
     );
 
     // Should have: [summary, ack, last user msg, last assistant msg]
@@ -556,6 +570,67 @@ describe('runAnthropicApiChat', () => {
     expect(callArgs.temperature).toBe(0.7);
     expect(callArgs.model).toBe('claude-haiku-4-5-20251001');
     expect(callArgs.max_tokens).toBe(4096);
+  });
+
+  it('resolves short model name "haiku" to full model ID via /v1/models', async () => {
+    mockCreate.mockResolvedValueOnce(
+      makeResponse({
+        content: [{ type: 'text', text: 'Hello' }],
+        stop_reason: 'end_turn',
+      }),
+    );
+
+    await runAnthropicApiChat('Hi', baseOptions({ model: 'haiku' }));
+
+    const callArgs = mockCreate.mock.calls[0][0];
+    expect(callArgs.model).toBe('claude-haiku-4-5-20251001');
+  });
+
+  it('resolves short model name "sonnet" to full model ID', async () => {
+    mockCreate.mockResolvedValueOnce(
+      makeResponse({
+        content: [{ type: 'text', text: 'Hello' }],
+        stop_reason: 'end_turn',
+      }),
+    );
+
+    await runAnthropicApiChat('Hi', baseOptions({ model: 'sonnet' }));
+
+    const callArgs = mockCreate.mock.calls[0][0];
+    expect(callArgs.model).toBe('claude-sonnet-4-5-20250929');
+  });
+
+  it('passes through full model IDs unchanged', async () => {
+    mockCreate.mockResolvedValueOnce(
+      makeResponse({
+        content: [{ type: 'text', text: 'Hello' }],
+        stop_reason: 'end_turn',
+      }),
+    );
+
+    await runAnthropicApiChat(
+      'Hi',
+      baseOptions({ model: 'claude-3-haiku-20240307' }),
+    );
+
+    const callArgs = mockCreate.mock.calls[0][0];
+    expect(callArgs.model).toBe('claude-3-haiku-20240307');
+  });
+
+  it('falls back to static mapping when /v1/models fails', async () => {
+    mockModelsList.mockRejectedValueOnce(new Error('network error'));
+
+    mockCreate.mockResolvedValueOnce(
+      makeResponse({
+        content: [{ type: 'text', text: 'Hello' }],
+        stop_reason: 'end_turn',
+      }),
+    );
+
+    await runAnthropicApiChat('Hi', baseOptions({ model: 'haiku' }));
+
+    const callArgs = mockCreate.mock.calls[0][0];
+    expect(callArgs.model).toBe('claude-haiku-4-5-20251001');
   });
 
   it('uses contextWindowSize for auto-compaction threshold', async () => {
