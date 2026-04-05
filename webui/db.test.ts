@@ -59,7 +59,8 @@ beforeEach(() => {
       temperature REAL DEFAULT NULL,
       timezone TEXT DEFAULT NULL,
       max_tool_rounds INTEGER DEFAULT NULL,
-      timeout_ms INTEGER DEFAULT NULL
+      timeout_ms INTEGER DEFAULT NULL,
+      use_agent_sdk INTEGER DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS task_run_logs (

@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 
 import { initDb, closeDb } from '../db.js';
-import { handleGetGroupTasks, handleGetTask, handlePatchTask, handleGetTaskRuns } from './tasks.js';
+import { handleGetGroupTasks, handleGetTask, handleCreateTask, handlePatchTask, handleGetTaskRuns } from './tasks.js';
 
 let tmpDir: string;
 
@@ -21,22 +21,33 @@ beforeEach(() => {
       next_run TEXT, last_run TEXT, last_result TEXT, status TEXT DEFAULT 'active',
       created_at TEXT NOT NULL, context_mode TEXT DEFAULT 'isolated',
       model TEXT DEFAULT NULL, temperature REAL DEFAULT NULL, timezone TEXT DEFAULT NULL,
-      max_tool_rounds INTEGER DEFAULT NULL, timeout_ms INTEGER DEFAULT NULL
+      max_tool_rounds INTEGER DEFAULT NULL, timeout_ms INTEGER DEFAULT NULL,
+      use_agent_sdk INTEGER DEFAULT 0
     );
     CREATE TABLE task_run_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL,
       run_at TEXT NOT NULL, duration_ms INTEGER NOT NULL, status TEXT NOT NULL,
       result TEXT, error TEXT
     );
+    CREATE TABLE registered_groups (
+      jid TEXT PRIMARY KEY, name TEXT, folder TEXT UNIQUE, trigger_pattern TEXT,
+      is_main INTEGER DEFAULT 0, requires_trigger INTEGER DEFAULT 1,
+      model TEXT, temperature REAL, max_tool_rounds INTEGER, timeout_ms INTEGER,
+      show_thinking INTEGER DEFAULT 0
+    );
   `);
 
-  db.prepare(`INSERT INTO scheduled_tasks VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, NULL, NULL)`).run(
+  db.prepare(`INSERT INTO scheduled_tasks VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, NULL, NULL, 0)`).run(
     'task-1', 'slack_main', 'slack@main', 'Daily standup', 'cron', '0 9 * * 1-5',
     '2024-06-03T09:00:00.000Z', 'active', '2024-01-01T00:00:00.000Z', 'group', 'sonnet', null, 'America/New_York',
   );
-  db.prepare(`INSERT INTO scheduled_tasks VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, NULL, NULL, NULL, NULL, NULL)`).run(
+  db.prepare(`INSERT INTO scheduled_tasks VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, 1)`).run(
     'task-2', 'slack_main', 'slack@main', 'Weekly digest', 'cron', '0 8 * * 5',
     '2024-06-07T08:00:00.000Z', 'paused', '2024-02-01T00:00:00.000Z', 'isolated',
+  );
+
+  db.prepare(`INSERT INTO registered_groups (jid, name, folder, trigger_pattern) VALUES (?, ?, ?, ?)`).run(
+    'slack@main', 'Main', 'slack_main', '@bot',
   );
 
   db.prepare(`INSERT INTO task_run_logs (task_id, run_at, duration_ms, status, result, error) VALUES (?, ?, ?, ?, ?, ?)`).run(
@@ -158,6 +169,66 @@ describe('handlePatchTask', () => {
     if ('task' in result) {
       expect(result.task.timezone).toBe('Europe/London');
       expect(result.task.nextRun).toBeTruthy();
+    }
+  });
+});
+
+describe('useAgentSdk', () => {
+  it('returns useAgentSdk in task response', () => {
+    const t1 = handleGetTask('task-1');
+    expect(t1).not.toBeNull();
+    expect(t1!.useAgentSdk).toBe(false);
+
+    const t2 = handleGetTask('task-2');
+    expect(t2).not.toBeNull();
+    expect(t2!.useAgentSdk).toBe(true);
+  });
+
+  it('includes useAgentSdk in group tasks listing', () => {
+    const tasks = handleGetGroupTasks('slack_main');
+    expect(tasks).toHaveLength(2);
+    const sdkTask = tasks.find(t => t.id === 'task-2');
+    expect(sdkTask!.useAgentSdk).toBe(true);
+  });
+
+  it('can update useAgentSdk via patch', () => {
+    const result = handlePatchTask('task-1', { useAgentSdk: true });
+    expect('task' in result).toBe(true);
+    if ('task' in result) {
+      expect(result.task.useAgentSdk).toBe(true);
+    }
+  });
+
+  it('can set useAgentSdk to false via patch', () => {
+    const result = handlePatchTask('task-2', { useAgentSdk: false });
+    expect('task' in result).toBe(true);
+    if ('task' in result) {
+      expect(result.task.useAgentSdk).toBe(false);
+    }
+  });
+
+  it('can create task with useAgentSdk', () => {
+    const result = handleCreateTask('slack_main', {
+      prompt: 'SDK task',
+      scheduleType: 'interval',
+      scheduleValue: '60000',
+      useAgentSdk: true,
+    });
+    expect('task' in result).toBe(true);
+    if ('task' in result) {
+      expect(result.task.useAgentSdk).toBe(true);
+    }
+  });
+
+  it('defaults useAgentSdk to false on create', () => {
+    const result = handleCreateTask('slack_main', {
+      prompt: 'Default task',
+      scheduleType: 'interval',
+      scheduleValue: '60000',
+    });
+    expect('task' in result).toBe(true);
+    if ('task' in result) {
+      expect(result.task.useAgentSdk).toBe(false);
     }
   });
 });
