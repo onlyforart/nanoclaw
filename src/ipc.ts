@@ -408,6 +408,7 @@ function handleScheduleTask(
     timezone: taskTimezone,
     maxToolRounds: data.maxToolRounds ?? null,
     timeoutMs: data.timeoutMs ?? null,
+    useAgentSdk: data.useAgentSdk ? true : false,
     next_run: nextRunOrError,
     status: 'active',
     created_at: new Date().toISOString(),
@@ -471,6 +472,8 @@ function handleUpdateTask(
   if (data.maxToolRounds !== undefined)
     updates.maxToolRounds = data.maxToolRounds ?? null;
   if (data.timeoutMs !== undefined) updates.timeoutMs = data.timeoutMs ?? null;
+  if (data.useAgentSdk !== undefined)
+    updates.useAgentSdk = data.useAgentSdk ? true : false;
 
   // Recompute next_run if schedule or timezone changed
   if (

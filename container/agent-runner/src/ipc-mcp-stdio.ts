@@ -25,7 +25,7 @@ const isOllama = process.env.NANOCLAW_IS_OLLAMA === '1';
 // Model description varies: Ollama models should not see Claude aliases
 const modelDescription = isOllama
   ? 'Model to use (e.g., "ollama:modelname" or "ollama-remote:modelname"). Omit to use the group default.'
-  : 'Model to use. Aliases: "haiku" (default), "sonnet", "opus". Ollama: "ollama:modelname" or "ollama-remote:modelname". Defaults to haiku if omitted.';
+  : 'Model to use. Aliases: "haiku" (default), "sonnet", "opus". Ollama: "ollama:modelname" or "ollama-remote:modelname". Anthropic API (lightweight, no built-in tools): "anthropic:haiku", "anthropic:sonnet". Defaults to haiku if omitted.';
 
 function writeIpcFile(dir: string, data: object): string {
   fs.mkdirSync(dir, { recursive: true });
@@ -208,6 +208,7 @@ SCHEDULE VALUE FORMAT (times are interpreted in the task's timezone):
     timezone: z.string().optional().describe('IANA timezone for this task (e.g., "Europe/London", "America/New_York"). Cron and once times are interpreted in this timezone. Defaults to system timezone if omitted.'),
     max_tool_rounds: z.number().int().positive().optional().describe('Maximum tool-calling rounds per invocation. Defaults to backend default.'),
     timeout_ms: z.number().int().positive().optional().describe('Per-invocation timeout in milliseconds. Defaults to backend default.'),
+    use_agent_sdk: z.boolean().optional().describe('Use the full Agent SDK instead of the lightweight API engine. Enable for tasks that need file access, bash, or web search. Default: false (lightweight).'),
     target_group_jid: z.string().optional().describe('(Main group only) JID of the group to schedule the task for. Defaults to the current group.'),
   },
   async (args) => {
@@ -269,6 +270,7 @@ SCHEDULE VALUE FORMAT (times are interpreted in the task's timezone):
       timezone: args.timezone || undefined,
       maxToolRounds: args.max_tool_rounds,
       timeoutMs: args.timeout_ms,
+      useAgentSdk: args.use_agent_sdk || false,
       targetJid,
       createdBy: groupFolder,
       fromScheduledTask: isScheduledTask,
@@ -408,6 +410,7 @@ server.tool(
     timezone: z.string().optional().describe('IANA timezone for this task (e.g., "Europe/London", "America/New_York"). Set to empty string to clear and use system default.'),
     max_tool_rounds: z.number().int().positive().optional().describe('Maximum tool-calling rounds. Omit to keep current value.'),
     timeout_ms: z.number().int().positive().optional().describe('Per-invocation timeout in milliseconds. Omit to keep current value.'),
+    use_agent_sdk: z.boolean().optional().describe('Use the full Agent SDK instead of the lightweight API engine. Omit to keep current value.'),
   },
   async (args) => {
     // Validate schedule_value if provided
@@ -447,6 +450,7 @@ server.tool(
     if (args.timezone !== undefined) data.timezone = args.timezone || undefined;
     if (args.max_tool_rounds !== undefined) data.maxToolRounds = args.max_tool_rounds;
     if (args.timeout_ms !== undefined) data.timeoutMs = args.timeout_ms;
+    if (args.use_agent_sdk !== undefined) data.useAgentSdk = args.use_agent_sdk ? 1 : 0;
 
     const result = await writeIpcFileAndWaitForResult(TASKS_DIR, data);
     if (!result.success) {
