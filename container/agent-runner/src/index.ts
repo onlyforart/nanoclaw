@@ -20,9 +20,12 @@ import { query, HookCallback, PreCompactHookInput } from '@anthropic-ai/claude-a
 import { fileURLToPath } from 'url';
 import { Ollama } from 'ollama';
 import { runOllamaChat } from './ollama-chat-engine.js';
+import { runAnthropicApiChat } from './anthropic-api-engine.js';
 import { McpToolExecutor, McpServerConfig } from './mcp-tool-executor.js';
 import { buildOllamaSystemPrompt } from './ollama-system-prompt.js';
+import { buildTaskSystemPrompt } from './task-system-prompt.js';
 import { buildSdkMcpServers } from './mcp-config.js';
+import type { MessageParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
 
 interface ContainerInput {
   prompt: string;
@@ -816,6 +819,246 @@ async function runOllamaDirectMode(containerInput: ContainerInput): Promise<void
   }
 }
 
+/**
+ * Run Anthropic API direct mode — bypass Claude SDK, use raw Messages API.
+ * Used for: scheduled tasks (default) and interactive groups with anthropic: prefix.
+ * Mirrors runOllamaDirectMode() but uses the Anthropic API engine.
+ */
+async function runAnthropicApiMode(containerInput: ContainerInput): Promise<void> {
+  let model = containerInput.model || 'haiku';
+  if (model.startsWith('anthropic:')) {
+    model = model.slice('anthropic:'.length);
+  }
+
+  log(`Anthropic API mode: model=${model} (scheduled=${containerInput.isScheduledTask || false})`);
+
+  // Load MCP server config
+  const mcpConfigPath = '/workspace/mcp-servers-config/config.json';
+  let mcpConfig: Record<string, McpServerConfig> = {};
+  if (fs.existsSync(mcpConfigPath)) {
+    try {
+      mcpConfig = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf-8'));
+    } catch (err) {
+      log(`Failed to load MCP config: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // Add the nanoclaw IPC server
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const ipcServerPath = path.join(__dirname, 'ipc-mcp-stdio.js');
+
+  // Scheduled tasks get restricted tool access (same as Ollama path)
+  const nanoclawTools = containerInput.isScheduledTask
+    ? ['send_message', 'send_cross_channel_message', 'list_tasks']
+    : ['send_message', 'send_cross_channel_message', 'schedule_task', 'list_tasks', 'pause_task', 'resume_task', 'cancel_task', 'update_task', 'register_group', 'update_group', 'list_groups'];
+
+  mcpConfig['nanoclaw'] = {
+    command: 'node',
+    args: [ipcServerPath],
+    tools: nanoclawTools,
+    env: {
+      NANOCLAW_CHAT_JID: containerInput.chatJid,
+      NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
+      NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+      NANOCLAW_IS_SCHEDULED_TASK: containerInput.isScheduledTask ? '1' : '0',
+      NANOCLAW_IS_OLLAMA: '0',
+    },
+  };
+
+  // Initialize MCP tool executor
+  const executor = new McpToolExecutor();
+  try {
+    await executor.initialize(mcpConfig, undefined, {
+      callTimeoutMs: containerInput.timeoutMs,
+    });
+  } catch (err) {
+    log(`MCP executor init failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  // Load skill files for lazy injection (same logic as Ollama path)
+  const serverSkills = new Map<string, string>();
+  for (const [name, config] of Object.entries(mcpConfig)) {
+    const cfg = config as { skill?: string; skillContent?: string };
+
+    if (cfg.skillContent) {
+      serverSkills.set(name, cfg.skillContent);
+      log(`Loaded inline skill for ${name} (${cfg.skillContent.length} chars)`);
+      continue;
+    }
+
+    if (!cfg.skill) continue;
+    const candidates = [
+      `/workspace/mcp-servers/${name}/${cfg.skill}`,
+      `/home/node/.claude/skills/${name}/SKILL.md`,
+    ];
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        try {
+          const raw = fs.readFileSync(candidate, 'utf-8');
+          let content = raw.replace(/^---\n[\s\S]*?\n---\n/, '').trim();
+
+          const skillDir = path.dirname(candidate);
+          const refPattern = /\[([^\]]+)\]\(([^)]+\.md)\)/g;
+          const inlined: string[] = [];
+          let match;
+          while ((match = refPattern.exec(content)) !== null) {
+            const [, title, relPath] = match;
+            const refFile = path.resolve(skillDir, relPath);
+            if (fs.existsSync(refFile)) {
+              try {
+                const refContent = fs.readFileSync(refFile, 'utf-8').trim();
+                if (refContent) {
+                  inlined.push(`### ${title}\n\n${refContent}`);
+                }
+              } catch { /* skip */ }
+            }
+          }
+          if (inlined.length > 0) {
+            content += '\n\n' + inlined.join('\n\n');
+          }
+
+          if (content) {
+            serverSkills.set(name, content);
+            log(`Loaded skill for ${name} from ${candidate} (${inlined.length} referenced docs inlined)`);
+          }
+        } catch { /* skip */ }
+        break;
+      }
+    }
+  }
+
+  const systemPrompt = buildTaskSystemPrompt(containerInput);
+
+  // Build initial prompt
+  let prompt = containerInput.prompt;
+  if (containerInput.isScheduledTask) {
+    prompt = `[SCHEDULED TASK - The following message was sent automatically and is not coming directly from the user or group.]\n\n${prompt}`;
+  }
+
+  // Drain any pending IPC messages
+  fs.mkdirSync(IPC_INPUT_DIR, { recursive: true });
+  try { fs.unlinkSync(IPC_INPUT_CLOSE_SENTINEL); } catch { /* ignore */ }
+  const pending = drainIpcInput();
+  if (pending.length > 0) {
+    prompt += '\n' + pending.join('\n');
+  }
+
+  // Session continuity: carry conversation history across IPC iterations
+  let existingMessages: MessageParam[] | undefined;
+
+  // Query loop: run chat → wait for IPC → repeat
+  try {
+    while (true) {
+      log(`Starting Anthropic API chat (model: ${model})...`);
+
+      const result = await runAnthropicApiChat(prompt, {
+        model,
+        systemPrompt,
+        temperature: containerInput.temperature,
+        maxIterations: containerInput.maxToolRounds || 15,
+        timeoutMs: containerInput.timeoutMs || 300_000,
+        tools: executor.getAnthropicTools(),
+        toolNameMap: executor.getToolNameMap(),
+        executeTool: (name, args) => executor.callTool(name, args),
+        serverSkills,
+        existingMessages,
+      });
+
+      // Preserve conversation history for next iteration
+      existingMessages = result.messages;
+
+      const meta = result.timedOut ? ' [timeout]'
+        : result.maxIterationsReached ? ' [max iterations]'
+        : '';
+
+      writeOutput({
+        status: 'success',
+        result: result.response || null,
+        usage: {
+          inputTokens: result.inputTokens,
+          outputTokens: result.outputTokens,
+          cacheReadInputTokens: result.cacheReadInputTokens,
+          cacheCreationInputTokens: result.cacheCreationInputTokens,
+        },
+      });
+      log(`  Usage: ${result.inputTokens} in (${result.cacheReadInputTokens} cache read, ${result.cacheCreationInputTokens} cache write), ${result.outputTokens} out`);
+
+      if (meta) {
+        log(`Chat ended${meta} after ${result.iterations} round(s)`);
+      }
+
+      // Check for _close sentinel
+      if (shouldClose()) {
+        log('Close sentinel received, exiting');
+        break;
+      }
+
+      // Wait for next IPC message or close
+      log('Anthropic API chat done, waiting for next IPC message...');
+      const nextMessage = await waitForIpcMessage();
+      if (nextMessage === null) {
+        log('Close sentinel received, exiting');
+        break;
+      }
+
+      // Handle /compact command
+      if (nextMessage.trim() === '/compact') {
+        log('Compact requested via /compact command');
+        if (existingMessages && existingMessages.length > 2) {
+          const beforeCount = existingMessages.length;
+          // Use the engine's compaction by sending a compaction prompt
+          const compactResult = await runAnthropicApiChat(
+            'Summarize the key points, decisions, and context from this conversation so far.\nBe concise but preserve all information needed to continue the conversation coherently.\nInclude any pending tasks, open questions, or commitments made.',
+            {
+              model,
+              systemPrompt,
+              maxIterations: 1,
+              timeoutMs: containerInput.timeoutMs || 300_000,
+              tools: [],
+              toolNameMap: new Map(),
+              executeTool: async () => '',
+              existingMessages,
+            },
+          );
+          // Replace messages with compacted form
+          const summaryText = compactResult.response;
+          existingMessages = [
+            { role: 'user', content: summaryText },
+            { role: 'assistant', content: 'Understood, continuing.' },
+          ];
+          writeOutput({
+            status: 'success',
+            result: `Conversation compacted — ${beforeCount} messages → ${existingMessages.length} messages`,
+          });
+        } else {
+          writeOutput({
+            status: 'success',
+            result: 'Nothing to compact — conversation is already minimal.',
+          });
+        }
+        // Continue waiting for next message
+        if (shouldClose()) {
+          log('Close sentinel received after compact, exiting');
+          break;
+        }
+        log('Compact done, waiting for next IPC message...');
+        const afterCompact = await waitForIpcMessage();
+        if (afterCompact === null) {
+          log('Close sentinel received, exiting');
+          break;
+        }
+        prompt = afterCompact;
+        continue;
+      }
+
+      log(`Got new message (${nextMessage.length} chars), starting new chat`);
+      prompt = nextMessage;
+    }
+  } finally {
+    await executor.close();
+  }
+}
+
 async function main(): Promise<void> {
   let containerInput: ContainerInput;
 
@@ -833,9 +1076,20 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Strip claude: prefix (documentary only — routes to Agent SDK like bare model names)
+  if (containerInput.model?.startsWith('claude:')) {
+    containerInput.model = containerInput.model.slice('claude:'.length);
+  }
+
   // Ollama direct mode: bypass Claude SDK entirely
   if (containerInput.model?.startsWith('ollama:') || containerInput.model?.startsWith('ollama-remote:')) {
     await runOllamaDirectMode(containerInput);
+    return;
+  }
+
+  // Anthropic API mode: lightweight direct API calls (for anthropic: prefix or scheduled tasks)
+  if (containerInput.model?.startsWith('anthropic:') || (containerInput.isScheduledTask && !containerInput.useAgentSdk)) {
+    await runAnthropicApiMode(containerInput);
     return;
   }
 
