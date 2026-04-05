@@ -26,6 +26,7 @@ interface TaskResponse {
   timezone: string | null;
   maxToolRounds: number | null;
   timeoutMs: number | null;
+  useAgentSdk: boolean;
   nextRun: string | null;
   lastRun: string | null;
   lastResult: string | null;
@@ -54,6 +55,7 @@ function formatTask(row: TaskRow): TaskResponse {
     timezone: row.timezone,
     maxToolRounds: row.max_tool_rounds,
     timeoutMs: row.timeout_ms,
+    useAgentSdk: !!row.use_agent_sdk,
     nextRun: row.next_run,
     lastRun: row.last_run,
     lastResult: row.last_result,
@@ -93,6 +95,7 @@ export function handleCreateTask(
     timezone?: string;
     maxToolRounds?: number;
     timeoutMs?: number;
+    useAgentSdk?: boolean;
   },
 ): { task: TaskResponse } | { error: string } {
   if (!body.prompt?.trim()) return { error: 'prompt is required' };
@@ -128,6 +131,7 @@ export function handleCreateTask(
     timezone: body.timezone || null,
     max_tool_rounds: body.maxToolRounds ?? null,
     timeout_ms: body.timeoutMs ?? null,
+    use_agent_sdk: body.useAgentSdk ? 1 : 0,
     next_run: nextRun,
     status: 'active',
     created_at: now,
@@ -177,6 +181,7 @@ export function handlePatchTask(
     timezone?: string;
     maxToolRounds?: number;
     timeoutMs?: number;
+    useAgentSdk?: boolean;
     status?: string;
   },
 ): { task: TaskResponse } | { error: string } {
@@ -193,6 +198,7 @@ export function handlePatchTask(
   if (body.timezone !== undefined) updates.timezone = body.timezone;
   if (body.maxToolRounds !== undefined) updates.max_tool_rounds = body.maxToolRounds;
   if (body.timeoutMs !== undefined) updates.timeout_ms = body.timeoutMs;
+  if (body.useAgentSdk !== undefined) updates.use_agent_sdk = body.useAgentSdk ? 1 : 0;
   if (body.status !== undefined) updates.status = body.status;
 
   // Recompute next_run when schedule or timezone changes
