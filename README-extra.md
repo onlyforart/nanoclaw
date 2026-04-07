@@ -395,6 +395,67 @@ Remote servers run on the host (or elsewhere on the network). At container launc
 
 The container-side config (generated at `data/sessions/{group}/mcp-servers/config.json`) strips `hostPath` and pre-resolves environment variables.
 
+## PagePilot Shared Script Library
+
+[PagePilot](https://github.com/onlyforart/pagepilot) is one of the external MCP servers (registered in `data/mcp-servers.json`). It compiles a small DSL into Playwright-based ES modules for web scraping and monitoring. NanoClaw exposes its scripts to in-container agents through a **two-layer registry**:
+
+| Layer | Mount path | Mode | Backed by |
+|---|---|---|---|
+| **Writable (per-group)** | `/workspace/group/.pagepilot` | rw | `groups/{name}/.pagepilot/` on the host |
+| **Shared (read-only fallback)** | `/workspace/shared-pagepilot` | ro | `groups/.pagepilot/` on the host (typically a symlink to a private archive) |
+
+The in-container PagePilot MCP server reads two env vars set in `.env`:
+
+```sh
+PAGEPILOT_STORE=/workspace/group/.pagepilot                # writable layer
+PAGEPILOT_STORE_SHARED=/workspace/shared-pagepilot         # colon-separated read-only fallbacks
+```
+
+### Lookup semantics
+
+PagePilot's `Registry` walks the writable layer first, then each shared layer in order, and returns the first match. So:
+
+- `pp_get` and `pp_run` against any group find a script even if it only exists in the shared library
+- `pp_compile` always writes to the **per-group** writable layer — no group can mutate the shared library through MCP tools
+- `pp_update` against a shared-only script refuses unless `overwrite: true` is passed (which forks the script down into the writable layer first)
+- `pp_delete` refuses to remove shared scripts entirely
+
+Run history (`runs/`) lives only in the writable layer — execution logs are per-group, never shared.
+
+### Hosting the shared library
+
+`groups/.pagepilot/` is gitignored so it can be backed by anything you like — a normal directory of test scripts, a checkout of a private repo, or a symlink to a private workspace sibling. Mount the directory and PagePilot will pick it up; you don't need to restart NanoClaw unless you change the env vars or container-runner mount config.
+
+The conventional layout for a private archive is a sibling of `nanoclaw/` in the workspace, symlinked into place:
+
+```
+~/nanoclaw-workspace/
+├── nanoclaw/
+│   └── groups/
+│       └── .pagepilot → ../../<private-archive-dir>      (gitignored symlink)
+└── <private-archive-dir>/
+    ├── .git/
+    └── scripts/
+        └── <script-name>/
+            ├── source.pp
+            ├── compiled.mjs
+            └── meta.json
+```
+
+Replace `<private-archive-dir>` with whatever you've named your private repo. The relative symlink target keeps the path stable across different host home directories.
+
+### Authoring new scripts
+
+Use the PagePilot **explorer** MCP server (`pagepilot-explorer`, also wired into NanoClaw) to inspect a page from a coding agent before writing the `.pp` source. Tools include `explore_snapshot`, `explore_frames`, `explore_eval`, and `explore_watch` (temporal observation for "is this data flowing"). Once you've worked out selectors:
+
+1. Write `source.pp` in `<archive>/scripts/<name>/`
+2. `pagepilot check <file>` — validate
+3. `pagepilot compile <file> -o <dir>/compiled.mjs` — compile
+4. Update `<dir>/meta.json` (name, description, tags, sha256 of source)
+5. Commit to the private archive
+
+The script is then immediately available to every group via `pp_run name="<name>"`.
+
 ## Container System
 
 Every agent invocation spawns an isolated container:
