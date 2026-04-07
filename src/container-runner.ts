@@ -254,6 +254,21 @@ async function buildVolumeMounts(
     }
   }
 
+  // Shared pagepilot script library — read-only fallback layer that any
+  // group can pull scripts from. Mounted at the same path for every group
+  // so PAGEPILOT_STORE_SHARED can be a single fixed value. The host may
+  // back this directory with a symlink to a private archive so the scripts
+  // themselves can be version-controlled outside this tree. Mount is
+  // skipped silently if the source doesn't exist.
+  const sharedPagepilotDir = path.join(GROUPS_DIR, '.pagepilot');
+  if (fs.existsSync(sharedPagepilotDir)) {
+    mounts.push({
+      hostPath: sharedPagepilotDir,
+      containerPath: '/workspace/shared-pagepilot',
+      readonly: true,
+    });
+  }
+
   // Session directory isolation:
   // - Messages use the group-level .claude/ (supports session resumption)
   // - Isolated tasks use .claude-task/ (wiped before each run to prevent

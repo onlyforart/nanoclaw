@@ -20,6 +20,10 @@ groups/main/*
 groups/global/*
 !groups/main/CLAUDE.md
 !groups/global/CLAUDE.md
+# Shared pagepilot script library — never commit, even if `groups/*`
+# is ever loosened. Scripts may contain selectors and URLs for
+# private monitoring targets.
+groups/.pagepilot/
 
 # Secrets
 *.keys.json
