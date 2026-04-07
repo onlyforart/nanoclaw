@@ -383,7 +383,10 @@ async function runAgent(
       }
     : undefined;
 
-  const profile = resolveProfile(group.model, { maxToolRounds: group.maxToolRounds, timeoutMs: group.timeoutMs });
+  const profile = resolveProfile(group.model, {
+    maxToolRounds: group.maxToolRounds,
+    timeoutMs: group.timeoutMs,
+  });
 
   try {
     const output = await runContainerAgent(
