@@ -32,6 +32,10 @@ mcp-servers/
 # Temp files
 .tmp-*
 
+# Runtime state and local scripts
+nanoclaw.pid
+start-nanoclaw.sh
+
 # OS
 .DS_Store
 
