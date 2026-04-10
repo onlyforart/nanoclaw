@@ -6,12 +6,45 @@ This is a personal fork of [qwibitai/nanoclaw](https://github.com/qwibitai/nanoc
 
 | Remote | Repo | Purpose |
 |--------|------|---------|
-| `origin` | `onlyforart/nanoclaw` | This fork |
+| `origin` | `onlyforart/nanoclaw` | This fork (GitHub + GitLab push) |
+| `gitlab` | `lmax-ux-dev/.../nanoclaw-open-source-fork` | GitLab mirror |
 | `upstream` | `qwibitai/nanoclaw` | Official upstream |
 | `slack` | `qwibitai/nanoclaw-slack` | Slack channel skill |
 | `whatsapp` | `qwibitai/nanoclaw-whatsapp` | WhatsApp channel skill |
 
+`origin` has two push URLs (GitHub and GitLab). GitHub is the fetch source and the source of truth. A bot may push version-bump commits to GitHub between your commit and push.
+
 To pull upstream changes: `git fetch upstream && git merge upstream/main`
+
+### Push workflow
+
+**Always fetch and rebase before committing** to incorporate any bot commits (version bumps) that landed on GitHub since your last fetch:
+
+```bash
+git fetch origin
+git rebase origin/main
+# ... make changes, commit ...
+git push origin main                          # pushes to both GitHub + GitLab
+```
+
+**When pushing branches (e.g. skill/web-ui):**
+
+```bash
+git checkout skill/web-ui
+git merge main --no-edit                      # fast-forward to main
+git checkout main
+git push origin main skill/web-ui             # push both in one command
+```
+
+**If a push fails** because GitHub has a new commit, do NOT force-push. Instead:
+
+```bash
+git fetch origin
+git rebase origin/main                        # absorb the new commit
+git push origin main                          # retry — now fast-forward
+```
+
+The goal is to never force-push. Fetch+rebase before committing prevents most failures; fetch+rebase+retry handles the rare race.
 
 ## Docker Sandbox Install (macOS)
 
