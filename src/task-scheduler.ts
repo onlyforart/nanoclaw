@@ -264,6 +264,8 @@ async function runTask(
     error,
     input_tokens: lastUsage?.inputTokens ?? null,
     output_tokens: lastUsage?.outputTokens ?? null,
+    cache_read_input_tokens: lastUsage?.cacheReadInputTokens ?? null,
+    cache_creation_input_tokens: lastUsage?.cacheCreationInputTokens ?? null,
     cost_usd: lastUsage?.costUSD ?? null,
   });
 

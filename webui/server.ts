@@ -10,7 +10,7 @@ import {
   HttpError,
   type CompiledRoute,
 } from './router.js';
-import { handleGetGroups, handleGetGroup, handlePatchGroup } from './routes/groups.js';
+import { handleGetGroups, handleGetGroup, handlePatchGroup, handleGetGroupTokenUsage } from './routes/groups.js';
 import {
   handleGetGlobalPrompts,
   handlePutGlobalPrompts,
@@ -91,6 +91,18 @@ export function createApp(groupsDir: string, publicDir?: string): http.Server {
         const body = (await parseJsonBody(req)) as any;
         const result = handlePatchGroup(params.folder, body);
         if (!result) throw new HttpError(404, 'Group not found');
+        return result;
+      },
+    },
+
+    // Token usage
+    {
+      method: 'GET',
+      compiled: compilePath('/api/v1/groups/:folder/token-usage'),
+      handler: (params, _req, query) => {
+        const days = query.days ? parseInt(query.days, 10) : 30;
+        const result = handleGetGroupTokenUsage(params.folder, days);
+        if (!result) throw new HttpError(isValidFolder(params.folder) ? 404 : 400, isValidFolder(params.folder) ? 'Group not found' : 'Invalid folder name');
         return result;
       },
     },

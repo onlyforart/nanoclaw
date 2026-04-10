@@ -17,7 +17,7 @@
     "auth": "tsx src/whatsapp-auth.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "build:webui": "tsc -p webui/tsconfig.json && rm -rf dist/webui/public && cp -r webui/public dist/webui/public",
+    "build:webui": "tsc -p webui/tsconfig.json && node webui/scripts/validate-templates.mjs && rm -rf dist/webui/public && cp -r webui/public dist/webui/public",
     "webui": "node dist/webui/start.js",
     "webui:dev": "tsx webui/start.ts"
   },
@@ -39,6 +39,7 @@
     "@types/node": "^22.10.0",
     "@types/qrcode-terminal": "^0.12.0",
     "@vitest/coverage-v8": "^4.0.18",
+    "@vue/compiler-dom": "^3.5.32",
     "husky": "^9.1.7",
     "prettier": "^3.8.1",
     "tsx": "^4.19.0",

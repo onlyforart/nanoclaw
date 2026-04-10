@@ -555,6 +555,64 @@ const AppGroupDetail = {
 
         <!-- Tasks Tab -->
         <div v-if="activeTab === 'tasks'">
+          <!-- Token Usage Chart -->
+          <div v-if="tokenUsage.length" class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 mb-4">
+            <h3 class="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-3">Daily Token Usage</h3>
+            <div class="overflow-x-auto">
+              <svg :width="chartWidth" height="160" class="block">
+                <!-- Y axis labels (tokens, left) -->
+                <text v-for="(label, i) in chartYLabels" :key="'y'+i"
+                  :x="48" :y="20 + i * (120 / (chartYLabels.length - 1))"
+                  text-anchor="end" class="fill-gray-400" style="font-size:10px">{{ label }}</text>
+                <!-- Grid lines -->
+                <line v-for="(label, i) in chartYLabels" :key="'g'+i"
+                  :x1="54" :x2="chartWidth - (hasCostData ? 48 : 4)"
+                  :y1="20 + i * (120 / (chartYLabels.length - 1))"
+                  :y2="20 + i * (120 / (chartYLabels.length - 1))"
+                  stroke="currentColor" class="text-gray-200 dark:text-gray-700" stroke-width="0.5" />
+                <!-- Bars -->
+                <g v-for="(d, i) in tokenUsage" :key="d.date">
+                  <!-- Uncached (bottom) -->
+                  <rect :x="58 + i * 28" :y="140 - chartBarHeight(d.uncached + d.cached)"
+                    :width="20" :height="chartBarHeight(d.uncached)"
+                    class="fill-blue-500" rx="2">
+                    <title v-text="barTooltip(d)"></title>
+                  </rect>
+                  <!-- Cached (top) -->
+                  <rect v-if="d.cached > 0"
+                    :x="58 + i * 28" :y="140 - chartBarHeight(d.uncached + d.cached)"
+                    :width="20" :height="chartBarHeight(d.cached)"
+                    class="fill-blue-300 dark:fill-blue-400/60" rx="2">
+                    <title v-text="barTooltip(d)"></title>
+                  </rect>
+                  <!-- Date label -->
+                  <text :x="68 + i * 28" y="154" text-anchor="middle" class="fill-gray-400" style="font-size:9px"
+                    v-if="tokenUsage.length <= 15 || i % Math.ceil(tokenUsage.length / 15) === 0">{{ d.date.slice(5) }}</text>
+                </g>
+                <!-- Cost line overlay -->
+                <template v-if="hasCostData">
+                  <polyline v-for="(seg, si) in costLineSegments" :key="'cl'+si" :points="seg" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-linejoin="round" />
+                  <template v-for="(d, i) in tokenUsage" :key="'c'+i">
+                    <circle v-if="d.cost != null"
+                      :cx="68 + i * 28" :cy="costY(d.cost)"
+                      r="2.5" fill="#f59e0b">
+                      <title v-text="d.date + '\\nCost: $' + formatCost(d.cost)"></title>
+                    </circle>
+                  </template>
+                  <!-- Y axis labels (cost, right) -->
+                  <text v-for="(label, i) in costYLabels" :key="'cr'+i"
+                    :x="chartWidth - 4" :y="20 + i * (120 / (costYLabels.length - 1))"
+                    text-anchor="end" class="fill-amber-500" style="font-size:10px">{{ label }}</text>
+                </template>
+              </svg>
+            </div>
+            <div class="flex items-center gap-4 mt-2 text-xs text-gray-400">
+              <span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded-sm bg-blue-300 dark:bg-blue-400/60"></span> Cached</span>
+              <span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded-sm bg-blue-500"></span> Uncached</span>
+              <span v-if="hasCostData" class="flex items-center gap-1"><span class="inline-block w-3 h-0.5 bg-amber-500"></span> Cost (USD)</span>
+            </div>
+          </div>
+
           <!-- New Task Button -->
           <div class="flex justify-end mb-4" v-if="!showNewTask">
             <button @click="showNewTask = true"
@@ -683,7 +741,8 @@ const AppGroupDetail = {
     const ollama = ref('');
     const loading = ref(true);
     const saving = ref(false);
-    const activeTab = ref(props.initialTab || 'settings');
+    const activeTab = ref(props.initialTab || 'tasks');
+    const tokenUsage = ref([]);
     let taskInterval = null;
 
     const form = Vue.reactive({ model: '', temperature: null, maxToolRounds: null, timeoutMs: null, showThinking: false });
@@ -697,9 +756,9 @@ const AppGroupDetail = {
     const newTaskScheduleHint = computed(() => scheduleHintText(newTask.scheduleType, newTask.scheduleValue));
 
     const tabs = computed(() => [
-      { key: 'settings', label: 'Settings' },
-      { key: 'prompts', label: 'Prompts' },
       { key: 'tasks', label: 'Tasks', count: tasks.value.length },
+      { key: 'prompts', label: 'Prompts' },
+      { key: 'settings', label: 'Settings' },
     ]);
 
     const fetchTasks = async () => {
@@ -708,10 +767,11 @@ const AppGroupDetail = {
 
     onMounted(async () => {
       try {
-        const [g, p, t] = await Promise.all([
+        const [g, p, t, tu] = await Promise.all([
           api(`/groups/${props.folder}`),
           api(`/groups/${props.folder}/prompts`),
           api(`/groups/${props.folder}/tasks`),
+          api(`/groups/${props.folder}/token-usage`).catch(() => []),
         ]);
         group.value = g;
         form.model = g.model || '';
@@ -722,6 +782,7 @@ const AppGroupDetail = {
         claude.value = p.claude;
         ollama.value = p.ollama || '';
         tasks.value = t;
+        tokenUsage.value = tu;
       } catch (e) { showToast(e.message, 'error'); }
       loading.value = false;
       taskInterval = setInterval(fetchTasks, 10000);
@@ -759,7 +820,7 @@ const AppGroupDetail = {
     const selectTab = (tab) => {
       activeTab.value = tab;
       const hashBase = `#/groups/${props.folder}`;
-      window.location.hash = tab === 'settings' ? hashBase : `${hashBase}?tab=${tab}`;
+      window.location.hash = tab === 'tasks' ? hashBase : `${hashBase}?tab=${tab}`;
     };
 
     const createNewTask = async () => {
@@ -798,7 +859,85 @@ const AppGroupDetail = {
 
     const navigate = (path) => { window.location.hash = path; };
 
-    return { group, tasks, claude, ollama, loading, saving, activeTab, form, tabs, showNewTask, newTask, newTaskScheduleError, newTaskScheduleHint, selectTab, createNewTask, saveSettings, savePrompts, navigate };
+    const chartMax = computed(() => {
+      let max = 0;
+      for (const d of tokenUsage.value) {
+        const total = d.uncached + d.cached;
+        if (total > max) max = total;
+      }
+      return max || 1;
+    });
+
+    const chartBarHeight = (tokens) => {
+      if (chartMax.value === 0) return 0;
+      return Math.max((tokens / chartMax.value) * 120, tokens > 0 ? 1 : 0);
+    };
+
+    const chartYLabels = computed(() => {
+      const max = chartMax.value;
+      if (max === 0) return ['0'];
+      const fmt = (n) => n >= 1000000 ? (n / 1000000).toFixed(1).replace(/\.0$/, '') + 'M' : n >= 1000 ? (n / 1000).toFixed(0) + 'k' : String(n);
+      return [fmt(max), fmt(Math.round(max * 0.5)), '0'];
+    });
+
+    const formatTokens = (n) => {
+      if (n >= 1000000) return (n / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+      if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
+      return String(n);
+    };
+
+    const formatCost = (n) => n != null ? n.toFixed(4) : '0';
+
+    const barTooltip = (d) => {
+      let s = d.date + '\nUncached: ' + formatTokens(d.uncached) + '\nCached: ' + formatTokens(d.cached) + '\nTotal: ' + formatTokens(d.uncached + d.cached);
+      if (d.cost != null) s += '\nCost: $' + formatCost(d.cost);
+      return s;
+    };
+
+    const hasCostData = computed(() => tokenUsage.value.some(d => d.cost != null && d.cost > 0));
+
+    const costMax = computed(() => {
+      let max = 0;
+      for (const d of tokenUsage.value) {
+        if (d.cost != null && d.cost > max) max = d.cost;
+      }
+      return max || 1;
+    });
+
+    const costY = (cost) => {
+      if (cost == null || costMax.value === 0) return 140;
+      return 140 - (cost / costMax.value) * 120;
+    };
+
+    const costLineSegments = computed(() => {
+      const segments = [];
+      let current = [];
+      for (let i = 0; i < tokenUsage.value.length; i++) {
+        const d = tokenUsage.value[i];
+        if (d.cost != null) {
+          current.push(`${68 + i * 28},${costY(d.cost)}`);
+        } else if (current.length > 0) {
+          segments.push(current.join(' '));
+          current = [];
+        }
+      }
+      if (current.length > 0) segments.push(current.join(' '));
+      return segments;
+    });
+
+    const costYLabels = computed(() => {
+      const max = costMax.value;
+      if (max === 0) return ['$0'];
+      const fmt = (n) => '$' + (n >= 1 ? n.toFixed(2) : n.toFixed(4)).replace(/0+$/, '').replace(/\.$/, '');
+      return [fmt(max), fmt(max * 0.5), '$0'];
+    });
+
+    const chartWidth = computed(() => {
+      const base = Math.max(tokenUsage.value.length * 28 + 60, 200);
+      return hasCostData.value ? base + 48 : base;
+    });
+
+    return { group, tasks, claude, ollama, loading, saving, activeTab, form, tabs, showNewTask, newTask, newTaskScheduleError, newTaskScheduleHint, selectTab, createNewTask, saveSettings, savePrompts, navigate, tokenUsage, chartMax, chartBarHeight, chartYLabels, formatTokens, formatCost, barTooltip, hasCostData, costMax, costY, costLineSegments, costYLabels, chartWidth };
   },
 };
 
@@ -809,7 +948,7 @@ const AppTaskDetail = {
   template: `
     <div>
       <!-- Back link -->
-      <a v-if="task" :href="'#/groups/' + task.groupFolder + '?tab=tasks'" class="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 mb-4 transition-colors">
+      <a v-if="task" :href="'#/groups/' + task.groupFolder" class="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 mb-4 transition-colors">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons.back}</svg>
         Back to {{ group?.name || task.groupFolder }}
       </a>

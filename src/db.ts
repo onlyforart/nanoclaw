@@ -242,6 +242,14 @@ function createSchema(database: Database.Database): void {
   } catch {
     /* columns already exist */
   }
+
+  // Add cache token breakdown columns
+  try {
+    database.exec(`ALTER TABLE task_run_logs ADD COLUMN cache_read_input_tokens INTEGER`);
+    database.exec(`ALTER TABLE task_run_logs ADD COLUMN cache_creation_input_tokens INTEGER`);
+  } catch {
+    /* columns already exist */
+  }
 }
 
 export function initDatabase(): void {
@@ -622,8 +630,8 @@ export function updateTaskAfterRun(
 export function logTaskRun(log: TaskRunLog): void {
   db.prepare(
     `
-    INSERT INTO task_run_logs (task_id, run_at, duration_ms, status, result, error, input_tokens, output_tokens, cost_usd)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO task_run_logs (task_id, run_at, duration_ms, status, result, error, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, cost_usd)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `,
   ).run(
     log.task_id,
@@ -634,6 +642,8 @@ export function logTaskRun(log: TaskRunLog): void {
     log.error,
     log.input_tokens ?? null,
     log.output_tokens ?? null,
+    log.cache_read_input_tokens ?? null,
+    log.cache_creation_input_tokens ?? null,
     log.cost_usd ?? null,
   );
 }
