@@ -971,17 +971,20 @@ async function runAnthropicApiMode(containerInput: ContainerInput): Promise<void
         : result.maxIterationsReached ? ' [max iterations]'
         : '';
 
+      // Anthropic API returns input_tokens as base only (excluding cache).
+      // Aggregate to total (base + cache_read + cache_creation) to match the SDK convention.
+      const totalIn = result.inputTokens + result.cacheReadInputTokens + result.cacheCreationInputTokens;
       writeOutput({
         status: 'success',
         result: result.response || null,
         usage: {
-          inputTokens: result.inputTokens,
+          inputTokens: totalIn,
           outputTokens: result.outputTokens,
           cacheReadInputTokens: result.cacheReadInputTokens,
           cacheCreationInputTokens: result.cacheCreationInputTokens,
         },
       });
-      log(`  Usage: ${result.inputTokens} in (${result.cacheReadInputTokens} cache read, ${result.cacheCreationInputTokens} cache write), ${result.outputTokens} out`);
+      log(`  Usage: ${totalIn} in (${result.cacheReadInputTokens} cache read, ${result.cacheCreationInputTokens} cache write), ${result.outputTokens} out`);
 
       if (meta) {
         log(`Chat ended${meta} after ${result.iterations} round(s)`);

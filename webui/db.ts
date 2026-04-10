@@ -223,6 +223,45 @@ export function deleteTask(id: string): boolean {
   return result.changes > 0;
 }
 
+// --- Token Usage ---
+
+export interface DailyTokenUsageRow {
+  date: string;
+  uncached: number;
+  cached: number;
+  cost: number | null;
+}
+
+interface DailyModelTokenRow {
+  date: string;
+  model: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read: number;
+  cache_creation: number;
+  actual_cost: number | null;
+}
+
+export function getGroupDailyTokensByModel(groupFolder: string, days: number = 30): DailyModelTokenRow[] {
+  return db
+    .prepare(
+      `SELECT date(r.run_at) as date,
+              t.model,
+              SUM(COALESCE(r.input_tokens, 0)) as input_tokens,
+              SUM(COALESCE(r.output_tokens, 0)) as output_tokens,
+              SUM(COALESCE(r.cache_read_input_tokens, 0)) as cache_read,
+              SUM(COALESCE(r.cache_creation_input_tokens, 0)) as cache_creation,
+              SUM(r.cost_usd) as actual_cost
+       FROM task_run_logs r
+       JOIN scheduled_tasks t ON r.task_id = t.id
+       WHERE t.group_folder = ?
+         AND r.run_at >= date('now', ? || ' days')
+       GROUP BY date(r.run_at), t.model
+       ORDER BY date(r.run_at)`,
+    )
+    .all(groupFolder, -(days - 1)) as DailyModelTokenRow[];
+}
+
 // --- Task Runs ---
 
 export function getTaskRuns(taskId: string, limit: number = 20): TaskRunRow[] {
