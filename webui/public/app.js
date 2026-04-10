@@ -572,17 +572,17 @@ const AppGroupDetail = {
                   stroke="currentColor" class="text-gray-200 dark:text-gray-700" stroke-width="0.5" />
                 <!-- Bars -->
                 <g v-for="(d, i) in tokenUsage" :key="d.date">
-                  <!-- Uncached (bottom) -->
+                  <!-- Cached (bottom) -->
+                  <rect v-if="d.cached > 0"
+                    :x="58 + i * 28" :y="140 - chartBarHeight(d.uncached + d.cached)"
+                    :width="20" :height="chartBarHeight(d.uncached + d.cached)"
+                    class="fill-blue-300 dark:fill-blue-400/60" rx="2">
+                    <title v-text="barTooltip(d)"></title>
+                  </rect>
+                  <!-- Uncached (top) -->
                   <rect :x="58 + i * 28" :y="140 - chartBarHeight(d.uncached + d.cached)"
                     :width="20" :height="chartBarHeight(d.uncached)"
                     class="fill-blue-500" rx="2">
-                    <title v-text="barTooltip(d)"></title>
-                  </rect>
-                  <!-- Cached (top) -->
-                  <rect v-if="d.cached > 0"
-                    :x="58 + i * 28" :y="140 - chartBarHeight(d.uncached + d.cached)"
-                    :width="20" :height="chartBarHeight(d.cached)"
-                    class="fill-blue-300 dark:fill-blue-400/60" rx="2">
                     <title v-text="barTooltip(d)"></title>
                   </rect>
                   <!-- Date label -->
