@@ -245,8 +245,12 @@ function createSchema(database: Database.Database): void {
 
   // Add cache token breakdown columns
   try {
-    database.exec(`ALTER TABLE task_run_logs ADD COLUMN cache_read_input_tokens INTEGER`);
-    database.exec(`ALTER TABLE task_run_logs ADD COLUMN cache_creation_input_tokens INTEGER`);
+    database.exec(
+      `ALTER TABLE task_run_logs ADD COLUMN cache_read_input_tokens INTEGER`,
+    );
+    database.exec(
+      `ALTER TABLE task_run_logs ADD COLUMN cache_creation_input_tokens INTEGER`,
+    );
   } catch {
     /* columns already exist */
   }
