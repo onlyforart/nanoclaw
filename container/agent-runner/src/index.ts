@@ -27,6 +27,15 @@ import { buildTaskSystemPrompt } from './task-system-prompt.js';
 import { buildSdkMcpServers } from './mcp-config.js';
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
 
+const MAX_TOOL_CALL_TIMEOUT_MS = 10 * 60 * 1000; // 10 min absolute cap
+
+/** Cap tool call timeout to leave headroom for the agent to process errors. */
+function toolCallTimeout(chatTimeoutMs: number | undefined): number {
+  if (!chatTimeoutMs) return MAX_TOOL_CALL_TIMEOUT_MS;
+  // 80% of chat timeout, but never more than the absolute cap
+  return Math.min(Math.floor(chatTimeoutMs * 0.8), MAX_TOOL_CALL_TIMEOUT_MS);
+}
+
 interface ContainerInput {
   prompt: string;
   sessionId?: string;
@@ -675,7 +684,7 @@ async function runOllamaDirectMode(containerInput: ContainerInput): Promise<void
   const executor = new McpToolExecutor();
   try {
     await executor.initialize(mcpConfig, undefined, {
-      callTimeoutMs: containerInput.timeoutMs,
+      callTimeoutMs: toolCallTimeout(containerInput.timeoutMs),
     });
   } catch (err) {
     log(`MCP executor init failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -869,7 +878,7 @@ async function runAnthropicApiMode(containerInput: ContainerInput): Promise<void
   const executor = new McpToolExecutor();
   try {
     await executor.initialize(mcpConfig, undefined, {
-      callTimeoutMs: containerInput.timeoutMs,
+      callTimeoutMs: toolCallTimeout(containerInput.timeoutMs),
     });
   } catch (err) {
     log(`MCP executor init failed: ${err instanceof Error ? err.message : String(err)}`);
