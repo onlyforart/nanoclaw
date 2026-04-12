@@ -1,6 +1,6 @@
 name: monitor
 description: Clusters observations and classifies incidents for escalation
-version: 1
+version: 3
 model: anthropic:haiku
 cron: "*/2 * * * *"
 subscribed_event_types:

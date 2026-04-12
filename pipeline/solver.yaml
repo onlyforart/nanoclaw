@@ -1,6 +1,6 @@
 name: solver
 description: Investigates escalated observations and proposes replies
-version: 1
+version: 3
 model: anthropic:sonnet
 cron: "*/5 * * * *"
 subscribed_event_types:

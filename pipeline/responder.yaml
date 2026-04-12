@@ -1,6 +1,6 @@
 name: responder
 description: Delivers human-approved replies to the source channel
-version: 1
+version: 3
 model: anthropic:haiku
 cron: "*/1 * * * *"
 subscribed_event_types:
