@@ -273,6 +273,8 @@ const AppSidebar = {
     const isActive = (path) => {
       if (props.currentHash === path || props.currentHash.startsWith(path + '/')) return true;
       if (props.activeGroupFolder && path === '/groups/' + props.activeGroupFolder) return true;
+      // Pipeline task detail → highlight Pipeline link
+      if (path === '/pipeline' && props.currentHash.startsWith('/tasks/pipeline:')) return true;
       return false;
     };
     return { isActive };
@@ -2015,6 +2017,8 @@ const app = createApp({
 
     const activeGroupFolder = computed(() => {
       if (route.value.view === 'group-detail') return route.value.folder;
+      // Pipeline tasks don't belong to a group in the sidebar
+      if (route.value.view === 'task-detail' && route.value.id?.startsWith('pipeline:')) return '';
       return taskGroupFolder.value;
     });
 
