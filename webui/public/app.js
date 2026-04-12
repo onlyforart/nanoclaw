@@ -1116,7 +1116,16 @@ const AppTaskDetail = {
               </div>
             </div>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-              <div>
+              <div v-if="taskId.startsWith('pipeline:')">
+                <label class="block text-sm font-medium mb-1">Allowed Profiles</label>
+                <div class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 text-sm min-h-[4rem]">
+                  <div v-if="task?.allowedTools?.length" class="text-xs text-gray-400 mb-1">Resolved from YAML spec profiles. Edit profiles in pipeline/*.yaml.</div>
+                  <div v-else class="text-gray-400 text-xs">No tool restrictions</div>
+                  <span v-if="task?.allowedTools" v-for="t in task.allowedTools" :key="t"
+                    class="inline-block px-1.5 py-0.5 mr-1 mb-0.5 rounded bg-indigo-100 dark:bg-indigo-900 text-indigo-800 dark:text-indigo-200 font-mono text-[11px]">{{ t }}</span>
+                </div>
+              </div>
+              <div v-else>
                 <label class="block text-sm font-medium mb-1">Allowed Tools</label>
                 <textarea v-model="form.allowedTools" rows="3" placeholder='JSON array, e.g. ["consume_events","publish_event"]'
                   class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition font-mono"></textarea>
@@ -1124,6 +1133,8 @@ const AppTaskDetail = {
               <div>
                 <label class="block text-sm font-medium mb-1">Allowed Send Targets</label>
                 <textarea v-model="form.allowedSendTargets" rows="3" placeholder='JSON array, e.g. ["slack:CPASSIVE"]'
+                  :disabled="taskId.startsWith('pipeline:')"
+                  :class="taskId.startsWith('pipeline:') ? 'bg-gray-50 dark:bg-gray-900 cursor-not-allowed' : ''"
                   class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition font-mono"></textarea>
               </div>
             </div>
@@ -1285,7 +1296,10 @@ const AppTaskDetail = {
         body.useAgentSdk = form.useAgentSdk;
         body.executionMode = form.executionMode;
         body.subscribedEventTypes = form.subscribedEventTypes ? form.subscribedEventTypes.split(',').map(s => s.trim()).filter(Boolean) : null;
-        try { body.allowedTools = form.allowedTools ? JSON.parse(form.allowedTools) : null; } catch { body.allowedTools = undefined; }
+        // Pipeline tasks: tools are spec-derived, don't send from UI
+        if (!props.taskId.startsWith('pipeline:')) {
+          try { body.allowedTools = form.allowedTools ? JSON.parse(form.allowedTools) : null; } catch { body.allowedTools = undefined; }
+        }
         try { body.allowedSendTargets = form.allowedSendTargets ? JSON.parse(form.allowedSendTargets) : null; } catch { body.allowedSendTargets = undefined; }
         body.status = form.status;
         const updated = await api(`/tasks/${props.taskId}`, { method: 'PATCH', body });
@@ -1355,7 +1369,7 @@ const AppPipeline = {
               <tr class="border-b border-gray-200 dark:border-gray-700">
                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Task</th>
                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Model</th>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Mode</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Allowed Profiles</th>
                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Trigger</th>
                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Last Run</th>
@@ -1368,9 +1382,12 @@ const AppPipeline = {
                 class="border-b border-gray-100 dark:border-gray-700/50 hover:bg-gray-50 dark:hover:bg-gray-750 cursor-pointer">
                 <td class="px-4 py-3 font-medium">{{ t.id.replace('pipeline:', '') }}</td>
                 <td class="px-4 py-3 font-mono text-xs">{{ t.model || '-' }}</td>
-                <td class="px-4 py-3">
-                  <span :class="t.execution_mode === 'host_pipeline' ? 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200' : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200'"
-                    class="px-2 py-0.5 rounded-full text-xs font-medium">{{ t.execution_mode }}</span>
+                <td class="px-4 py-3 text-xs">
+                  <span v-for="p in t.profiles" :key="p"
+                    class="inline-block px-1.5 py-0.5 mr-1 mb-0.5 rounded bg-indigo-100 dark:bg-indigo-900 text-indigo-800 dark:text-indigo-200 font-mono text-[11px]">{{ p }}</span>
+                  <span v-for="e in t.extra_tools" :key="e"
+                    class="inline-block px-1.5 py-0.5 mr-1 mb-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 font-mono text-[11px]">{{ e }}</span>
+                  <span v-if="!t.profiles?.length && !t.extra_tools?.length" class="text-gray-400">-</span>
                 </td>
                 <td class="px-4 py-3 text-xs">
                   <template v-if="t.subscribed_event_types">
