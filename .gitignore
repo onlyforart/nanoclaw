@@ -57,3 +57,7 @@ container/skills/*
 !container/skills/agent-browser/
 
 agents-sdk-docs
+eval/results/
+eval/sets/
+eval/taxonomy.md
+pipeline/field-catalog.yaml
