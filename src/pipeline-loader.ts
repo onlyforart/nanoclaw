@@ -98,13 +98,11 @@ export function reconcilePipelineTasks(
       // Check version — only update if spec version is higher
       const storedVersion = getTaskVersion(taskId);
       if (spec.version > storedVersion) {
-        // Note: model is NOT updated — it's an operational setting owned by
-        // the DB (set via web UI or direct DB edit), not the YAML spec.
+        // Only update structurally-derived fields (tools, execution mode).
+        // Operational settings (model, prompt, schedule, send targets) are
+        // owned by the DB — editable via web UI, never overridden by spec.
         updateTask(taskId, {
-          prompt: spec.system,
-          schedule_value: spec.cron,
           allowedTools: resolvedTools,
-          allowedSendTargets: resolvedSendTargets,
           executionMode:
             spec.type === 'host_pipeline' ? 'host_pipeline' : 'container',
           subscribedEventTypes: spec.subscribed_event_types ?? null,
