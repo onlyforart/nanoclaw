@@ -104,6 +104,15 @@ async function runTask(
   }
   fs.mkdirSync(groupDir, { recursive: true });
 
+  // Host-side pipeline tasks skip the container entirely
+  if (task.executionMode === 'host_pipeline') {
+    logger.info(
+      { taskId: task.id, group: task.group_folder },
+      'Skipping host_pipeline task (executor not wired in scheduler yet)',
+    );
+    return;
+  }
+
   logger.info(
     { taskId: task.id, group: task.group_folder },
     'Running scheduled task',

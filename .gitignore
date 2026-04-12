@@ -61,3 +61,5 @@ eval/results/
 eval/sets/
 eval/taxonomy.md
 pipeline/field-catalog.yaml
+pipeline/sanitiser-config.yaml
+pipeline/sanitiser-schema.yaml

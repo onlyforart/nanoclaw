@@ -664,8 +664,8 @@ async function runOllamaDirectMode(containerInput: ContainerInput): Promise<void
   // list_tasks — they must not create/modify tasks or groups (defense-in-depth
   // against runaway models).
   const nanoclawTools = containerInput.isScheduledTask
-    ? ['send_message', 'send_cross_channel_message', 'list_tasks', 'publish_event', 'consume_events', 'ack_event', 'submit_to_pipeline', 'read_chat_messages']
-    : ['send_message', 'send_cross_channel_message', 'schedule_task', 'list_tasks', 'pause_task', 'resume_task', 'cancel_task', 'update_task', 'register_group', 'update_group', 'list_groups', 'publish_event', 'consume_events', 'ack_event', 'submit_to_pipeline', 'read_chat_messages'];
+    ? ['send_message', 'send_cross_channel_message', 'list_tasks', 'publish_event', 'consume_events', 'ack_event', 'submit_to_pipeline', 'read_chat_messages', 're_extract_observation']
+    : ['send_message', 'send_cross_channel_message', 'schedule_task', 'list_tasks', 'pause_task', 'resume_task', 'cancel_task', 'update_task', 'register_group', 'update_group', 'list_groups', 'publish_event', 'consume_events', 'ack_event', 'submit_to_pipeline', 'read_chat_messages', 're_extract_observation'];
 
   mcpConfig['nanoclaw'] = {
     command: 'node',
@@ -858,8 +858,8 @@ async function runAnthropicApiMode(containerInput: ContainerInput): Promise<void
 
   // Scheduled tasks get restricted tool access (same as Ollama path)
   const nanoclawTools = containerInput.isScheduledTask
-    ? ['send_message', 'send_cross_channel_message', 'list_tasks', 'publish_event', 'consume_events', 'ack_event', 'submit_to_pipeline', 'read_chat_messages']
-    : ['send_message', 'send_cross_channel_message', 'schedule_task', 'list_tasks', 'pause_task', 'resume_task', 'cancel_task', 'update_task', 'register_group', 'update_group', 'list_groups', 'publish_event', 'consume_events', 'ack_event', 'submit_to_pipeline', 'read_chat_messages'];
+    ? ['send_message', 'send_cross_channel_message', 'list_tasks', 'publish_event', 'consume_events', 'ack_event', 'submit_to_pipeline', 'read_chat_messages', 're_extract_observation']
+    : ['send_message', 'send_cross_channel_message', 'schedule_task', 'list_tasks', 'pause_task', 'resume_task', 'cancel_task', 'update_task', 'register_group', 'update_group', 'list_groups', 'publish_event', 'consume_events', 'ack_event', 'submit_to_pipeline', 'read_chat_messages', 're_extract_observation'];
 
   mcpConfig['nanoclaw'] = {
     command: 'node',

@@ -386,6 +386,16 @@ function createSchema(database: Database.Database): void {
       updated_at TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_obs_labels_obs_id ON observation_labels(observation_id);
+
+    CREATE TABLE IF NOT EXISTS reextraction_cache (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      observation_id INTEGER NOT NULL,
+      field_name TEXT NOT NULL,
+      sanitiser_version TEXT NOT NULL,
+      result_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(observation_id, field_name, sanitiser_version)
+    );
   `);
 }
 
@@ -1149,7 +1159,11 @@ export function upsertObservationLabel(
       fields.imperative_content ?? null,
       fields.addressee ?? null,
       fields.embedded_instructions ?? null,
-      fields.adversarial_smell != null ? (fields.adversarial_smell ? 1 : 0) : null,
+      fields.adversarial_smell != null
+        ? fields.adversarial_smell
+          ? 1
+          : 0
+        : null,
       fields.notes ?? null,
       fields.expected_json ?? null,
       now,
@@ -1159,7 +1173,9 @@ export function upsertObservationLabel(
 
 export function getLabelForObservation(
   observationId: number,
-): ObservationLabelFields & { created_at: string; updated_at: string | null } | undefined {
+):
+  | (ObservationLabelFields & { created_at: string; updated_at: string | null })
+  | undefined {
   const row = db
     .prepare('SELECT * FROM observation_labels WHERE observation_id = ?')
     .get(observationId) as any;
@@ -1171,12 +1187,49 @@ export function getLabelForObservation(
     imperative_content: row.imperative_content,
     addressee: row.addressee,
     embedded_instructions: row.embedded_instructions,
-    adversarial_smell: row.adversarial_smell === 1 ? true : row.adversarial_smell === 0 ? false : undefined,
+    adversarial_smell:
+      row.adversarial_smell === 1
+        ? true
+        : row.adversarial_smell === 0
+          ? false
+          : undefined,
     notes: row.notes,
     expected_json: row.expected_json,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
+}
+
+// --- Reextraction cache ---
+
+export function getCachedReextraction(
+  observationId: number,
+  fieldName: string,
+  sanitiserVersion: string,
+): string | undefined {
+  const row = db
+    .prepare(
+      `SELECT result_json FROM reextraction_cache
+       WHERE observation_id = ? AND field_name = ? AND sanitiser_version = ?`,
+    )
+    .get(observationId, fieldName, sanitiserVersion) as
+    | { result_json: string }
+    | undefined;
+  return row?.result_json;
+}
+
+export function cacheReextraction(
+  observationId: number,
+  fieldName: string,
+  sanitiserVersion: string,
+  resultJson: string,
+): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT OR REPLACE INTO reextraction_cache
+       (observation_id, field_name, sanitiser_version, result_json, created_at)
+     VALUES (?, ?, ?, ?, ?)`,
+  ).run(observationId, fieldName, sanitiserVersion, resultJson, now);
 }
 
 // --- Pipeline helpers ---
@@ -1193,9 +1246,7 @@ export function bumpConsumerTaskNextRun(eventType: string): void {
 
 export function getPassiveGroups(): Array<{ jid: string; folder: string }> {
   return db
-    .prepare(
-      `SELECT jid, folder FROM registered_groups WHERE mode = 'passive'`,
-    )
+    .prepare(`SELECT jid, folder FROM registered_groups WHERE mode = 'passive'`)
     .all() as Array<{ jid: string; folder: string }>;
 }
 
@@ -1388,6 +1439,14 @@ export function insertIntakeObservation(msg: {
     );
 
   return result.lastInsertRowid as number;
+}
+
+export function getObservationById(
+  id: number,
+): ObservedMessageRow | undefined {
+  return db
+    .prepare('SELECT * FROM observed_messages WHERE id = ?')
+    .get(id) as ObservedMessageRow | undefined;
 }
 
 export function getUnprocessedObservations(

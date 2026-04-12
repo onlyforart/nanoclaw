@@ -2,9 +2,11 @@ import { describe, it, expect, beforeEach } from 'vitest';
 
 import {
   _initTestDatabase,
+  cacheReextraction,
   consumeEvents,
   getRecentEvents,
   getRecentIntakeLogs,
+  insertObservedMessage,
   publishEvent,
   setRegisteredGroup,
   storeChatMetadata,
@@ -408,5 +410,78 @@ describe('read_chat_messages IPC', () => {
       deps,
     );
     expect(result.success).toBe(false);
+  });
+});
+
+// --- reextract_observation IPC ---
+
+describe('reextract_observation IPC', () => {
+  it('rejects missing observation_id', async () => {
+    const result = await processTaskIpc(
+      {
+        type: 'reextract_observation',
+        requestFields: ['code_snippets'],
+      },
+      'slack_main',
+      true,
+      deps,
+    );
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects missing requestFields', async () => {
+    const result = await processTaskIpc(
+      {
+        type: 'reextract_observation',
+        observationId: 1,
+      },
+      'slack_main',
+      true,
+      deps,
+    );
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects non-existent observation', async () => {
+    const result = await processTaskIpc(
+      {
+        type: 'reextract_observation',
+        observationId: 99999,
+        requestFields: ['code_snippets'],
+      },
+      'slack_main',
+      true,
+      deps,
+    );
+    expect(result.success).toBe(false);
+    expect((result as any).error).toContain('not found');
+  });
+
+  it('returns cached results without calling LLM', async () => {
+    const obsId = insertObservedMessage({
+      source_chat_jid: 'sl:C1',
+      source_message_id: 'msg-reextract-1',
+      source_type: 'passive_channel',
+      raw_text: 'test with code: console.log("hello")',
+    });
+
+    // Pre-populate cache
+    cacheReextraction(obsId, 'code_snippets', '1', '["console.log(\\"hello\\")"]');
+
+    const result = await processTaskIpc(
+      {
+        type: 'reextract_observation',
+        observationId: obsId,
+        requestFields: ['code_snippets'],
+        sanitiserVersion: '1',
+      },
+      'slack_main',
+      true,
+      deps,
+    );
+
+    expect(result.success).toBe(true);
+    const fields = (result as any).fields;
+    expect(fields.code_snippets).toBe('["console.log(\\"hello\\")"]');
   });
 });

@@ -29,6 +29,8 @@ import {
   updateRegisteredGroup,
   updateTask,
   upsertObservationLabel,
+  getCachedReextraction,
+  cacheReextraction,
 } from './db.js';
 
 beforeEach(() => {
@@ -1329,7 +1331,10 @@ describe('upsertObservationLabel', () => {
       raw_text: 'golden message',
     });
 
-    const expectedJson = JSON.stringify({ fact_summary: 'test', urgency: 'issue' });
+    const expectedJson = JSON.stringify({
+      fact_summary: 'test',
+      urgency: 'issue',
+    });
     upsertObservationLabel(obsId, {
       labeller: 'human',
       expected_json: expectedJson,
@@ -1348,5 +1353,54 @@ describe('upsertObservationLabel', () => {
     });
 
     expect(getLabelForObservation(obsId)).toBeUndefined();
+  });
+});
+
+// --- Reextraction cache ---
+
+describe('reextraction cache', () => {
+  it('returns undefined on cache miss', () => {
+    expect(getCachedReextraction(999, 'code_snippets', '1')).toBeUndefined();
+  });
+
+  it('caches and retrieves a result', () => {
+    const obsId = insertObservedMessage({
+      source_chat_jid: 'sl:C1',
+      source_message_id: 'msg-cache-1',
+      source_type: 'passive_channel',
+      raw_text: 'test message',
+    });
+
+    cacheReextraction(obsId, 'code_snippets', '1', '["console.log()"]');
+
+    const cached = getCachedReextraction(obsId, 'code_snippets', '1');
+    expect(cached).toBe('["console.log()"]');
+  });
+
+  it('returns undefined for different sanitiser version', () => {
+    const obsId = insertObservedMessage({
+      source_chat_jid: 'sl:C1',
+      source_message_id: 'msg-cache-2',
+      source_type: 'passive_channel',
+      raw_text: 'test message',
+    });
+
+    cacheReextraction(obsId, 'error_messages', '1', '["Error: foo"]');
+
+    expect(getCachedReextraction(obsId, 'error_messages', '2')).toBeUndefined();
+  });
+
+  it('overwrites cache on same (observation_id, field_name, version)', () => {
+    const obsId = insertObservedMessage({
+      source_chat_jid: 'sl:C1',
+      source_message_id: 'msg-cache-3',
+      source_type: 'passive_channel',
+      raw_text: 'test message',
+    });
+
+    cacheReextraction(obsId, 'affected_systems', '1', '["old"]');
+    cacheReextraction(obsId, 'affected_systems', '1', '["new"]');
+
+    expect(getCachedReextraction(obsId, 'affected_systems', '1')).toBe('["new"]');
   });
 });
