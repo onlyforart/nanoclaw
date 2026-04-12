@@ -67,6 +67,12 @@ import {
   loadAllPipelineSpecs,
   reconcilePipelineTasks,
 } from './pipeline-loader.js';
+import {
+  handleReaction,
+  findPendingEditRequest,
+  completeEditFlow,
+  type Reaction,
+} from './reaction-bridge.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -681,7 +687,18 @@ async function main(): Promise<void> {
           return;
         }
       }
+      // Edit flow intercept: if this user has a pending edit_requested event
+      // in this channel, consume the message as the edited reply text.
+      const editEvent = findPendingEditRequest(chatJid, msg.sender);
+      if (editEvent) {
+        completeEditFlow(editEvent, msg.content);
+        return; // consumed — don't store or forward to agent
+      }
+
       storeMessage(msg);
+    },
+    onReaction: (chatJid: string, reaction: Reaction) => {
+      handleReaction(reaction);
     },
     onChatMetadata: (
       chatJid: string,

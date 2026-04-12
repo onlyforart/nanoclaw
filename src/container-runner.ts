@@ -65,6 +65,8 @@ export interface ContainerInput {
   timeoutMs?: number;
   showThinking?: boolean;
   useAgentSdk?: boolean;
+  allowedTools?: string[] | null;
+  allowedSendTargets?: string[] | null;
 }
 
 export interface ContainerOutput {
@@ -440,6 +442,13 @@ async function buildVolumeMounts(
 
           let resolvedTools = resolveTools(server.tools, server.readOnly);
 
+          // Pipeline allow-list: filter external MCP tools too
+          if (input?.allowedTools) {
+            const allowed = new Set(input.allowedTools);
+            resolvedTools = resolvedTools.filter((t: string) => allowed.has(t));
+            if (resolvedTools.length === 0) continue; // skip server entirely
+          }
+
           // Determine URL and headers
           let containerUrl: string;
           const containerHeaders: Record<string, string> = {
@@ -521,6 +530,13 @@ async function buildVolumeMounts(
             );
             continue;
           }
+          // Pipeline allow-list: filter stdio MCP tools too
+          if (input?.allowedTools) {
+            const allowed = new Set(input.allowedTools);
+            const filteredTools = (server.tools || []).filter((t: string) => allowed.has(t));
+            if (filteredTools.length === 0) continue; // skip server entirely
+          }
+
           const containerPath = `/workspace/mcp-servers/${name}`;
           mounts.push({
             hostPath: resolvedHostPath,

@@ -215,6 +215,8 @@ async function runTask(
         timeoutMs: profile.timeoutMs,
         showThinking: group.showThinking,
         useAgentSdk: !!task.useAgentSdk,
+        allowedTools: task.allowedTools ?? undefined,
+        allowedSendTargets: task.allowedSendTargets ?? undefined,
       },
       (proc, containerName) =>
         deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),
@@ -294,12 +296,18 @@ async function runTask(
 
 function loadSanitiserModel(): string {
   try {
-    const configPath = path.join(process.cwd(), 'pipeline', 'sanitiser-config.yaml');
+    const configPath = path.join(
+      process.cwd(),
+      'pipeline',
+      'sanitiser-config.yaml',
+    );
     if (fs.existsSync(configPath)) {
       const config = parseYaml(fs.readFileSync(configPath, 'utf-8'));
       if (config?.layer2_model) return config.layer2_model;
     }
-  } catch { /* fall through */ }
+  } catch {
+    /* fall through */
+  }
   return 'ollama:gemma4'; // fallback default
 }
 
@@ -317,7 +325,10 @@ async function runHostPipeline(
   const sourceChannels = passiveGroups.map((g) => g.jid);
 
   if (sourceChannels.length === 0) {
-    logger.info({ taskId: task.id }, 'No passive channels — skipping sanitiser run');
+    logger.info(
+      { taskId: task.id },
+      'No passive channels — skipping sanitiser run',
+    );
     updateTaskAfterRun(task.id, computeNextRun(task), 'No passive channels');
     return;
   }
@@ -331,12 +342,16 @@ async function runHostPipeline(
 
   let error: string | null = null;
   let result: string | null = null;
-  let pipelineResult: Awaited<ReturnType<typeof executeHostPipeline>> | null = null;
+  let pipelineResult: Awaited<ReturnType<typeof executeHostPipeline>> | null =
+    null;
 
   try {
     pipelineResult = await executeHostPipeline(deps);
     result = `Processed ${pipelineResult.messagesProcessed} messages, ${pipelineResult.intakeProcessed} intake, ${pipelineResult.quarantined} quarantined`;
-    logger.info({ taskId: task.id, ...pipelineResult }, 'Host pipeline completed');
+    logger.info(
+      { taskId: task.id, ...pipelineResult },
+      'Host pipeline completed',
+    );
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
     logger.error({ taskId: task.id, err }, 'Host pipeline failed');
@@ -358,7 +373,7 @@ async function runHostPipeline(
   updateTaskAfterRun(
     task.id,
     computeNextRun(task),
-    error ? `Error: ${error}` : result?.slice(0, 200) ?? 'Completed',
+    error ? `Error: ${error}` : (result?.slice(0, 200) ?? 'Completed'),
   );
 }
 

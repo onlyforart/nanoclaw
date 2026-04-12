@@ -20,8 +20,10 @@ import {
   updateRegisteredGroup,
   updateTask,
 } from './db.js';
+import { getFieldEntry, loadFieldCatalog } from './field-catalog.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
+import { callExtractionLLM } from './sanitiser/llm-client.js';
 import { IntakeSourceContext, RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
@@ -807,13 +809,22 @@ function handleReadChatMessages(
   return { success: true, ...result } as any;
 }
 
-function handleReextractObservation(data: IpcData): IpcResult {
+async function handleReextractObservation(data: IpcData): Promise<IpcResult> {
+  // Ensure field catalog is loaded
+  try { loadFieldCatalog(); } catch { /* catalog file may not exist */ }
+
   const observationId = data.observationId as number | undefined;
   const requestFields = data.requestFields as string[] | undefined;
   const sanitiserVersion = (data.sanitiserVersion as string) || '1';
 
-  if (observationId == null || !requestFields || !Array.isArray(requestFields)) {
-    return fail('reextract_observation requires observationId and requestFields (array)');
+  if (
+    observationId == null ||
+    !requestFields ||
+    !Array.isArray(requestFields)
+  ) {
+    return fail(
+      'reextract_observation requires observationId and requestFields (array)',
+    );
   }
 
   // Load the observation
@@ -825,13 +836,37 @@ function handleReextractObservation(data: IpcData): IpcResult {
   // Check cache for each field, return cached results
   const fields: Record<string, string | null> = {};
   for (const fieldName of requestFields) {
-    const cached = getCachedReextraction(observationId, fieldName, sanitiserVersion);
+    const cached = getCachedReextraction(
+      observationId,
+      fieldName,
+      sanitiserVersion,
+    );
     if (cached) {
       fields[fieldName] = cached;
     } else {
-      // Uncached fields would need LLM call — not implemented until host-pipeline executor (PR 5)
-      // For now, return null for uncached fields
-      fields[fieldName] = null;
+      // Look up field definition from catalog
+      const fieldDef = getFieldEntry(fieldName);
+      if (!fieldDef) {
+        fields[fieldName] = null;
+        continue;
+      }
+
+      // Call LLM with the field's extraction prompt
+      try {
+        const model = (data.model as string) || 'ollama:gemma4';
+        const response = await callExtractionLLM({
+          model,
+          system: `You are a structured data extractor. Extract the requested field from the message. Return only valid JSON.`,
+          user: `${fieldDef.prompt_fragment}\n\nMessage:\n${obs.raw_text}`,
+        });
+
+        const resultJson = response.response;
+        cacheReextraction(observationId, fieldName, sanitiserVersion, resultJson);
+        fields[fieldName] = resultJson;
+      } catch (err) {
+        logger.warn({ fieldName, observationId, err }, 'Re-extraction LLM call failed');
+        fields[fieldName] = null;
+      }
     }
   }
 
