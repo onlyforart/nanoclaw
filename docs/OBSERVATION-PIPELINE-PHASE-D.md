@@ -34,9 +34,10 @@ interface Layer1Input {
   sender_id: string;
   channel_id: string;
   thread_ts?: string;
-  subtype?: string;         // Slack message subtype
-  bot_id?: string;
+  is_bot_message: boolean;  // from messages.is_bot_message (upstream DB column)
   timestamp: string;
+  // Channel-specific fields (optional, for richer extraction when available):
+  subtype?: string;         // Slack message subtype (channel_join, etc.)
 }
 
 interface Layer1Output {
@@ -109,7 +110,7 @@ pii_patterns:
 - PII redaction: emails, phone numbers, URLs, no false positives on ticket IDs
 - Truncation: under limit (no change), over limit (truncated + marker), exact limit
 - Channel join filtering: subtype='channel_join' → filtered=true
-- Bot message detection: bot_id present, subtype='bot_message'
+- Bot message detection: `is_bot_message` flag from DB (upstream marks bot messages at storage time — Layer 1 reads the flag directly, no channel-specific inference needed)
 - Full preprocessMessage: end-to-end with representative inputs
 - Adversarial: injection attempts in code blocks, mentions, ticket-like patterns
 
@@ -426,7 +427,9 @@ Recommend the YAML spec approach — it keeps the sanitiser's configuration co-l
 
 6. **Dual input sources**: The sanitiser processes passive-channel messages and `intake.raw` events in the same run. Both go through the same three-layer pipeline. Intake events use the event bus's `bumpConsumerTaskNextRun` for sub-minute latency — no new scheduling infrastructure needed. The `pipeline_intake_log` provides a durable audit trail independent of event TTL. For intake items without full Slack metadata (sender_id, channel_id, subtype), Layer 1 uses `source_context` fields where available and marks absent metadata as unknown rather than failing — the Layer 2 LLM can still extract semantic fields from the raw text alone.
 
-7. **Token usage logging**: The host-side pipeline executor logs token usage to `task_run_logs` via `logTaskRun()` — the same function used by container-based tasks. The `llm-client.ts` returns `{ inputTokens, outputTokens, cacheReadInputTokens, cacheCreationInputTokens, costUSD }` matching the existing `ContainerOutput.usage` shape. The executor aggregates across all Layer 2 calls in the batch and logs one `task_run_logs` row per sanitiser invocation.
+7. **Channel-agnostic Layer 1**: Upstream now marks `is_bot_message` in the `messages` table at storage time (channel-specific detection happens once, at ingest). Layer 1 reads this flag directly rather than inferring from Slack `bot_id`/`subtype`. Similarly, `thread_id` and `reply_to_*` fields are available channel-agnostically from the DB. This means the sanitiser works across Slack, Telegram, WhatsApp, and Discord without channel-specific code in Layer 1 — only the config-driven regex patterns (tickets, PII, mentions) need per-installation tuning.
+
+8. **Token usage logging**: The host-side pipeline executor logs token usage to `task_run_logs` via `logTaskRun()` — the same function used by container-based tasks. The `llm-client.ts` returns `{ inputTokens, outputTokens, cacheReadInputTokens, cacheCreationInputTokens, costUSD }` matching the existing `ContainerOutput.usage` shape. The executor aggregates across all Layer 2 calls in the batch and logs one `task_run_logs` row per sanitiser invocation.
 
 ## Cost estimates
 

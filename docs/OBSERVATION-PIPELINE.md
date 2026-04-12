@@ -268,16 +268,16 @@ These fields are extracted by code before the LLM sees anything. The LLM input i
 
 | Field | Method | Notes |
 |-------|--------|-------|
-| `thread_ts` / thread metadata | Slack message fields | Primary clustering signal for high-threading channels (>5% threading rate). For low-threading channels (≤2%), the monitor must cluster on temporal proximity, participant overlap, and topic signals — see Phase E. |
-| `sender_id` | Slack message fields | User ID, never inferred |
-| `channel_id` | Message source | From the passive registration |
+| `thread_ts` / thread metadata | `messages.thread_id` / channel-specific thread fields | Primary clustering signal for high-threading channels (>5% threading rate). For low-threading channels (≤2%), the monitor must cluster on temporal proximity, participant overlap, and topic signals — see Phase E. |
+| `sender_id` | `messages` table | User ID, never inferred |
+| `channel_id` | `messages.chat_jid` | From the passive registration |
 | `referenced_tickets[]` | Regex: `INC\d+`, `CHG\d+`, `RITM\d+`, plus configurable JIRA project patterns, RT URL patterns | Open-ended `system` discriminator; new patterns added to config, not code |
 | `inc_present` | Derived from `referenced_tickets` | Positive-only signal per corpus finding #2 |
 | `code_blocks[]` | Markdown fence detection | Extracted and classified by `code_block_kind` heuristic (json, log, stack_trace, http_request, fix_message, etc.) |
 | `links[]` | URL extraction | Internal URLs flagged for PII redaction |
 | `mentions[]` | `<@U...>` pattern | Includes explicit bot-address detection |
-| `is_channel_join` | Slack `subtype` field | Filtered out entirely (up to 7% of corpus in some channels) |
-| `is_bot_message` | Slack `bot_id` / `subtype` | Filtered or flagged |
+| `is_channel_join` | Channel-specific subtype detection | Filtered out entirely (up to 7% of corpus in some channels) |
+| `is_bot_message` | `messages.is_bot_message` column | Upstream already marks bot messages in the DB — use this directly instead of channel-specific inference. Filtered or flagged. |
 | `message_length` | Character count | Used for truncation decisions |
 | PII redaction | Regex: emails, phone numbers, known internal URL patterns | Imperfect but meaningful first defense |
 

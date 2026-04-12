@@ -215,7 +215,7 @@ allowedSendTargets: task.allowedSendTargets ?? undefined,
 
 **src/pipeline-loader.ts** — new file:
 - `loadPipelineSpec(filePath)` — parse YAML, validate required fields (name, version, model, cron, system, tools, send_targets)
-- `reconcilePipelineTasks(specs, teamGroupFolder, teamChatJid)` — for each spec:
+- `reconcilePipelineTasks(specs, teamGroupFolder, teamChatJid)` — `teamGroupFolder` can be resolved from the `is_main` flag on `registered_groups` (added upstream) rather than hardcoded. For each spec:
   - ID convention: `pipeline:{spec.name}` (e.g. `pipeline:sanitiser`)
   - If no DB row exists, create task with mapped fields
   - If row exists and spec.version > stored version, update prompt/model/tools/targets
@@ -229,7 +229,7 @@ allowedSendTargets: task.allowedSendTargets ?? undefined,
 try { database.exec(`ALTER TABLE scheduled_tasks ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'container'`); } catch {}
 try { database.exec(`ALTER TABLE scheduled_tasks ADD COLUMN subscribed_event_types TEXT`); } catch {}
 ```
-`execution_mode` is separate from `context_mode`: `execution_mode` controls *where* the task runs (`container` vs `host_pipeline`); `context_mode` controls session isolation within a container. For `host_pipeline` tasks, `context_mode` is ignored.
+`execution_mode` is separate from `context_mode` (which already exists upstream for session isolation: `group` vs `isolated`). `execution_mode` controls *where* the task runs (`container` vs `host_pipeline`); `context_mode` controls session state within a container. For `host_pipeline` tasks, `context_mode` is ignored. No migration conflict — both columns are additive.
 - `bumpConsumerTaskNextRun(eventType)` — `UPDATE scheduled_tasks SET next_run = ? WHERE status = 'active' AND subscribed_event_types LIKE ...`
 
 **src/types.ts** — add `executionMode?: 'container' | 'host_pipeline'` and `subscribedEventTypes?: string[] | null` to `ScheduledTask`
