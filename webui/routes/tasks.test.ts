@@ -22,7 +22,10 @@ beforeEach(() => {
       created_at TEXT NOT NULL, context_mode TEXT DEFAULT 'isolated',
       model TEXT DEFAULT NULL, temperature REAL DEFAULT NULL, timezone TEXT DEFAULT NULL,
       max_tool_rounds INTEGER DEFAULT NULL, timeout_ms INTEGER DEFAULT NULL,
-      use_agent_sdk INTEGER DEFAULT 0
+      use_agent_sdk INTEGER DEFAULT 0,
+      allowed_tools TEXT, allowed_send_targets TEXT,
+      execution_mode TEXT NOT NULL DEFAULT 'container',
+      subscribed_event_types TEXT
     );
     CREATE TABLE task_run_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL,
@@ -33,17 +36,19 @@ beforeEach(() => {
       jid TEXT PRIMARY KEY, name TEXT, folder TEXT UNIQUE, trigger_pattern TEXT,
       is_main INTEGER DEFAULT 0, requires_trigger INTEGER DEFAULT 1,
       model TEXT, temperature REAL, max_tool_rounds INTEGER, timeout_ms INTEGER,
-      show_thinking INTEGER DEFAULT 0
+      show_thinking INTEGER DEFAULT 0,
+      mode TEXT NOT NULL DEFAULT 'active',
+      threading_mode TEXT NOT NULL DEFAULT 'temporal'
     );
   `);
 
-  db.prepare(`INSERT INTO scheduled_tasks VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, NULL, NULL, 0)`).run(
+  db.prepare(`INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, next_run, status, created_at, context_mode, model, temperature, timezone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
     'task-1', 'slack_main', 'slack@main', 'Daily standup', 'cron', '0 9 * * 1-5',
     '2024-06-03T09:00:00.000Z', 'active', '2024-01-01T00:00:00.000Z', 'group', 'sonnet', null, 'America/New_York',
   );
-  db.prepare(`INSERT INTO scheduled_tasks VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, 1)`).run(
+  db.prepare(`INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, next_run, status, created_at, context_mode, use_agent_sdk) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
     'task-2', 'slack_main', 'slack@main', 'Weekly digest', 'cron', '0 8 * * 5',
-    '2024-06-07T08:00:00.000Z', 'paused', '2024-02-01T00:00:00.000Z', 'isolated',
+    '2024-06-07T08:00:00.000Z', 'paused', '2024-02-01T00:00:00.000Z', 'isolated', 1,
   );
 
   db.prepare(`INSERT INTO registered_groups (jid, name, folder, trigger_pattern) VALUES (?, ?, ?, ?)`).run(

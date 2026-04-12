@@ -26,6 +26,8 @@ import {
   handleGetTaskRuns,
 } from './routes/tasks.js';
 import { handleGetContainers } from './routes/containers.js';
+import { handleGetEvents } from './routes/events.js';
+import { handleGetIntakeLogs } from './routes/intake.js';
 
 const startTime = Date.now();
 
@@ -199,6 +201,20 @@ export function createApp(groupsDir: string, publicDir?: string): http.Server {
       method: 'GET',
       compiled: compilePath('/api/v1/containers'),
       handler: () => handleGetContainers(),
+    },
+
+    // Events
+    {
+      method: 'GET',
+      compiled: compilePath('/api/v1/events'),
+      handler: (_params, _req, query) => handleGetEvents(query),
+    },
+
+    // Intake logs
+    {
+      method: 'GET',
+      compiled: compilePath('/api/v1/intake-logs'),
+      handler: (_params, _req, query) => handleGetIntakeLogs(query),
     },
   ];
 

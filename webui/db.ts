@@ -29,6 +29,8 @@ export interface GroupRow {
   max_tool_rounds: number | null;
   timeout_ms: number | null;
   show_thinking: number | null;
+  mode: string;
+  threading_mode: string;
 }
 
 export interface TaskRow {
@@ -45,6 +47,10 @@ export interface TaskRow {
   max_tool_rounds: number | null;
   timeout_ms: number | null;
   use_agent_sdk: number;
+  allowed_tools: string | null;
+  allowed_send_targets: string | null;
+  execution_mode: string;
+  subscribed_event_types: string | null;
   next_run: string | null;
   last_run: string | null;
   last_result: string | null;
@@ -66,7 +72,8 @@ export function getAllGroups(): GroupRow[] {
   return db
     .prepare(
       `SELECT jid, name, folder, trigger_pattern, is_main, requires_trigger,
-              model, temperature, max_tool_rounds, timeout_ms, show_thinking
+              model, temperature, max_tool_rounds, timeout_ms, show_thinking,
+              mode, threading_mode
        FROM registered_groups ORDER BY name`,
     )
     .all() as GroupRow[];
@@ -76,7 +83,8 @@ export function getGroupByFolder(folder: string): GroupRow | undefined {
   return db
     .prepare(
       `SELECT jid, name, folder, trigger_pattern, is_main, requires_trigger,
-              model, temperature, max_tool_rounds, timeout_ms, show_thinking
+              model, temperature, max_tool_rounds, timeout_ms, show_thinking,
+              mode, threading_mode
        FROM registered_groups WHERE folder = ?`,
     )
     .get(folder) as GroupRow | undefined;
@@ -84,7 +92,7 @@ export function getGroupByFolder(folder: string): GroupRow | undefined {
 
 export function updateGroup(
   folder: string,
-  updates: { model?: string; temperature?: number | null; max_tool_rounds?: number; timeout_ms?: number; show_thinking?: number | null },
+  updates: { model?: string; temperature?: number | null; max_tool_rounds?: number; timeout_ms?: number; show_thinking?: number | null; mode?: string; threading_mode?: string },
 ): boolean {
   const setClauses: string[] = [];
   const values: unknown[] = [];
@@ -108,6 +116,14 @@ export function updateGroup(
   if (updates.show_thinking !== undefined) {
     setClauses.push('show_thinking = ?');
     values.push(updates.show_thinking);
+  }
+  if (updates.mode !== undefined) {
+    setClauses.push('mode = ?');
+    values.push(updates.mode);
+  }
+  if (updates.threading_mode !== undefined) {
+    setClauses.push('threading_mode = ?');
+    values.push(updates.threading_mode);
   }
 
   if (setClauses.length === 0) return false;
@@ -158,6 +174,7 @@ export function getTasksByGroup(groupFolder: string): TaskRow[] {
     .prepare(
       `SELECT id, group_folder, chat_jid, prompt, schedule_type, schedule_value,
               context_mode, model, temperature, timezone, max_tool_rounds, timeout_ms, use_agent_sdk,
+              allowed_tools, allowed_send_targets, execution_mode, subscribed_event_types,
               next_run, last_run, last_result, status, created_at
        FROM scheduled_tasks WHERE group_folder = ? ORDER BY next_run`,
     )
@@ -169,6 +186,7 @@ export function getTaskById(id: string): TaskRow | undefined {
     .prepare(
       `SELECT id, group_folder, chat_jid, prompt, schedule_type, schedule_value,
               context_mode, model, temperature, timezone, max_tool_rounds, timeout_ms, use_agent_sdk,
+              allowed_tools, allowed_send_targets, execution_mode, subscribed_event_types,
               next_run, last_run, last_result, status, created_at
        FROM scheduled_tasks WHERE id = ?`,
     )
@@ -188,6 +206,10 @@ export function updateTask(
     max_tool_rounds?: number;
     timeout_ms?: number;
     use_agent_sdk?: number;
+    allowed_tools?: string | null;
+    allowed_send_targets?: string | null;
+    execution_mode?: string;
+    subscribed_event_types?: string | null;
     status?: string;
     next_run?: string;
   },
@@ -196,6 +218,7 @@ export function updateTask(
     'prompt', 'schedule_type', 'schedule_value', 'context_mode',
     'model', 'temperature', 'timezone', 'max_tool_rounds',
     'timeout_ms', 'use_agent_sdk', 'status', 'next_run',
+    'allowed_tools', 'allowed_send_targets', 'execution_mode', 'subscribed_event_types',
   ]);
 
   const setClauses: string[] = [];
@@ -276,4 +299,82 @@ export function getTaskRuns(taskId: string, limit: number = 20): TaskRunRow[] {
        FROM task_run_logs WHERE task_id = ? ORDER BY run_at DESC LIMIT ?`,
     )
     .all(taskId, limit) as TaskRunRow[];
+}
+
+// --- Events ---
+
+export interface EventRow {
+  id: number;
+  type: string;
+  source_group: string;
+  source_task_id: string | null;
+  payload: string;
+  dedupe_key: string | null;
+  created_at: string;
+  expires_at: string | null;
+  status: string;
+  claimed_by: string | null;
+  claimed_at: string | null;
+  processed_at: string | null;
+  result_note: string | null;
+}
+
+export function getEvents(opts?: {
+  types?: string[];
+  status?: string;
+  limit?: number;
+}): EventRow[] {
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+
+  if (opts?.types && opts.types.length > 0) {
+    const placeholders = opts.types.map(() => '?').join(', ');
+    conditions.push(`type IN (${placeholders})`);
+    params.push(...opts.types);
+  }
+  if (opts?.status) {
+    conditions.push('status = ?');
+    params.push(opts.status);
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  const limit = opts?.limit ?? 100;
+  params.push(limit);
+
+  return db
+    .prepare(`SELECT * FROM events ${where} ORDER BY created_at DESC LIMIT ?`)
+    .all(...params) as EventRow[];
+}
+
+// --- Pipeline Intake Logs ---
+
+export interface IntakeLogRow {
+  id: number;
+  event_id: number;
+  raw_text_hash: string;
+  source_type: string;
+  source_group: string;
+  source_task_id: string | null;
+  source_channel: string | null;
+  source_message_id: string | null;
+  reason: string;
+  submitted_at: string;
+  processed_at: string | null;
+  observation_id: number | null;
+}
+
+export function getIntakeLogs(opts?: {
+  includeProcessed?: boolean;
+  limit?: number;
+}): IntakeLogRow[] {
+  const includeProcessed = opts?.includeProcessed ?? true;
+  const limit = opts?.limit ?? 100;
+  const condition = includeProcessed ? '' : 'WHERE processed_at IS NULL';
+
+  return db
+    .prepare(
+      `SELECT * FROM pipeline_intake_log ${condition}
+       ORDER BY submitted_at DESC, id DESC LIMIT ?`,
+    )
+    .all(limit) as IntakeLogRow[];
 }

@@ -105,6 +105,7 @@ const icons = {
   menu: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>',
   close: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>',
   back: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>',
+  list: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"/>',
 };
 
 // ── Components ─────────────────────────────────────────────
@@ -218,6 +219,12 @@ const AppSidebar = {
           class="flex items-center gap-3 px-3 py-2 rounded-r-lg text-sm font-medium transition-colors">
           <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons.prompts}</svg>
           Global Prompts
+        </a>
+        <a href="#/events"
+          :class="isActive('/events') ? 'bg-gray-800 text-white border-l-3 border-blue-500' : 'hover:bg-white/10 hover:text-gray-200 border-l-3 border-transparent'"
+          class="flex items-center gap-3 px-3 py-2 rounded-r-lg text-sm font-medium transition-colors">
+          <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons.list}</svg>
+          Events
         </a>
 
         <!-- Groups section -->
@@ -528,6 +535,25 @@ const AppGroupDetail = {
                 Show thinking (send model reasoning to channel as blockquote)
               </label>
             </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+              <div>
+                <label class="block text-sm font-medium mb-1">Mode</label>
+                <select v-model="form.mode"
+                  class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
+                  <option value="active">Active</option>
+                  <option value="passive">Passive (observe only)</option>
+                  <option value="control">Control</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-sm font-medium mb-1">Threading Mode</label>
+                <select v-model="form.threadingMode"
+                  class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
+                  <option value="temporal">Temporal (cluster by time/topic)</option>
+                  <option value="thread_aware">Thread-aware (cluster by thread)</option>
+                </select>
+              </div>
+            </div>
             <button @click="saveSettings" :disabled="saving"
               class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors">
               {{ saving ? 'Saving...' : 'Save Settings' }}
@@ -745,7 +771,7 @@ const AppGroupDetail = {
     const tokenUsage = ref([]);
     let taskInterval = null;
 
-    const form = Vue.reactive({ model: '', temperature: null, maxToolRounds: null, timeoutMs: null, showThinking: false });
+    const form = Vue.reactive({ model: '', temperature: null, maxToolRounds: null, timeoutMs: null, showThinking: false, mode: 'active', threadingMode: 'temporal' });
     const showNewTask = ref(false);
     const newTask = Vue.reactive({
       prompt: '', scheduleType: 'cron', scheduleValue: '', contextMode: 'isolated',
@@ -782,6 +808,8 @@ const AppGroupDetail = {
         form.maxToolRounds = g.maxToolRounds;
         form.timeoutMs = g.timeoutMs;
         form.showThinking = g.showThinking ?? false;
+        form.mode = g.mode || 'active';
+        form.threadingMode = g.threadingMode || 'temporal';
         claude.value = p.claude;
         ollama.value = p.ollama || '';
         tasks.value = t;
@@ -802,6 +830,8 @@ const AppGroupDetail = {
         if (form.maxToolRounds != null) body.maxToolRounds = form.maxToolRounds;
         if (form.timeoutMs != null) body.timeoutMs = form.timeoutMs;
         body.showThinking = form.showThinking;
+        body.mode = form.mode;
+        body.threadingMode = form.threadingMode;
         await api(`/groups/${props.folder}`, { method: 'PATCH', body });
         showToast('Settings saved');
       } catch (e) { showToast(e.message, 'error'); }
@@ -1058,6 +1088,33 @@ const AppTaskDetail = {
                 <span class="ml-2 text-xs text-gray-500 dark:text-gray-400">Enable for tasks needing file access, bash, or web search</span>
               </div>
             </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+              <div>
+                <label class="block text-sm font-medium mb-1">Execution Mode</label>
+                <select v-model="form.executionMode"
+                  class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
+                  <option value="container">Container</option>
+                  <option value="host_pipeline">Host Pipeline</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-sm font-medium mb-1">Subscribed Event Types</label>
+                <input v-model="form.subscribedEventTypes" type="text" placeholder='e.g. intake.raw, observation.*'
+                  class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
+              </div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+              <div>
+                <label class="block text-sm font-medium mb-1">Allowed Tools</label>
+                <textarea v-model="form.allowedTools" rows="3" placeholder='JSON array, e.g. ["consume_events","publish_event"]'
+                  class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition font-mono"></textarea>
+              </div>
+              <div>
+                <label class="block text-sm font-medium mb-1">Allowed Send Targets</label>
+                <textarea v-model="form.allowedSendTargets" rows="3" placeholder='JSON array, e.g. ["slack:CPASSIVE"]'
+                  class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition font-mono"></textarea>
+              </div>
+            </div>
             <button @click="save" :disabled="saving || !!scheduleError"
               class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors">
               {{ saving ? 'Saving...' : 'Save Settings' }}
@@ -1142,6 +1199,7 @@ const AppTaskDetail = {
     const form = Vue.reactive({
       scheduleType: '', scheduleValue: '', contextMode: 'isolated', model: '', temperature: null, timezone: '',
       maxToolRounds: null, timeoutMs: null, useAgentSdk: false, status: 'active',
+      executionMode: 'container', subscribedEventTypes: '', allowedTools: '', allowedSendTargets: '',
     });
 
     const modelPlaceholder = computed(() => {
@@ -1185,6 +1243,10 @@ const AppTaskDetail = {
         form.maxToolRounds = t.maxToolRounds;
         form.timeoutMs = t.timeoutMs;
         form.useAgentSdk = !!t.useAgentSdk;
+        form.executionMode = t.executionMode || 'container';
+        form.subscribedEventTypes = t.subscribedEventTypes ? t.subscribedEventTypes.join(', ') : '';
+        form.allowedTools = t.allowedTools ? JSON.stringify(t.allowedTools) : '';
+        form.allowedSendTargets = t.allowedSendTargets ? JSON.stringify(t.allowedSendTargets) : '';
         form.status = t.status;
         runs.value = r;
         // Fetch group to show inherited model as placeholder
@@ -1209,6 +1271,10 @@ const AppTaskDetail = {
         if (form.maxToolRounds != null) body.maxToolRounds = form.maxToolRounds;
         if (form.timeoutMs != null) body.timeoutMs = form.timeoutMs;
         body.useAgentSdk = form.useAgentSdk;
+        body.executionMode = form.executionMode;
+        body.subscribedEventTypes = form.subscribedEventTypes ? form.subscribedEventTypes.split(',').map(s => s.trim()).filter(Boolean) : null;
+        try { body.allowedTools = form.allowedTools ? JSON.parse(form.allowedTools) : null; } catch { body.allowedTools = undefined; }
+        try { body.allowedSendTargets = form.allowedSendTargets ? JSON.parse(form.allowedSendTargets) : null; } catch { body.allowedSendTargets = undefined; }
         body.status = form.status;
         const updated = await api(`/tasks/${props.taskId}`, { method: 'PATCH', body });
         task.value = updated;
@@ -1239,6 +1305,163 @@ const AppTaskDetail = {
 
 // ── App ────────────────────────────────────────────────────
 
+// Events + Intake page
+const AppEvents = {
+  template: `
+    <div>
+      <h1 class="text-2xl font-bold mb-6">Events</h1>
+
+      <div class="mb-6">
+        <tab-bar :tabs="tabs" :active="activeTab" @select="activeTab = $event" />
+      </div>
+
+      <!-- Events Tab -->
+      <div v-if="activeTab === 'events'">
+        <div class="mb-4 flex gap-3 items-end">
+          <div>
+            <label class="block text-xs font-medium mb-1">Status</label>
+            <select v-model="statusFilter" @change="fetchEvents"
+              class="px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm">
+              <option value="">All</option>
+              <option value="pending">Pending</option>
+              <option value="claimed">Claimed</option>
+              <option value="done">Done</option>
+              <option value="failed">Failed</option>
+            </select>
+          </div>
+          <button @click="fetchEvents" class="px-3 py-1.5 bg-gray-200 dark:bg-gray-700 rounded-lg text-sm hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors">Refresh</button>
+        </div>
+        <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+          <table v-if="events.length" class="w-full text-sm">
+            <thead>
+              <tr class="border-b border-gray-200 dark:border-gray-700">
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Source</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Created</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Claimed By</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="e in events" :key="e.id" @click="toggleExpand(e.id)"
+                class="border-b border-gray-100 dark:border-gray-700/50 hover:bg-gray-50 dark:hover:bg-gray-750 cursor-pointer">
+                <td class="px-4 py-3 text-gray-500">{{ e.id }}</td>
+                <td class="px-4 py-3 font-mono text-xs">{{ e.type }}</td>
+                <td class="px-4 py-3">{{ e.source_group }}</td>
+                <td class="px-4 py-3"><status-badge :status="e.status" /></td>
+                <td class="px-4 py-3 text-gray-500 text-xs">{{ formatTime(e.created_at) }}</td>
+                <td class="px-4 py-3 text-gray-500 text-xs">{{ e.claimed_by || '-' }}</td>
+              </tr>
+              <tr v-if="expanded.has(events.find(e2 => expanded.has(e2.id))?.id)" v-for="e in events.filter(e2 => expanded.has(e2.id))" :key="'detail-'+e.id">
+                <td colspan="6" class="px-4 py-3 bg-gray-50 dark:bg-gray-900">
+                  <pre class="text-xs overflow-x-auto whitespace-pre-wrap font-mono">{{ formatPayload(e.payload) }}</pre>
+                  <div v-if="e.result_note" class="mt-2 text-xs text-gray-500">Note: {{ e.result_note }}</div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-else class="p-8 text-center text-gray-400">No events found</div>
+        </div>
+      </div>
+
+      <!-- Intake Tab -->
+      <div v-if="activeTab === 'intake'">
+        <div class="mb-4 flex gap-3 items-end">
+          <label class="flex items-center gap-2 text-sm">
+            <input type="checkbox" v-model="showProcessed" @change="fetchIntakeLogs" class="w-4 h-4 rounded">
+            Show processed
+          </label>
+          <button @click="fetchIntakeLogs" class="px-3 py-1.5 bg-gray-200 dark:bg-gray-700 rounded-lg text-sm hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors">Refresh</button>
+        </div>
+        <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+          <table v-if="intakeLogs.length" class="w-full text-sm">
+            <thead>
+              <tr class="border-b border-gray-200 dark:border-gray-700">
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Source Group</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Task</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Reason</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Submitted</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="l in intakeLogs" :key="l.id"
+                class="border-b border-gray-100 dark:border-gray-700/50">
+                <td class="px-4 py-3 text-gray-500">{{ l.id }}</td>
+                <td class="px-4 py-3">{{ l.source_group }}</td>
+                <td class="px-4 py-3 font-mono text-xs">{{ l.source_task_id || '-' }}</td>
+                <td class="px-4 py-3">{{ l.reason }}</td>
+                <td class="px-4 py-3 text-gray-500 text-xs">{{ formatTime(l.submitted_at) }}</td>
+                <td class="px-4 py-3">
+                  <span v-if="l.processed_at" class="text-green-600 dark:text-green-400 text-xs">Processed</span>
+                  <span v-else class="text-yellow-600 dark:text-yellow-400 text-xs">Pending</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-else class="p-8 text-center text-gray-400">No intake logs found</div>
+        </div>
+      </div>
+    </div>
+  `,
+  setup() {
+    const events = ref([]);
+    const intakeLogs = ref([]);
+    const activeTab = ref('events');
+    const statusFilter = ref('');
+    const showProcessed = ref(true);
+    const expanded = ref(new Set());
+
+    const tabs = [
+      { key: 'events', label: 'Events' },
+      { key: 'intake', label: 'Intake Log' },
+    ];
+
+    const fetchEvents = async () => {
+      try {
+        const params = new URLSearchParams();
+        if (statusFilter.value) params.set('status', statusFilter.value);
+        params.set('limit', '100');
+        events.value = await api(`/events?${params}`);
+      } catch {}
+    };
+
+    const fetchIntakeLogs = async () => {
+      try {
+        const params = new URLSearchParams();
+        params.set('includeProcessed', String(showProcessed.value));
+        params.set('limit', '100');
+        intakeLogs.value = await api(`/intake-logs?${params}`);
+      } catch {}
+    };
+
+    const toggleExpand = (id) => {
+      if (expanded.value.has(id)) expanded.value.delete(id);
+      else expanded.value.add(id);
+      expanded.value = new Set(expanded.value); // trigger reactivity
+    };
+
+    const formatPayload = (json) => {
+      try { return JSON.stringify(JSON.parse(json), null, 2); }
+      catch { return json; }
+    };
+
+    const formatTime = (iso) => {
+      if (!iso) return '-';
+      return new Date(iso).toLocaleString();
+    };
+
+    onMounted(() => {
+      fetchEvents();
+      fetchIntakeLogs();
+    });
+
+    return { events, intakeLogs, activeTab, tabs, statusFilter, showProcessed, expanded, fetchEvents, fetchIntakeLogs, toggleExpand, formatPayload, formatTime };
+  },
+};
+
 const app = createApp({
   template: `
     <div class="flex h-screen overflow-hidden">
@@ -1261,6 +1484,7 @@ const app = createApp({
         <div class="max-w-4xl">
           <app-dashboard v-if="route.view === 'dashboard'" :groups="groups" />
           <app-global-prompts v-if="route.view === 'global-prompts'" />
+          <app-events v-if="route.view === 'events'" />
           <app-group-detail v-if="route.view === 'group-detail'" :folder="route.folder" :initial-tab="route.tab" :key="route.folder + (route.tab || '')" />
           <app-task-detail v-if="route.view === 'task-detail'" :task-id="route.id" :key="route.id" @group-loaded="taskGroupFolder = $event" />
           <div v-if="route.view === 'not-found'" class="text-center py-20 text-gray-400">
@@ -1284,6 +1508,7 @@ const app = createApp({
       const params = new URLSearchParams(qs || '');
       if (path === '/') return { view: 'dashboard' };
       if (path === '/prompts/global') return { view: 'global-prompts' };
+      if (path === '/events') return { view: 'events' };
       const gm = path.match(/^\/groups\/([^/]+)$/);
       if (gm) return { view: 'group-detail', folder: gm[1], tab: params.get('tab') };
       const tm = path.match(/^\/tasks\/([^/]+)$/);
@@ -1329,6 +1554,7 @@ app.component('app-dashboard', AppDashboard);
 app.component('app-global-prompts', AppGlobalPrompts);
 app.component('app-group-detail', AppGroupDetail);
 app.component('app-task-detail', AppTaskDetail);
+app.component('app-events', AppEvents);
 app.component('tab-bar', TabBar);
 app.component('status-badge', StatusBadge);
 

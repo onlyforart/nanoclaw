@@ -83,7 +83,9 @@ beforeEach(async () => {
       is_main INTEGER DEFAULT 0, model TEXT DEFAULT NULL,
       temperature REAL DEFAULT NULL,
       max_tool_rounds INTEGER DEFAULT NULL, timeout_ms INTEGER DEFAULT NULL,
-      show_thinking INTEGER DEFAULT NULL
+      show_thinking INTEGER DEFAULT NULL,
+      mode TEXT NOT NULL DEFAULT 'active',
+      threading_mode TEXT NOT NULL DEFAULT 'temporal'
     );
     CREATE TABLE scheduled_tasks (
       id TEXT PRIMARY KEY, group_folder TEXT NOT NULL, chat_jid TEXT NOT NULL,
@@ -92,21 +94,36 @@ beforeEach(async () => {
       created_at TEXT NOT NULL, context_mode TEXT DEFAULT 'isolated',
       model TEXT DEFAULT NULL, temperature REAL DEFAULT NULL, timezone TEXT DEFAULT NULL,
       max_tool_rounds INTEGER DEFAULT NULL, timeout_ms INTEGER DEFAULT NULL,
-      use_agent_sdk INTEGER DEFAULT 0
+      use_agent_sdk INTEGER DEFAULT 0,
+      allowed_tools TEXT, allowed_send_targets TEXT,
+      execution_mode TEXT NOT NULL DEFAULT 'container',
+      subscribed_event_types TEXT
     );
     CREATE TABLE task_run_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL,
       run_at TEXT NOT NULL, duration_ms INTEGER NOT NULL, status TEXT NOT NULL,
       result TEXT, error TEXT
     );
+    CREATE TABLE events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, source_group TEXT NOT NULL,
+      source_task_id TEXT, payload TEXT NOT NULL, dedupe_key TEXT,
+      created_at TEXT NOT NULL, expires_at TEXT, status TEXT NOT NULL DEFAULT 'pending',
+      claimed_by TEXT, claimed_at TEXT, processed_at TEXT, result_note TEXT
+    );
+    CREATE TABLE pipeline_intake_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, event_id INTEGER NOT NULL,
+      raw_text_hash TEXT NOT NULL, source_type TEXT NOT NULL, source_group TEXT NOT NULL,
+      source_task_id TEXT, source_channel TEXT, source_message_id TEXT,
+      reason TEXT NOT NULL, submitted_at TEXT NOT NULL, processed_at TEXT, observation_id INTEGER
+    );
   `);
-  db.prepare(`INSERT INTO registered_groups VALUES (?, ?, ?, ?, ?, NULL, 1, 1, NULL, NULL, NULL, NULL, NULL)`).run(
+  db.prepare(`INSERT INTO registered_groups (jid, name, folder, trigger_pattern, added_at, requires_trigger, is_main) VALUES (?, ?, ?, ?, ?, 1, 1)`).run(
     'main@s.whatsapp.net', 'Main Chat', 'whatsapp_main', '@Andy', '2024-01-01T00:00:00.000Z',
   );
-  db.prepare(`INSERT INTO registered_groups VALUES (?, ?, ?, ?, ?, NULL, 1, 0, ?, NULL, ?, ?, NULL)`).run(
+  db.prepare(`INSERT INTO registered_groups (jid, name, folder, trigger_pattern, added_at, requires_trigger, is_main, model, max_tool_rounds, timeout_ms) VALUES (?, ?, ?, ?, ?, 1, 0, ?, ?, ?)`).run(
     'slack@main', 'Slack Main', 'slack_main', '@Andy', '2024-01-02T00:00:00.000Z', 'sonnet', 10, 300000,
   );
-  db.prepare(`INSERT INTO scheduled_tasks VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, 0)`).run(
+  db.prepare(`INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, next_run, status, created_at, context_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
     'task-1', 'slack_main', 'slack@main', 'Daily standup', 'cron', '0 9 * * 1-5',
     '2024-06-03T09:00:00.000Z', 'active', '2024-01-01T00:00:00.000Z', 'group',
   );

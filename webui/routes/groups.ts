@@ -16,6 +16,8 @@ interface GroupResponse {
   isMain: boolean;
   requiresTrigger: boolean;
   trigger: string;
+  mode: string;
+  threadingMode: string;
 }
 
 function formatGroup(row: GroupRow): GroupResponse {
@@ -31,6 +33,8 @@ function formatGroup(row: GroupRow): GroupResponse {
     isMain: row.is_main === 1,
     requiresTrigger: row.requires_trigger === 1,
     trigger: row.trigger_pattern,
+    mode: row.mode || 'active',
+    threadingMode: row.threading_mode || 'temporal',
   };
 }
 
@@ -47,16 +51,18 @@ export function handleGetGroup(folder: string): GroupResponse | null {
 
 export function handlePatchGroup(
   folder: string,
-  body: { model?: string; temperature?: number; maxToolRounds?: number; timeoutMs?: number; showThinking?: boolean },
+  body: { model?: string; temperature?: number; maxToolRounds?: number; timeoutMs?: number; showThinking?: boolean; mode?: string; threadingMode?: string },
 ): GroupResponse | null {
   if (!isValidGroupFolder(folder)) return null;
 
-  const updates: { model?: string; temperature?: number | null; max_tool_rounds?: number; timeout_ms?: number; show_thinking?: number | null } = {};
+  const updates: { model?: string; temperature?: number | null; max_tool_rounds?: number; timeout_ms?: number; show_thinking?: number | null; mode?: string; threading_mode?: string } = {};
   if (body.model !== undefined) updates.model = body.model;
   if (body.temperature !== undefined) updates.temperature = body.temperature != null && String(body.temperature) !== '' ? Number(body.temperature) : null;
   if (body.maxToolRounds !== undefined) updates.max_tool_rounds = body.maxToolRounds;
   if (body.timeoutMs !== undefined) updates.timeout_ms = body.timeoutMs;
   if (body.showThinking !== undefined) updates.show_thinking = body.showThinking ? 1 : null;
+  if (body.mode !== undefined) updates.mode = body.mode;
+  if (body.threadingMode !== undefined) updates.threading_mode = body.threadingMode;
 
   updateGroup(folder, updates);
 

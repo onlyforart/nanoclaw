@@ -14,6 +14,8 @@ import {
   getTaskById,
   updateTask,
   getTaskRuns,
+  getEvents,
+  getIntakeLogs,
 } from './db.js';
 
 let tmpDir: string;
@@ -39,7 +41,9 @@ beforeEach(() => {
       temperature REAL DEFAULT NULL,
       max_tool_rounds INTEGER DEFAULT NULL,
       timeout_ms INTEGER DEFAULT NULL,
-      show_thinking INTEGER DEFAULT NULL
+      show_thinking INTEGER DEFAULT NULL,
+      mode TEXT NOT NULL DEFAULT 'active',
+      threading_mode TEXT NOT NULL DEFAULT 'temporal'
     );
 
     CREATE TABLE IF NOT EXISTS scheduled_tasks (
@@ -60,7 +64,11 @@ beforeEach(() => {
       timezone TEXT DEFAULT NULL,
       max_tool_rounds INTEGER DEFAULT NULL,
       timeout_ms INTEGER DEFAULT NULL,
-      use_agent_sdk INTEGER DEFAULT 0
+      use_agent_sdk INTEGER DEFAULT 0,
+      allowed_tools TEXT,
+      allowed_send_targets TEXT,
+      execution_mode TEXT NOT NULL DEFAULT 'container',
+      subscribed_event_types TEXT
     );
 
     CREATE TABLE IF NOT EXISTS task_run_logs (
@@ -72,6 +80,37 @@ beforeEach(() => {
       result TEXT,
       error TEXT,
       FOREIGN KEY (task_id) REFERENCES scheduled_tasks(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT NOT NULL,
+      source_group TEXT NOT NULL,
+      source_task_id TEXT,
+      payload TEXT NOT NULL,
+      dedupe_key TEXT,
+      created_at TEXT NOT NULL,
+      expires_at TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      claimed_by TEXT,
+      claimed_at TEXT,
+      processed_at TEXT,
+      result_note TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS pipeline_intake_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_id INTEGER NOT NULL,
+      raw_text_hash TEXT NOT NULL,
+      source_type TEXT NOT NULL,
+      source_group TEXT NOT NULL,
+      source_task_id TEXT,
+      source_channel TEXT,
+      source_message_id TEXT,
+      reason TEXT NOT NULL,
+      submitted_at TEXT NOT NULL,
+      processed_at TEXT,
+      observation_id INTEGER
     );
   `);
 
@@ -101,6 +140,27 @@ beforeEach(() => {
     'task-1', '2024-06-01T09:00:00.000Z', 3000, 'error', null, 'Timeout',
   );
 
+  // Seed a passive group
+  db.prepare(`INSERT INTO registered_groups (jid, name, folder, trigger_pattern, added_at, is_main, mode, threading_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    'slack:CPASSIVE', 'Passive Channel', 'slack_passive', '@Andy', '2024-03-01T00:00:00.000Z', 0, 'passive', 'thread_aware',
+  );
+
+  // Seed events
+  db.prepare(`INSERT INTO events (type, source_group, source_task_id, payload, created_at, status) VALUES (?, ?, ?, ?, ?, ?)`).run(
+    'observation.support', 'slack_main', 'pipeline:sanitiser', '{"summary":"INC down"}', '2024-06-01T10:00:00.000Z', 'pending',
+  );
+  db.prepare(`INSERT INTO events (type, source_group, source_task_id, payload, created_at, status, claimed_by, claimed_at, processed_at, result_note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    'observation.support', 'slack_main', 'pipeline:sanitiser', '{"summary":"fixed"}', '2024-06-01T11:00:00.000Z', 'done', 'pipeline:monitor', '2024-06-01T11:01:00.000Z', '2024-06-01T11:02:00.000Z', 'processed',
+  );
+
+  // Seed intake logs
+  db.prepare(`INSERT INTO pipeline_intake_log (event_id, raw_text_hash, source_type, source_group, source_task_id, reason, submitted_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+    1, 'abc123', 'task', 'slack_main', 'pipeline:monitor', 'found during investigation', '2024-06-01T10:30:00.000Z',
+  );
+  db.prepare(`INSERT INTO pipeline_intake_log (event_id, raw_text_hash, source_type, source_group, source_task_id, reason, submitted_at, processed_at, observation_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    2, 'def456', 'task', 'slack_main', 'pipeline:monitor', 'another find', '2024-06-01T11:30:00.000Z', '2024-06-01T11:35:00.000Z', 42,
+  );
+
   db.close();
 
   // Init the webui db module pointing at this temp database
@@ -117,7 +177,7 @@ afterEach(() => {
 describe('getAllGroups', () => {
   it('returns all registered groups', () => {
     const groups = getAllGroups();
-    expect(groups).toHaveLength(2);
+    expect(groups).toHaveLength(3);
   });
 
   it('returns groups sorted by name', () => {
@@ -299,5 +359,131 @@ describe('getTaskRuns', () => {
 
   it('returns empty array for non-existent task', () => {
     expect(getTaskRuns('nonexistent')).toEqual([]);
+  });
+});
+
+// --- Group mode + threading_mode ---
+
+describe('group mode and threading_mode', () => {
+  it('returns mode field from getAllGroups', () => {
+    const groups = getAllGroups();
+    const passive = groups.find((g) => g.folder === 'slack_passive')!;
+    expect(passive.mode).toBe('passive');
+  });
+
+  it('returns threading_mode field from getGroupByFolder', () => {
+    const group = getGroupByFolder('slack_passive');
+    expect(group!.threading_mode).toBe('thread_aware');
+  });
+
+  it('defaults mode to active for groups without explicit mode', () => {
+    const group = getGroupByFolder('whatsapp_main');
+    expect(group!.mode).toBe('active');
+  });
+
+  it('updates mode via updateGroup', () => {
+    updateGroup('whatsapp_family', { mode: 'passive' });
+    const group = getGroupByFolder('whatsapp_family');
+    expect(group!.mode).toBe('passive');
+  });
+
+  it('updates threading_mode via updateGroup', () => {
+    updateGroup('whatsapp_family', { threading_mode: 'thread_aware' });
+    const group = getGroupByFolder('whatsapp_family');
+    expect(group!.threading_mode).toBe('thread_aware');
+  });
+});
+
+// --- Task capability fields ---
+
+describe('task allowed_tools and allowed_send_targets', () => {
+  it('returns null for tasks without allowed_tools', () => {
+    const task = getTaskById('task-1');
+    expect(task!.allowed_tools).toBeNull();
+  });
+
+  it('updates allowed_tools via updateTask', () => {
+    updateTask('task-1', { allowed_tools: '["consume_events","publish_event"]' });
+    const task = getTaskById('task-1');
+    expect(task!.allowed_tools).toBe('["consume_events","publish_event"]');
+  });
+
+  it('updates allowed_send_targets via updateTask', () => {
+    updateTask('task-1', { allowed_send_targets: '["slack:CPASSIVE"]' });
+    const task = getTaskById('task-1');
+    expect(task!.allowed_send_targets).toBe('["slack:CPASSIVE"]');
+  });
+
+  it('updates execution_mode via updateTask', () => {
+    updateTask('task-1', { execution_mode: 'host_pipeline' });
+    const task = getTaskById('task-1');
+    expect(task!.execution_mode).toBe('host_pipeline');
+  });
+
+  it('updates subscribed_event_types via updateTask', () => {
+    updateTask('task-1', { subscribed_event_types: '["intake.raw"]' });
+    const task = getTaskById('task-1');
+    expect(task!.subscribed_event_types).toBe('["intake.raw"]');
+  });
+});
+
+// --- Events ---
+
+describe('getEvents', () => {
+  it('returns all events when no filters', () => {
+    const events = getEvents();
+    expect(events).toHaveLength(2);
+  });
+
+  it('filters by type', () => {
+    const events = getEvents({ types: ['observation.support'] });
+    expect(events).toHaveLength(2);
+  });
+
+  it('filters by status', () => {
+    const events = getEvents({ status: 'pending' });
+    expect(events).toHaveLength(1);
+    expect(events[0].status).toBe('pending');
+  });
+
+  it('respects limit', () => {
+    const events = getEvents({ limit: 1 });
+    expect(events).toHaveLength(1);
+  });
+
+  it('returns events ordered by created_at desc', () => {
+    const events = getEvents();
+    expect(events[0].created_at).toBe('2024-06-01T11:00:00.000Z');
+    expect(events[1].created_at).toBe('2024-06-01T10:00:00.000Z');
+  });
+});
+
+// --- Intake logs ---
+
+describe('getIntakeLogs', () => {
+  it('returns all intake logs', () => {
+    const logs = getIntakeLogs();
+    expect(logs).toHaveLength(2);
+  });
+
+  it('excludes processed logs when requested', () => {
+    const logs = getIntakeLogs({ includeProcessed: false });
+    expect(logs).toHaveLength(1);
+    expect(logs[0].processed_at).toBeNull();
+  });
+
+  it('includes processed logs when requested', () => {
+    const logs = getIntakeLogs({ includeProcessed: true });
+    expect(logs).toHaveLength(2);
+  });
+
+  it('respects limit', () => {
+    const logs = getIntakeLogs({ limit: 1 });
+    expect(logs).toHaveLength(1);
+  });
+
+  it('returns logs ordered by submitted_at desc', () => {
+    const logs = getIntakeLogs();
+    expect(logs[0].submitted_at).toBe('2024-06-01T11:30:00.000Z');
   });
 });

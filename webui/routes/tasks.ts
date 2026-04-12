@@ -27,6 +27,10 @@ interface TaskResponse {
   maxToolRounds: number | null;
   timeoutMs: number | null;
   useAgentSdk: boolean;
+  allowedTools: string[] | null;
+  allowedSendTargets: string[] | null;
+  executionMode: string;
+  subscribedEventTypes: string[] | null;
   nextRun: string | null;
   lastRun: string | null;
   lastResult: string | null;
@@ -56,6 +60,10 @@ function formatTask(row: TaskRow): TaskResponse {
     maxToolRounds: row.max_tool_rounds,
     timeoutMs: row.timeout_ms,
     useAgentSdk: !!row.use_agent_sdk,
+    allowedTools: row.allowed_tools ? JSON.parse(row.allowed_tools) : null,
+    allowedSendTargets: row.allowed_send_targets ? JSON.parse(row.allowed_send_targets) : null,
+    executionMode: row.execution_mode || 'container',
+    subscribedEventTypes: row.subscribed_event_types ? JSON.parse(row.subscribed_event_types) : null,
     nextRun: row.next_run,
     lastRun: row.last_run,
     lastResult: row.last_result,
@@ -182,6 +190,10 @@ export function handlePatchTask(
     maxToolRounds?: number;
     timeoutMs?: number;
     useAgentSdk?: boolean;
+    allowedTools?: string[] | null;
+    allowedSendTargets?: string[] | null;
+    executionMode?: string;
+    subscribedEventTypes?: string[] | null;
     status?: string;
   },
 ): { task: TaskResponse } | { error: string } {
@@ -199,6 +211,10 @@ export function handlePatchTask(
   if (body.maxToolRounds !== undefined) updates.max_tool_rounds = body.maxToolRounds;
   if (body.timeoutMs !== undefined) updates.timeout_ms = body.timeoutMs;
   if (body.useAgentSdk !== undefined) updates.use_agent_sdk = body.useAgentSdk ? 1 : 0;
+  if (body.allowedTools !== undefined) updates.allowed_tools = body.allowedTools ? JSON.stringify(body.allowedTools) : null;
+  if (body.allowedSendTargets !== undefined) updates.allowed_send_targets = body.allowedSendTargets ? JSON.stringify(body.allowedSendTargets) : null;
+  if (body.executionMode !== undefined) updates.execution_mode = body.executionMode;
+  if (body.subscribedEventTypes !== undefined) updates.subscribed_event_types = body.subscribedEventTypes ? JSON.stringify(body.subscribedEventTypes) : null;
   if (body.status !== undefined) updates.status = body.status;
 
   // Recompute next_run when schedule or timezone changes
