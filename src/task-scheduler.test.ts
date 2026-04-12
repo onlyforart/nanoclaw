@@ -1,12 +1,40 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { _initTestDatabase, createTask, getTaskById } from './db.js';
+import {
+  _initTestDatabase,
+  createTask,
+  getTaskById,
+  getRecentEvents,
+  setRegisteredGroup,
+  storeChatMetadata,
+  storeMessage,
+} from './db.js';
 import {
   _resetSchedulerLoopForTests,
   computeNextRun,
   startSchedulerLoop,
 } from './task-scheduler.js';
 import type { ScheduledTask } from './types.js';
+
+// Mock the LLM client so host_pipeline tests don't hit a real Ollama
+vi.mock('./sanitiser/llm-client.js', () => ({
+  callExtractionLLM: vi.fn(async () => ({
+    response: JSON.stringify({
+      fact_summary: 'Test observation from scheduler',
+      urgency: 'issue',
+      speech_act: 'fresh_report',
+      reporter_role_hint: 'original_reporter',
+      appears_to_address_bot: false,
+      contains_imperative: false,
+      sentiment: 'neutral',
+      action_requested: null,
+      resolution_owner_hint: 'this_team',
+    }),
+    inputTokens: 100,
+    outputTokens: 50,
+    costUSD: null,
+  })),
+}));
 
 describe('task scheduler', () => {
   beforeEach(() => {
@@ -164,5 +192,68 @@ describe('task scheduler', () => {
     const offset =
       (new Date(nextRun!).getTime() - new Date(scheduledTime).getTime()) % ms;
     expect(offset).toBe(0);
+  });
+
+  it('runs host_pipeline tasks through the pipeline executor', async () => {
+    // Set up a passive channel with a message
+    setRegisteredGroup('slack:CPASSIVE', {
+      name: 'Passive',
+      folder: 'slack_passive',
+      trigger: '@Andy',
+      added_at: '2024-01-01T00:00:00.000Z',
+      mode: 'passive',
+    });
+    storeChatMetadata('slack:CPASSIVE', '2024-01-01T00:00:00.000Z');
+    storeMessage({
+      id: 'msg-sched-1',
+      chat_jid: 'slack:CPASSIVE',
+      sender: 'U123',
+      sender_name: 'Alice',
+      content: 'INC999 is broken',
+      timestamp: '2024-06-01T10:00:01.000Z',
+    });
+
+    // Create a host_pipeline task that's due now
+    createTask({
+      id: 'pipeline:sanitiser',
+      group_folder: 'slack_main',
+      chat_jid: 'slack:CMAIN',
+      prompt: 'sanitiser system prompt',
+      schedule_type: 'cron',
+      schedule_value: '*/1 * * * *',
+      context_mode: 'isolated',
+      executionMode: 'host_pipeline',
+      next_run: new Date(Date.now() - 60_000).toISOString(),
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    const enqueueTask = vi.fn(
+      (_groupJid: string, _taskId: string, fn: () => Promise<void>) => {
+        void fn();
+      },
+    );
+
+    startSchedulerLoop({
+      registeredGroups: () => ({
+        'slack:CMAIN': {
+          name: 'Main',
+          folder: 'slack_main',
+          trigger: 'always',
+          added_at: '2024-01-01T00:00:00.000Z',
+          isMain: true,
+        },
+      }),
+      getSessions: () => ({}),
+      queue: { enqueueTask } as any,
+      onProcess: () => {},
+      sendMessage: async () => {},
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Should have produced an observation event
+    const events = getRecentEvents(['observation.passive'], 10, true);
+    expect(events.length).toBeGreaterThanOrEqual(1);
   });
 });
