@@ -50,6 +50,8 @@ interface ContainerInput {
   timeoutMs?: number;
   showThinking?: boolean;
   useAgentSdk?: boolean;
+  allowedTools?: string[] | null;
+  allowedSendTargets?: string[] | null;
 }
 
 interface ContainerOutput {
@@ -660,6 +662,11 @@ async function runOllamaDirectMode(containerInput: ContainerInput): Promise<void
   const ipcServerPath = path.join(__dirname, 'ipc-mcp-stdio.js');
   const isOllama = containerInput.model?.startsWith('ollama:') || containerInput.model?.startsWith('ollama-remote:');
 
+  // Pipeline allow-list: if set, intersect with tool sets in both paths.
+  const allowedToolsSet = containerInput.allowedTools
+    ? new Set(containerInput.allowedTools)
+    : null;
+
   // Scheduled tasks only get send_message, send_cross_channel_message, and
   // list_tasks — they must not create/modify tasks or groups (defense-in-depth
   // against runaway models).
@@ -667,11 +674,6 @@ async function runOllamaDirectMode(containerInput: ContainerInput): Promise<void
     ? ['send_message', 'send_cross_channel_message', 'list_tasks', 'publish_event', 'consume_events', 'ack_event', 'submit_to_pipeline', 'read_chat_messages', 're_extract_observation']
     : ['send_message', 'send_cross_channel_message', 'schedule_task', 'list_tasks', 'pause_task', 'resume_task', 'cancel_task', 'update_task', 'register_group', 'update_group', 'list_groups', 'publish_event', 'consume_events', 'ack_event', 'submit_to_pipeline', 'read_chat_messages', 're_extract_observation'];
 
-  // Pipeline allow-list: if set, intersect with the base tool set.
-  // This restricts the task to only the tools explicitly granted.
-  const allowedToolsSet = containerInput.allowedTools
-    ? new Set(containerInput.allowedTools)
-    : null;
   if (allowedToolsSet) {
     nanoclawTools = nanoclawTools.filter((t) => allowedToolsSet.has(t));
   }
@@ -870,7 +872,6 @@ async function runAnthropicApiMode(containerInput: ContainerInput): Promise<void
     ? ['send_message', 'send_cross_channel_message', 'list_tasks', 'publish_event', 'consume_events', 'ack_event', 'submit_to_pipeline', 'read_chat_messages', 're_extract_observation']
     : ['send_message', 'send_cross_channel_message', 'schedule_task', 'list_tasks', 'pause_task', 'resume_task', 'cancel_task', 'update_task', 'register_group', 'update_group', 'list_groups', 'publish_event', 'consume_events', 'ack_event', 'submit_to_pipeline', 'read_chat_messages', 're_extract_observation'];
 
-  // Pipeline allow-list: same filtering as Ollama path
   if (allowedToolsSet) {
     nanoclawTools = nanoclawTools.filter((t) => allowedToolsSet.has(t));
   }
