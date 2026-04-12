@@ -220,12 +220,6 @@ const AppSidebar = {
           <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons.prompts}</svg>
           Global Prompts
         </a>
-        <a href="#/pipeline"
-          :class="isActive('/pipeline') ? 'bg-gray-800 text-white border-l-3 border-blue-500' : 'hover:bg-white/10 hover:text-gray-200 border-l-3 border-transparent'"
-          class="flex items-center gap-3 px-3 py-2 rounded-r-lg text-sm font-medium transition-colors">
-          <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons.dashboard}</svg>
-          Pipeline
-        </a>
         <a href="#/observations"
           :class="isActive('/observations') ? 'bg-gray-800 text-white border-l-3 border-blue-500' : 'hover:bg-white/10 hover:text-gray-200 border-l-3 border-transparent'"
           class="flex items-center gap-3 px-3 py-2 rounded-r-lg text-sm font-medium transition-colors">
@@ -237,6 +231,12 @@ const AppSidebar = {
           class="flex items-center gap-3 px-3 py-2 rounded-r-lg text-sm font-medium transition-colors">
           <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons.list}</svg>
           Events
+        </a>
+        <a href="#/pipeline"
+          :class="isActive('/pipeline') ? 'bg-gray-800 text-white border-l-3 border-blue-500' : 'hover:bg-white/10 hover:text-gray-200 border-l-3 border-transparent'"
+          class="flex items-center gap-3 px-3 py-2 rounded-r-lg text-sm font-medium transition-colors">
+          <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons.dashboard}</svg>
+          Pipeline
         </a>
 
         <!-- Groups section -->
@@ -993,9 +993,9 @@ const AppTaskDetail = {
   template: `
     <div>
       <!-- Back link -->
-      <a v-if="task" :href="'#/groups/' + task.groupFolder" class="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 mb-4 transition-colors">
+      <a v-if="task" :href="taskId.startsWith('pipeline:') ? '#/pipeline' : '#/groups/' + task.groupFolder" class="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 mb-4 transition-colors">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons.back}</svg>
-        Back to {{ group?.name || task.groupFolder }}
+        {{ taskId.startsWith('pipeline:') ? 'Back to Pipeline' : 'Back to ' + (group?.name || task.groupFolder) }}
       </a>
 
       <h2 class="text-2xl font-bold mb-1">Task</h2>
@@ -1323,6 +1323,16 @@ const AppPipeline = {
     <div>
       <h1 class="text-2xl font-bold mb-6">Pipeline</h1>
 
+      <!-- Team Group -->
+      <div v-if="data.teamGroup" class="mb-6 flex items-center gap-3">
+        <span class="text-sm font-semibold text-gray-500 uppercase">Team Channel:</span>
+        <a :href="'#/groups/' + data.teamGroup.folder"
+          class="px-3 py-1.5 bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 rounded-full text-sm font-medium hover:opacity-80 transition-opacity">
+          {{ data.teamGroup.name }}
+        </a>
+        <span class="text-xs text-gray-400 font-mono">{{ data.teamGroup.jid }}</span>
+      </div>
+
       <!-- Source Channels -->
       <div class="mb-6">
         <h2 class="text-sm font-semibold text-gray-500 uppercase mb-3">Source Channels (passive)</h2>
@@ -1346,7 +1356,7 @@ const AppPipeline = {
                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Task</th>
                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Model</th>
                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Mode</th>
-                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Schedule</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Trigger</th>
                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Last Run</th>
                 <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Last Result</th>
@@ -1362,7 +1372,13 @@ const AppPipeline = {
                   <span :class="t.execution_mode === 'host_pipeline' ? 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200' : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200'"
                     class="px-2 py-0.5 rounded-full text-xs font-medium">{{ t.execution_mode }}</span>
                 </td>
-                <td class="px-4 py-3 font-mono text-xs">{{ t.schedule_value }}</td>
+                <td class="px-4 py-3 text-xs">
+                  <template v-if="t.subscribed_event_types">
+                    <span class="text-purple-600 dark:text-purple-400">event-driven</span>
+                    <div class="text-[10px] text-gray-400 font-mono mt-0.5">{{ JSON.parse(t.subscribed_event_types).join(', ') }}</div>
+                  </template>
+                  <span v-else class="font-mono">{{ t.schedule_value }}</span>
+                </td>
                 <td class="px-4 py-3"><status-badge :status="t.status" /></td>
                 <td class="px-4 py-3 text-gray-500 text-xs">{{ t.last_run ? new Date(t.last_run).toLocaleString() : '-' }}</td>
                 <td class="px-4 py-3 text-xs max-w-xs truncate">{{ t.last_result || '-' }}</td>
@@ -1373,9 +1389,44 @@ const AppPipeline = {
         </div>
       </div>
 
-      <!-- Token Usage -->
+      <!-- Token Usage Chart -->
       <div>
         <h2 class="text-sm font-semibold text-gray-500 uppercase mb-3">Token Usage (last 30 days)</h2>
+        <div v-if="chartDays.length" class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 mb-4">
+          <div class="overflow-x-auto">
+            <svg :width="Math.max(chartDays.length * 36 + 70, 300)" height="160" class="block">
+              <!-- Y axis labels -->
+              <text v-for="(label, i) in chartYLabels" :key="'y'+i"
+                :x="48" :y="20 + i * (120 / (chartYLabels.length - 1))"
+                text-anchor="end" class="fill-gray-400" style="font-size:10px">{{ label }}</text>
+              <!-- Grid lines -->
+              <line v-for="(label, i) in chartYLabels" :key="'g'+i"
+                :x1="54" :x2="Math.max(chartDays.length * 36 + 70, 300) - 4"
+                :y1="20 + i * (120 / (chartYLabels.length - 1))"
+                :y2="20 + i * (120 / (chartYLabels.length - 1))"
+                stroke="currentColor" class="text-gray-200 dark:text-gray-700" stroke-width="0.5" />
+              <!-- Stacked bars per day -->
+              <g v-for="(day, di) in chartDays" :key="day.date">
+                <rect v-for="(seg, si) in day.segments" :key="si"
+                  :x="58 + di * 36" :y="140 - seg.y - seg.h" :width="28" :height="Math.max(seg.h, seg.tokens > 0 ? 1 : 0)"
+                  :class="seg.color" rx="1">
+                  <title>{{ seg.label }}&#10;{{ seg.tokens.toLocaleString() }} tokens ({{ seg.runs }} runs)</title>
+                </rect>
+                <!-- Date label -->
+                <text :x="72 + di * 36" y="154" text-anchor="middle" class="fill-gray-400" style="font-size:9px"
+                  v-if="chartDays.length <= 15 || di % Math.ceil(chartDays.length / 15) === 0">{{ day.date.slice(5) }}</text>
+              </g>
+            </svg>
+          </div>
+          <div class="flex items-center gap-4 mt-2 text-xs text-gray-400">
+            <span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded-sm fill-violet-500 bg-violet-500"></span> sanitiser</span>
+            <span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded-sm fill-blue-500 bg-blue-500"></span> monitor</span>
+            <span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded-sm fill-amber-500 bg-amber-500"></span> solver</span>
+            <span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded-sm fill-emerald-500 bg-emerald-500"></span> responder</span>
+          </div>
+        </div>
+
+        <!-- Token Usage Table -->
         <div v-if="data.tokenUsage?.length" class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
           <table class="w-full text-sm">
             <thead>
@@ -1399,12 +1450,62 @@ const AppPipeline = {
             </tbody>
           </table>
         </div>
-        <div v-else class="text-sm text-gray-400">No token usage recorded yet</div>
+        <div v-if="!data.tokenUsage?.length && !chartDays.length" class="text-sm text-gray-400">No token usage recorded yet</div>
       </div>
     </div>
   `,
   setup() {
-    const data = ref({ tasks: [], sourceChannels: [], tokenUsage: [] });
+    const data = ref({ tasks: [], sourceChannels: [], tokenUsage: [], teamGroup: null });
+
+    const TASK_COLORS = {
+      'pipeline:sanitiser': 'fill-violet-500',
+      'pipeline:monitor': 'fill-blue-500',
+      'pipeline:solver': 'fill-amber-500',
+      'pipeline:responder': 'fill-emerald-500',
+    };
+    const TASK_ORDER = ['pipeline:sanitiser', 'pipeline:monitor', 'pipeline:solver', 'pipeline:responder'];
+
+    const chartDays = computed(() => {
+      const usage = data.value.tokenUsage || [];
+      if (!usage.length) return [];
+      // Group by date
+      const byDate = new Map();
+      for (const row of usage) {
+        if (!byDate.has(row.date)) byDate.set(row.date, []);
+        byDate.get(row.date).push(row);
+      }
+      return Array.from(byDate.entries()).map(([date, rows]) => {
+        // Sort by task order, stack bottom-up
+        rows.sort((a, b) => TASK_ORDER.indexOf(a.task_id) - TASK_ORDER.indexOf(b.task_id));
+        let cumY = 0;
+        const segments = rows.map(r => {
+          const tokens = r.input_tokens + r.output_tokens;
+          const h = chartMax.value > 0 ? Math.max((tokens / chartMax.value) * 120, tokens > 0 ? 1 : 0) : 0;
+          const seg = { label: r.task_id.replace('pipeline:', ''), tokens, runs: r.runs, y: cumY, h, color: TASK_COLORS[r.task_id] || 'fill-gray-400' };
+          cumY += h;
+          return seg;
+        });
+        return { date, segments };
+      });
+    });
+
+    const chartMax = computed(() => {
+      const usage = data.value.tokenUsage || [];
+      // Max total tokens per day
+      const byDate = new Map();
+      for (const row of usage) {
+        const total = row.input_tokens + row.output_tokens;
+        byDate.set(row.date, (byDate.get(row.date) || 0) + total);
+      }
+      return Math.max(...Array.from(byDate.values()), 1);
+    });
+
+    const chartYLabels = computed(() => {
+      const max = chartMax.value;
+      if (max >= 1000000) return [Math.round(max / 1000000) + 'M', Math.round(max / 2000000) + 'M', '0'];
+      if (max >= 1000) return [Math.round(max / 1000) + 'k', Math.round(max / 2000) + 'k', '0'];
+      return [String(max), String(Math.round(max / 2)), '0'];
+    });
 
     const fetch = async () => {
       try { data.value = await api('/pipeline'); } catch {}
@@ -1414,7 +1515,7 @@ const AppPipeline = {
     const interval = setInterval(fetch, 15000);
     onUnmounted(() => clearInterval(interval));
 
-    return { data, window };
+    return { data, chartDays, chartYLabels, chartMax, window };
   },
 };
 

@@ -6,6 +6,7 @@
 
 import {
   ackEvent,
+  bumpConsumerTaskNextRun,
   consumeEvents,
   getPassiveGroups,
   getRouterState,
@@ -19,7 +20,11 @@ import {
 } from './db.js';
 import { logger } from './logger.js';
 import { preprocessMessage, type Layer1Input } from './sanitiser/layer1.js';
-import { buildExtractionPrompt, LAYER2_TOOL_SCHEMA, parseAndValidateResponse } from './sanitiser/layer2.js';
+import {
+  buildExtractionPrompt,
+  LAYER2_TOOL_SCHEMA,
+  parseAndValidateResponse,
+} from './sanitiser/layer2.js';
 import { postProcess, type SanitiserSchema } from './sanitiser/layer3.js';
 import type { LlmResponse } from './sanitiser/llm-client.js';
 import type { NewMessage } from './types.js';
@@ -51,14 +56,71 @@ const DEFAULT_SCHEMA: SanitiserSchema = {
   version: 1,
   fields: {
     fact_summary: { type: 'string', required: true, max_length: 200 },
-    urgency: { type: 'enum', required: true, values: ['fyi', 'question', 'issue', 'incident', 'other'], open: true },
-    speech_act: { type: 'enum', required: true, values: ['fresh_report', 'status_update', 'still_broken', 'fix_announcement', 'self_resolution', 'diagnosis', 'downstream_notification', 'change_attribution_question', 'architectural_request', 'data_request', 'banter', 'other'], open: true },
-    reporter_role_hint: { type: 'enum', required: true, values: ['original_reporter', 'forwarder', 'diagnostician', 'responder', 'fix_committer', 'access_broker', 'other'], open: true },
+    urgency: {
+      type: 'enum',
+      required: true,
+      values: ['fyi', 'question', 'issue', 'incident', 'other'],
+      open: true,
+    },
+    speech_act: {
+      type: 'enum',
+      required: true,
+      values: [
+        'fresh_report',
+        'status_update',
+        'still_broken',
+        'fix_announcement',
+        'self_resolution',
+        'diagnosis',
+        'downstream_notification',
+        'change_attribution_question',
+        'architectural_request',
+        'data_request',
+        'banter',
+        'other',
+      ],
+      open: true,
+    },
+    reporter_role_hint: {
+      type: 'enum',
+      required: true,
+      values: [
+        'original_reporter',
+        'forwarder',
+        'diagnostician',
+        'responder',
+        'fix_committer',
+        'access_broker',
+        'other',
+      ],
+      open: true,
+    },
     appears_to_address_bot: { type: 'boolean', required: true },
     contains_imperative: { type: 'boolean', required: true },
-    sentiment: { type: 'enum', required: true, values: ['neutral', 'frustrated', 'urgent', 'confused', 'other'], open: true },
-    action_requested: { type: 'string', required: false, nullable: true, max_length: 150 },
-    resolution_owner_hint: { type: 'enum', required: true, values: ['this_team', 'other_internal_team', 'external_vendor', 'customer', 'unclear'], open: true },
+    sentiment: {
+      type: 'enum',
+      required: true,
+      values: ['neutral', 'frustrated', 'urgent', 'confused', 'other'],
+      open: true,
+    },
+    action_requested: {
+      type: 'string',
+      required: false,
+      nullable: true,
+      max_length: 150,
+    },
+    resolution_owner_hint: {
+      type: 'enum',
+      required: true,
+      values: [
+        'this_team',
+        'other_internal_team',
+        'external_vendor',
+        'customer',
+        'unclear',
+      ],
+      open: true,
+    },
   },
 };
 
@@ -93,12 +155,19 @@ export async function executeHostPipeline(
         raw_text: msg.content,
       });
 
-      await processObservation(obsId, msg.content, {
-        sender_id: msg.sender,
-        channel_id: chatJid,
-        timestamp: msg.timestamp,
-        is_bot_message: !!msg.is_bot_message,
-      }, deps, schema, result);
+      await processObservation(
+        obsId,
+        msg.content,
+        {
+          sender_id: msg.sender,
+          channel_id: chatJid,
+          timestamp: msg.timestamp,
+          is_bot_message: !!msg.is_bot_message,
+        },
+        deps,
+        schema,
+        result,
+      );
 
       // Advance cursor per-message
       setRouterState(cursorKey, msg.timestamp);
@@ -127,12 +196,19 @@ export async function executeHostPipeline(
       source_message_id: payload.source_context.source_message_id || null,
     });
 
-    await processObservation(obsId, payload.raw_text, {
-      sender_id: 'unknown',
-      channel_id: payload.source_context.source_channel || 'unknown',
-      timestamp: event.created_at,
-      is_bot_message: false,
-    }, deps, schema, result);
+    await processObservation(
+      obsId,
+      payload.raw_text,
+      {
+        sender_id: 'unknown',
+        channel_id: payload.source_context.source_channel || 'unknown',
+        timestamp: event.created_at,
+        is_bot_message: false,
+      },
+      deps,
+      schema,
+      result,
+    );
 
     ackEvent(event.id, 'done', `observation_id=${obsId}`);
     updateIntakeLogProcessed(event.id, obsId);
@@ -145,7 +221,12 @@ export async function executeHostPipeline(
 async function processObservation(
   obsId: number,
   rawText: string,
-  meta: { sender_id: string; channel_id: string; timestamp: string; is_bot_message: boolean },
+  meta: {
+    sender_id: string;
+    channel_id: string;
+    timestamp: string;
+    is_bot_message: boolean;
+  },
   deps: PipelineDeps,
   schema: SanitiserSchema,
   result: PipelineResult,
@@ -191,11 +272,16 @@ async function processObservation(
   }
 
   // Layer 3 — post-process
-  const layer3 = postProcess({ layer1, layer2Raw: llmResponse.response }, schema);
+  const layer3 = postProcess(
+    { layer1, layer2Raw: llmResponse.response },
+    schema,
+  );
 
   // Update observation
   updateObservationSanitised(obsId, {
-    sanitised_json: layer3.sanitised_json ? JSON.stringify(layer3.sanitised_json) : null,
+    sanitised_json: layer3.sanitised_json
+      ? JSON.stringify(layer3.sanitised_json)
+      : null,
     sanitiser_model: deps.model,
     sanitiser_version: deps.sanitiserVersion,
     flags: layer3.flags.length > 0 ? JSON.stringify(layer3.flags) : null,
@@ -210,14 +296,19 @@ async function processObservation(
       JSON.stringify({ observation_id: obsId, reason: layer3.flags }),
       `review:${obsId}`,
     );
+    bumpConsumerTaskNextRun('human_review_required');
     result.quarantined++;
   } else {
     publishEvent(
       'observation.passive',
       meta.channel_id,
       'pipeline:sanitiser',
-      JSON.stringify({ observation_id: obsId, sanitised: layer3.sanitised_json }),
+      JSON.stringify({
+        observation_id: obsId,
+        sanitised: layer3.sanitised_json,
+      }),
       `obs:${obsId}`,
     );
+    bumpConsumerTaskNextRun('observation.');
   }
 }
