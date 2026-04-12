@@ -176,7 +176,7 @@ export function getTasksByGroup(groupFolder: string): TaskRow[] {
               context_mode, model, temperature, timezone, max_tool_rounds, timeout_ms, use_agent_sdk,
               allowed_tools, allowed_send_targets, execution_mode, subscribed_event_types,
               next_run, last_run, last_result, status, created_at
-       FROM scheduled_tasks WHERE group_folder = ? ORDER BY next_run`,
+       FROM scheduled_tasks WHERE group_folder = ? AND id NOT LIKE 'pipeline:%' ORDER BY next_run`,
     )
     .all(groupFolder) as TaskRow[];
 }
