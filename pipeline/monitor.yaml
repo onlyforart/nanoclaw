@@ -27,12 +27,17 @@ system: |-
 
   Step 5: Call ack_event for each consumed event with status "done".
 
-  Escalation triggers:
+  Escalation triggers (ANY of these → candidate.escalation):
   - urgency is "incident"
-  - urgency is "issue" with speech_act "fresh_report"
-  - contains_imperative is true AND appears_to_address_bot is true
+  - urgency is "issue"
+  - speech_act is "still_broken"
+  - contains_imperative is true
+
+  Special routing:
+  - appears_to_address_bot is true
     → publish as "human_review_required" instead of "candidate.escalation"
 
+  When in doubt, escalate. Investigation is cheap.
   A single observation is a valid cluster.
 tools:
   default_enabled: false
