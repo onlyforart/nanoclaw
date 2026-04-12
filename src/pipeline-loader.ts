@@ -2,12 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { parse as parseYaml } from 'yaml';
 
-import {
-  createTask,
-  getPassiveGroups,
-  getTaskById,
-  updateTask,
-} from './db.js';
+import { createTask, getPassiveGroups, getTaskById, updateTask } from './db.js';
 import { logger } from './logger.js';
 
 export interface PipelineSpec {
@@ -84,9 +79,12 @@ export function reconcilePipelineTasks(
         model: spec.model,
         allowedTools: spec.tools.enabled,
         allowedSendTargets: resolvedSendTargets,
-        executionMode: spec.type === 'host_pipeline' ? 'host_pipeline' : 'container',
+        executionMode:
+          spec.type === 'host_pipeline' ? 'host_pipeline' : 'container',
         subscribedEventTypes: spec.subscribed_event_types ?? null,
-        next_run: now,
+        // Consumer tasks (with subscribed_event_types) wait for events to bump them.
+        // Producer tasks (sanitiser) run on their cron schedule immediately.
+        next_run: spec.subscribed_event_types?.length ? null : now,
         status: 'active',
         created_at: now,
       });
