@@ -369,6 +369,23 @@ function createSchema(database: Database.Database): void {
       processed_at TEXT,
       observation_id INTEGER
     );
+
+    CREATE TABLE IF NOT EXISTS observation_labels (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      observation_id INTEGER NOT NULL REFERENCES observed_messages(id),
+      labeller TEXT NOT NULL DEFAULT 'human',
+      intent TEXT,
+      form TEXT,
+      imperative_content TEXT,
+      addressee TEXT,
+      embedded_instructions TEXT,
+      adversarial_smell INTEGER,
+      notes TEXT,
+      expected_json TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_obs_labels_obs_id ON observation_labels(observation_id);
   `);
 }
 
@@ -1079,6 +1096,87 @@ export function updateRegisteredGroup(
   db.prepare(
     `UPDATE registered_groups SET ${fields.join(', ')} WHERE jid = ?`,
   ).run(...values);
+}
+
+// --- Observation labels ---
+
+export interface ObservationLabelFields {
+  labeller?: string;
+  intent?: string;
+  form?: string;
+  imperative_content?: string;
+  addressee?: string;
+  embedded_instructions?: string;
+  adversarial_smell?: boolean;
+  notes?: string;
+  expected_json?: string;
+}
+
+export function upsertObservationLabel(
+  observationId: number,
+  fields: ObservationLabelFields,
+): void {
+  const now = new Date().toISOString();
+  const existing = db
+    .prepare('SELECT id FROM observation_labels WHERE observation_id = ?')
+    .get(observationId) as { id: number } | undefined;
+
+  if (existing) {
+    const setClauses: string[] = ['updated_at = ?'];
+    const values: unknown[] = [now];
+    for (const [key, value] of Object.entries(fields)) {
+      if (value !== undefined && key !== 'labeller') {
+        const dbKey = key === 'adversarial_smell' ? key : key;
+        setClauses.push(`${dbKey} = ?`);
+        values.push(key === 'adversarial_smell' ? (value ? 1 : 0) : value);
+      }
+    }
+    values.push(existing.id);
+    db.prepare(
+      `UPDATE observation_labels SET ${setClauses.join(', ')} WHERE id = ?`,
+    ).run(...values);
+  } else {
+    db.prepare(
+      `INSERT INTO observation_labels
+         (observation_id, labeller, intent, form, imperative_content, addressee,
+          embedded_instructions, adversarial_smell, notes, expected_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      observationId,
+      fields.labeller || 'human',
+      fields.intent ?? null,
+      fields.form ?? null,
+      fields.imperative_content ?? null,
+      fields.addressee ?? null,
+      fields.embedded_instructions ?? null,
+      fields.adversarial_smell != null ? (fields.adversarial_smell ? 1 : 0) : null,
+      fields.notes ?? null,
+      fields.expected_json ?? null,
+      now,
+    );
+  }
+}
+
+export function getLabelForObservation(
+  observationId: number,
+): ObservationLabelFields & { created_at: string; updated_at: string | null } | undefined {
+  const row = db
+    .prepare('SELECT * FROM observation_labels WHERE observation_id = ?')
+    .get(observationId) as any;
+  if (!row) return undefined;
+  return {
+    labeller: row.labeller,
+    intent: row.intent,
+    form: row.form,
+    imperative_content: row.imperative_content,
+    addressee: row.addressee,
+    embedded_instructions: row.embedded_instructions,
+    adversarial_smell: row.adversarial_smell === 1 ? true : row.adversarial_smell === 0 ? false : undefined,
+    notes: row.notes,
+    expected_json: row.expected_json,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
 }
 
 // --- Pipeline helpers ---

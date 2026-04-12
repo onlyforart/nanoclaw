@@ -378,3 +378,154 @@ export function getIntakeLogs(opts?: {
     )
     .all(limit) as IntakeLogRow[];
 }
+
+// --- Observations + Labels ---
+
+export interface ObservationListRow {
+  id: number;
+  source_chat_jid: string | null;
+  source_message_id: string | null;
+  source_type: string;
+  raw_text: string;
+  created_at: string;
+  sanitised_json: string | null;
+  has_label: number;
+}
+
+export interface ObservationDetailRow {
+  id: number;
+  source_chat_jid: string | null;
+  source_message_id: string | null;
+  source_type: string;
+  source_task_id: string | null;
+  source_group: string | null;
+  intake_reason: string | null;
+  raw_text: string;
+  sanitised_json: string | null;
+  flags: string | null;
+  created_at: string;
+  sanitised_at: string | null;
+  label: ObservationLabelRow | null;
+}
+
+export interface ObservationLabelRow {
+  id: number;
+  labeller: string;
+  intent: string | null;
+  form: string | null;
+  imperative_content: string | null;
+  addressee: string | null;
+  embedded_instructions: string | null;
+  adversarial_smell: number | null;
+  notes: string | null;
+  expected_json: string | null;
+  created_at: string;
+  updated_at: string | null;
+}
+
+export function getObservations(opts?: {
+  labelled?: boolean;
+  sourceType?: string;
+  limit?: number;
+  offset?: number;
+}): ObservationListRow[] {
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+
+  if (opts?.sourceType) {
+    conditions.push('o.source_type = ?');
+    params.push(opts.sourceType);
+  }
+  if (opts?.labelled === true) {
+    conditions.push('l.id IS NOT NULL');
+  } else if (opts?.labelled === false) {
+    conditions.push('l.id IS NULL');
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  const limit = opts?.limit ?? 100;
+  const offset = opts?.offset ?? 0;
+
+  return db
+    .prepare(
+      `SELECT o.id, o.source_chat_jid, o.source_message_id, o.source_type,
+              o.raw_text, o.created_at, o.sanitised_json,
+              CASE WHEN l.id IS NOT NULL THEN 1 ELSE 0 END AS has_label
+       FROM observed_messages o
+       LEFT JOIN observation_labels l ON l.observation_id = o.id
+       ${where}
+       ORDER BY o.created_at DESC
+       LIMIT ? OFFSET ?`,
+    )
+    .all(...params, limit, offset) as ObservationListRow[];
+}
+
+export function getObservationById(id: number): ObservationDetailRow | undefined {
+  const row = db
+    .prepare(
+      `SELECT id, source_chat_jid, source_message_id, source_type,
+              source_task_id, source_group, intake_reason,
+              raw_text, sanitised_json, flags, created_at, sanitised_at
+       FROM observed_messages WHERE id = ?`,
+    )
+    .get(id) as any;
+  if (!row) return undefined;
+
+  const label = db
+    .prepare('SELECT * FROM observation_labels WHERE observation_id = ?')
+    .get(id) as ObservationLabelRow | undefined;
+
+  return { ...row, label: label ?? null };
+}
+
+export function upsertLabel(
+  observationId: number,
+  fields: {
+    intent?: string;
+    form?: string;
+    imperative_content?: string;
+    addressee?: string;
+    embedded_instructions?: string;
+    adversarial_smell?: boolean;
+    notes?: string;
+    expected_json?: string;
+  },
+): void {
+  const now = new Date().toISOString();
+  const existing = db
+    .prepare('SELECT id FROM observation_labels WHERE observation_id = ?')
+    .get(observationId) as { id: number } | undefined;
+
+  if (existing) {
+    const setClauses: string[] = ['updated_at = ?'];
+    const values: unknown[] = [now];
+    for (const [key, value] of Object.entries(fields)) {
+      if (value !== undefined) {
+        setClauses.push(`${key} = ?`);
+        values.push(key === 'adversarial_smell' ? (value ? 1 : 0) : value);
+      }
+    }
+    values.push(existing.id);
+    db.prepare(
+      `UPDATE observation_labels SET ${setClauses.join(', ')} WHERE id = ?`,
+    ).run(...values);
+  } else {
+    db.prepare(
+      `INSERT INTO observation_labels
+         (observation_id, labeller, intent, form, imperative_content, addressee,
+          embedded_instructions, adversarial_smell, notes, expected_json, created_at)
+       VALUES (?, 'human', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      observationId,
+      fields.intent ?? null,
+      fields.form ?? null,
+      fields.imperative_content ?? null,
+      fields.addressee ?? null,
+      fields.embedded_instructions ?? null,
+      fields.adversarial_smell != null ? (fields.adversarial_smell ? 1 : 0) : null,
+      fields.notes ?? null,
+      fields.expected_json ?? null,
+      now,
+    );
+  }
+}

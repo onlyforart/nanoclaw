@@ -220,6 +220,12 @@ const AppSidebar = {
           <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons.prompts}</svg>
           Global Prompts
         </a>
+        <a href="#/observations"
+          :class="isActive('/observations') ? 'bg-gray-800 text-white border-l-3 border-blue-500' : 'hover:bg-white/10 hover:text-gray-200 border-l-3 border-transparent'"
+          class="flex items-center gap-3 px-3 py-2 rounded-r-lg text-sm font-medium transition-colors">
+          <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons.prompts}</svg>
+          Observations
+        </a>
         <a href="#/events"
           :class="isActive('/events') ? 'bg-gray-800 text-white border-l-3 border-blue-500' : 'hover:bg-white/10 hover:text-gray-200 border-l-3 border-transparent'"
           class="flex items-center gap-3 px-3 py-2 rounded-r-lg text-sm font-medium transition-colors">
@@ -1462,6 +1468,265 @@ const AppEvents = {
   },
 };
 
+// Observations list
+const AppObservations = {
+  template: `
+    <div>
+      <h1 class="text-2xl font-bold mb-6">Observations</h1>
+      <div class="mb-4 flex flex-wrap gap-3 items-end">
+        <div>
+          <label class="block text-xs font-medium mb-1">Source Type</label>
+          <select v-model="sourceType" @change="fetch"
+            class="px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm">
+            <option value="">All</option>
+            <option value="passive_channel">Passive</option>
+            <option value="task_intake">Intake</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-medium mb-1">Label Status</label>
+          <select v-model="labelFilter" @change="fetch"
+            class="px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm">
+            <option value="">All</option>
+            <option value="true">Labelled</option>
+            <option value="false">Unlabelled</option>
+          </select>
+        </div>
+        <button @click="fetch" class="px-3 py-1.5 bg-gray-200 dark:bg-gray-700 rounded-lg text-sm hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors">Refresh</button>
+      </div>
+      <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+        <table v-if="observations.length" class="w-full text-sm">
+          <thead>
+            <tr class="border-b border-gray-200 dark:border-gray-700">
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Source</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Text</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Label</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Created</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="o in observations" :key="o.id"
+              @click="window.location.hash = '#/observations/' + o.id"
+              class="border-b border-gray-100 dark:border-gray-700/50 hover:bg-gray-50 dark:hover:bg-gray-750 cursor-pointer">
+              <td class="px-4 py-3 text-gray-500">{{ o.id }}</td>
+              <td class="px-4 py-3 font-mono text-xs">{{ o.source_chat_jid || o.source_type }}</td>
+              <td class="px-4 py-3">
+                <span :class="o.source_type === 'passive_channel' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200' : 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200'"
+                  class="px-2 py-0.5 rounded-full text-xs font-medium">{{ o.source_type === 'passive_channel' ? 'passive' : 'intake' }}</span>
+              </td>
+              <td class="px-4 py-3 max-w-xs truncate">{{ o.raw_text }}</td>
+              <td class="px-4 py-3">
+                <span v-if="o.has_label" class="text-green-600 dark:text-green-400 text-xs font-medium">Labelled</span>
+                <span v-else class="text-gray-400 text-xs">-</span>
+              </td>
+              <td class="px-4 py-3 text-gray-500 text-xs">{{ new Date(o.created_at).toLocaleString() }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div v-else class="p-8 text-center text-gray-400">No observations found</div>
+      </div>
+      <div v-if="observations.length >= pageSize" class="mt-4 flex gap-2">
+        <button v-if="page > 0" @click="page--; fetch()" class="px-3 py-1.5 bg-gray-200 dark:bg-gray-700 rounded-lg text-sm">Previous</button>
+        <button @click="page++; fetch()" class="px-3 py-1.5 bg-gray-200 dark:bg-gray-700 rounded-lg text-sm">Next</button>
+      </div>
+    </div>
+  `,
+  setup() {
+    const observations = ref([]);
+    const sourceType = ref('');
+    const labelFilter = ref('');
+    const page = ref(0);
+    const pageSize = 50;
+
+    const fetch = async () => {
+      try {
+        const params = new URLSearchParams();
+        if (sourceType.value) params.set('sourceType', sourceType.value);
+        if (labelFilter.value) params.set('labelled', labelFilter.value);
+        params.set('limit', String(pageSize));
+        params.set('offset', String(page.value * pageSize));
+        observations.value = await api(`/observations?${params}`);
+      } catch {}
+    };
+
+    onMounted(fetch);
+    return { observations, sourceType, labelFilter, page, pageSize, fetch, window };
+  },
+};
+
+// Observation detail + labelling
+const AppObservationDetail = {
+  props: ['observationId'],
+  template: `
+    <div v-if="!loading && obs">
+      <div class="mb-4">
+        <a href="#/observations" class="text-blue-600 hover:text-blue-700 text-sm flex items-center gap-1">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons.back}</svg>
+          Back to observations
+        </a>
+      </div>
+      <h1 class="text-2xl font-bold mb-6">Observation #{{ obs.id }}</h1>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Left: raw text -->
+        <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+          <h2 class="text-sm font-semibold mb-2 text-gray-500 uppercase">Raw Message</h2>
+          <div class="text-sm whitespace-pre-wrap font-mono bg-gray-50 dark:bg-gray-900 rounded-lg p-3 max-h-96 overflow-y-auto">{{ obs.raw_text }}</div>
+          <div class="mt-3 text-xs text-gray-500 space-y-1">
+            <div>Source: <span class="font-mono">{{ obs.source_chat_jid || obs.source_type }}</span></div>
+            <div>Created: {{ new Date(obs.created_at).toLocaleString() }}</div>
+            <div v-if="obs.source_task_id">Task: <span class="font-mono">{{ obs.source_task_id }}</span></div>
+            <div v-if="obs.intake_reason">Reason: {{ obs.intake_reason }}</div>
+          </div>
+        </div>
+
+        <!-- Right: label form -->
+        <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+          <h2 class="text-sm font-semibold mb-3 text-gray-500 uppercase">Label</h2>
+          <div class="space-y-3">
+            <div>
+              <label class="block text-xs font-medium mb-1">Intent</label>
+              <select v-model="form.intent" class="w-full px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm">
+                <option value="">-</option>
+                <option value="bug_report">Bug report</option>
+                <option value="status_update">Status update</option>
+                <option value="question">Question</option>
+                <option value="fyi">FYI</option>
+                <option value="banter">Banter</option>
+                <option value="direct_to_bot">Direct to bot</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs font-medium mb-1">Form</label>
+              <select v-model="form.form" class="w-full px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm">
+                <option value="">-</option>
+                <option value="free_prose">Free prose</option>
+                <option value="code_block">Code block</option>
+                <option value="screenshot_reference">Screenshot reference</option>
+                <option value="link_dump">Link dump</option>
+                <option value="quoted_text">Quoted text</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs font-medium mb-1">Imperative Content</label>
+              <select v-model="form.imperativeContent" class="w-full px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm">
+                <option value="">-</option>
+                <option value="none">None</option>
+                <option value="soft">Soft</option>
+                <option value="direct">Direct</option>
+                <option value="urgent">Urgent</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs font-medium mb-1">Addressee</label>
+              <select v-model="form.addressee" class="w-full px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm">
+                <option value="">-</option>
+                <option value="nobody">Nobody specific</option>
+                <option value="specific_human">Specific human</option>
+                <option value="channel">Channel at large</option>
+                <option value="bot">Bot / assistant</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs font-medium mb-1">Embedded Instructions</label>
+              <select v-model="form.embeddedInstructions" class="w-full px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm">
+                <option value="">-</option>
+                <option value="none">None</option>
+                <option value="quoted_message">Quoted message</option>
+                <option value="error_trace">Error trace</option>
+                <option value="ai_generated">AI-generated</option>
+                <option value="code_content">Code content</option>
+              </select>
+            </div>
+            <div>
+              <label class="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="checkbox" v-model="form.adversarialSmell" class="w-4 h-4 rounded border-gray-300 text-blue-600">
+                Adversarial smell
+              </label>
+            </div>
+            <div>
+              <label class="block text-xs font-medium mb-1">Notes</label>
+              <textarea v-model="form.notes" rows="2" class="w-full px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm"></textarea>
+            </div>
+            <div>
+              <label class="block text-xs font-medium mb-1">Expected JSON (golden label)</label>
+              <textarea v-model="form.expectedJson" rows="4" placeholder='{"fact_summary":"...","urgency":"..."}'
+                class="w-full px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm font-mono"></textarea>
+            </div>
+            <button @click="saveLabel" :disabled="saving"
+              class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors">
+              {{ saving ? 'Saving...' : 'Save Label' }}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sanitised output -->
+      <div v-if="obs.sanitised_json" class="mt-6 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+        <h2 class="text-sm font-semibold mb-2 text-gray-500 uppercase">Sanitised Output</h2>
+        <pre class="text-xs font-mono bg-gray-50 dark:bg-gray-900 rounded-lg p-3 overflow-x-auto whitespace-pre-wrap">{{ formatJson(obs.sanitised_json) }}</pre>
+      </div>
+
+      <!-- Navigation -->
+      <div class="mt-4 flex gap-2">
+        <button v-if="obs.id > 1" @click="navigate(obs.id - 1)" class="px-3 py-1.5 bg-gray-200 dark:bg-gray-700 rounded-lg text-sm">Previous</button>
+        <button @click="navigate(obs.id + 1)" class="px-3 py-1.5 bg-gray-200 dark:bg-gray-700 rounded-lg text-sm">Next</button>
+      </div>
+    </div>
+    <div v-else-if="loading" class="text-center py-20 text-gray-400">Loading...</div>
+    <div v-else class="text-center py-20 text-gray-400">Observation not found</div>
+  `,
+  setup(props) {
+    const obs = ref(null);
+    const loading = ref(true);
+    const saving = ref(false);
+    const form = Vue.reactive({
+      intent: '', form: '', imperativeContent: '', addressee: '',
+      embeddedInstructions: '', adversarialSmell: false, notes: '', expectedJson: '',
+    });
+
+    const fetchObs = async () => {
+      loading.value = true;
+      try {
+        const data = await api(`/observations/${props.observationId}`);
+        obs.value = data;
+        if (data.label) {
+          form.intent = data.label.intent || '';
+          form.form = data.label.form || '';
+          form.imperativeContent = data.label.imperative_content || '';
+          form.addressee = data.label.addressee || '';
+          form.embeddedInstructions = data.label.embedded_instructions || '';
+          form.adversarialSmell = data.label.adversarial_smell === 1;
+          form.notes = data.label.notes || '';
+          form.expectedJson = data.label.expected_json || '';
+        }
+      } catch { obs.value = null; }
+      loading.value = false;
+    };
+
+    const saveLabel = async () => {
+      saving.value = true;
+      try {
+        await api(`/observations/${props.observationId}/label`, { method: 'PATCH', body: form });
+        showToast('Label saved');
+      } catch (e) { showToast(e.message, 'error'); }
+      saving.value = false;
+    };
+
+    const navigate = (id) => { window.location.hash = `#/observations/${id}`; };
+
+    const formatJson = (json) => {
+      try { return JSON.stringify(JSON.parse(json), null, 2); }
+      catch { return json; }
+    };
+
+    onMounted(fetchObs);
+    return { obs, loading, saving, form, saveLabel, navigate, formatJson };
+  },
+};
+
 const app = createApp({
   template: `
     <div class="flex h-screen overflow-hidden">
@@ -1485,6 +1750,8 @@ const app = createApp({
           <app-dashboard v-if="route.view === 'dashboard'" :groups="groups" />
           <app-global-prompts v-if="route.view === 'global-prompts'" />
           <app-events v-if="route.view === 'events'" />
+          <app-observations v-if="route.view === 'observations'" />
+          <app-observation-detail v-if="route.view === 'observation-detail'" :observation-id="route.id" :key="route.id" />
           <app-group-detail v-if="route.view === 'group-detail'" :folder="route.folder" :initial-tab="route.tab" :key="route.folder + (route.tab || '')" />
           <app-task-detail v-if="route.view === 'task-detail'" :task-id="route.id" :key="route.id" @group-loaded="taskGroupFolder = $event" />
           <div v-if="route.view === 'not-found'" class="text-center py-20 text-gray-400">
@@ -1509,6 +1776,9 @@ const app = createApp({
       if (path === '/') return { view: 'dashboard' };
       if (path === '/prompts/global') return { view: 'global-prompts' };
       if (path === '/events') return { view: 'events' };
+      if (path === '/observations') return { view: 'observations' };
+      const om = path.match(/^\/observations\/(\d+)$/);
+      if (om) return { view: 'observation-detail', id: parseInt(om[1], 10) };
       const gm = path.match(/^\/groups\/([^/]+)$/);
       if (gm) return { view: 'group-detail', folder: gm[1], tab: params.get('tab') };
       const tm = path.match(/^\/tasks\/([^/]+)$/);
@@ -1555,6 +1825,8 @@ app.component('app-global-prompts', AppGlobalPrompts);
 app.component('app-group-detail', AppGroupDetail);
 app.component('app-task-detail', AppTaskDetail);
 app.component('app-events', AppEvents);
+app.component('app-observations', AppObservations);
+app.component('app-observation-detail', AppObservationDetail);
 app.component('tab-bar', TabBar);
 app.component('status-badge', StatusBadge);
 

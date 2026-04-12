@@ -8,6 +8,7 @@ import {
   deleteTask,
   getAllChats,
   getAllRegisteredGroups,
+  getLabelForObservation,
   getMessagesSince,
   getNewMessages,
   getRecentEvents,
@@ -27,6 +28,7 @@ import {
   updateObservationSanitised,
   updateRegisteredGroup,
   updateTask,
+  upsertObservationLabel,
 } from './db.js';
 
 beforeEach(() => {
@@ -1264,5 +1266,87 @@ describe('task allowed_tools and allowed_send_targets', () => {
 
     const task = getTaskById('task-allow-6');
     expect(task!.allowedTools).toBeNull();
+  });
+});
+
+// --- Observation labels ---
+
+describe('upsertObservationLabel', () => {
+  it('inserts a label for an observation', () => {
+    const obsId = insertObservedMessage({
+      source_chat_jid: 'sl:C1',
+      source_message_id: 'msg-label-1',
+      source_type: 'passive_channel',
+      raw_text: 'some message',
+    });
+
+    upsertObservationLabel(obsId, {
+      labeller: 'human',
+      intent: 'bug_report',
+      form: 'free_prose',
+      imperative_content: 'direct',
+      addressee: 'channel',
+    });
+
+    const label = getLabelForObservation(obsId);
+    expect(label).toBeDefined();
+    expect(label!.intent).toBe('bug_report');
+    expect(label!.form).toBe('free_prose');
+    expect(label!.imperative_content).toBe('direct');
+    expect(label!.addressee).toBe('channel');
+    expect(label!.labeller).toBe('human');
+  });
+
+  it('updates an existing label (upsert)', () => {
+    const obsId = insertObservedMessage({
+      source_chat_jid: 'sl:C1',
+      source_message_id: 'msg-label-2',
+      source_type: 'passive_channel',
+      raw_text: 'another message',
+    });
+
+    upsertObservationLabel(obsId, {
+      labeller: 'human',
+      intent: 'fyi',
+    });
+
+    upsertObservationLabel(obsId, {
+      labeller: 'human',
+      intent: 'bug_report',
+      notes: 'changed my mind',
+    });
+
+    const label = getLabelForObservation(obsId);
+    expect(label!.intent).toBe('bug_report');
+    expect(label!.notes).toBe('changed my mind');
+  });
+
+  it('stores expected_json for golden labels', () => {
+    const obsId = insertObservedMessage({
+      source_chat_jid: 'sl:C1',
+      source_message_id: 'msg-label-3',
+      source_type: 'passive_channel',
+      raw_text: 'golden message',
+    });
+
+    const expectedJson = JSON.stringify({ fact_summary: 'test', urgency: 'issue' });
+    upsertObservationLabel(obsId, {
+      labeller: 'human',
+      expected_json: expectedJson,
+    });
+
+    const label = getLabelForObservation(obsId);
+    expect(label!.expected_json).toBe(expectedJson);
+  });
+
+  it('returns undefined for observation with no label', () => {
+    const obsId = insertObservedMessage({
+      source_chat_jid: 'sl:C1',
+      source_message_id: 'msg-no-label',
+      source_type: 'passive_channel',
+      raw_text: 'unlabelled',
+    });
+
+    expect(getLabelForObservation(obsId)).toBeUndefined();
   });
 });

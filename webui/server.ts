@@ -28,6 +28,7 @@ import {
 import { handleGetContainers } from './routes/containers.js';
 import { handleGetEvents } from './routes/events.js';
 import { handleGetIntakeLogs } from './routes/intake.js';
+import { handleGetObservations, handleGetObservation, handlePatchLabel } from './routes/observations.js';
 
 const startTime = Date.now();
 
@@ -215,6 +216,26 @@ export function createApp(groupsDir: string, publicDir?: string): http.Server {
       method: 'GET',
       compiled: compilePath('/api/v1/intake-logs'),
       handler: (_params, _req, query) => handleGetIntakeLogs(query),
+    },
+
+    // Observations + labels
+    {
+      method: 'GET',
+      compiled: compilePath('/api/v1/observations'),
+      handler: (_params, _req, query) => handleGetObservations(query),
+    },
+    {
+      method: 'GET',
+      compiled: compilePath('/api/v1/observations/:id'),
+      handler: (params) => handleGetObservation(parseInt(params.id, 10)),
+    },
+    {
+      method: 'PATCH',
+      compiled: compilePath('/api/v1/observations/:id/label'),
+      handler: async (params, req) => {
+        const body = await parseJsonBody(req);
+        return handlePatchLabel(parseInt(params.id, 10), body);
+      },
     },
   ];
 
