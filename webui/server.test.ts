@@ -116,6 +116,20 @@ beforeEach(async () => {
       source_task_id TEXT, source_channel TEXT, source_message_id TEXT,
       reason TEXT NOT NULL, submitted_at TEXT NOT NULL, processed_at TEXT, observation_id INTEGER
     );
+    CREATE TABLE observed_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, source_chat_jid TEXT, source_message_id TEXT,
+      source_type TEXT NOT NULL DEFAULT 'passive_channel', source_task_id TEXT, source_group TEXT,
+      intake_reason TEXT, intake_event_id INTEGER, thread_id TEXT, related_observation_ids TEXT,
+      raw_text TEXT NOT NULL, sanitised_json TEXT, sanitiser_model TEXT, sanitiser_version TEXT,
+      flags TEXT, created_at TEXT NOT NULL, sanitised_at TEXT
+    );
+    CREATE TABLE observation_labels (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, observation_id INTEGER NOT NULL,
+      labeller TEXT NOT NULL DEFAULT 'human', intent TEXT, form TEXT,
+      imperative_content TEXT, addressee TEXT, embedded_instructions TEXT,
+      adversarial_smell INTEGER, notes TEXT, expected_json TEXT,
+      created_at TEXT NOT NULL, updated_at TEXT
+    );
   `);
   db.prepare(`INSERT INTO registered_groups (jid, name, folder, trigger_pattern, added_at, requires_trigger, is_main) VALUES (?, ?, ?, ?, ?, 1, 1)`).run(
     'main@s.whatsapp.net', 'Main Chat', 'whatsapp_main', '@Andy', '2024-01-01T00:00:00.000Z',

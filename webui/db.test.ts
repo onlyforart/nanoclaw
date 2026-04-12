@@ -16,6 +16,9 @@ import {
   getTaskRuns,
   getEvents,
   getIntakeLogs,
+  getObservations,
+  getObservationById,
+  upsertLabel,
 } from './db.js';
 
 let tmpDir: string;
@@ -112,6 +115,42 @@ beforeEach(() => {
       processed_at TEXT,
       observation_id INTEGER
     );
+
+    CREATE TABLE IF NOT EXISTS observed_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_chat_jid TEXT,
+      source_message_id TEXT,
+      source_type TEXT NOT NULL DEFAULT 'passive_channel',
+      source_task_id TEXT,
+      source_group TEXT,
+      intake_reason TEXT,
+      intake_event_id INTEGER,
+      thread_id TEXT,
+      related_observation_ids TEXT,
+      raw_text TEXT NOT NULL,
+      sanitised_json TEXT,
+      sanitiser_model TEXT,
+      sanitiser_version TEXT,
+      flags TEXT,
+      created_at TEXT NOT NULL,
+      sanitised_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS observation_labels (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      observation_id INTEGER NOT NULL,
+      labeller TEXT NOT NULL DEFAULT 'human',
+      intent TEXT,
+      form TEXT,
+      imperative_content TEXT,
+      addressee TEXT,
+      embedded_instructions TEXT,
+      adversarial_smell INTEGER,
+      notes TEXT,
+      expected_json TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT
+    );
   `);
 
   // Seed test data
@@ -159,6 +198,22 @@ beforeEach(() => {
   );
   db.prepare(`INSERT INTO pipeline_intake_log (event_id, raw_text_hash, source_type, source_group, source_task_id, reason, submitted_at, processed_at, observation_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
     2, 'def456', 'task', 'slack_main', 'pipeline:monitor', 'another find', '2024-06-01T11:30:00.000Z', '2024-06-01T11:35:00.000Z', 42,
+  );
+
+  // Seed observed messages
+  db.prepare(`INSERT INTO observed_messages (source_chat_jid, source_message_id, source_type, raw_text, created_at) VALUES (?, ?, ?, ?, ?)`).run(
+    'slack:CPASSIVE', 'msg-obs-1', 'passive_channel', 'INC12345 is down again', '2024-06-01T10:00:00.000Z',
+  );
+  db.prepare(`INSERT INTO observed_messages (source_chat_jid, source_message_id, source_type, raw_text, sanitised_json, created_at, sanitised_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+    'slack:CPASSIVE', 'msg-obs-2', 'passive_channel', 'Fixed the auth issue', '{"fact_summary":"auth fixed"}', '2024-06-01T11:00:00.000Z', '2024-06-01T11:01:00.000Z',
+  );
+  db.prepare(`INSERT INTO observed_messages (source_type, source_task_id, source_group, intake_reason, intake_event_id, raw_text, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+    'task_intake', 'pipeline:monitor', 'slack_main', 'found during investigation', 99, 'forwarded log content', '2024-06-01T12:00:00.000Z',
+  );
+
+  // Seed a label for observation 2
+  db.prepare(`INSERT INTO observation_labels (observation_id, labeller, intent, form, imperative_content, created_at) VALUES (?, ?, ?, ?, ?, ?)`).run(
+    2, 'human', 'status_update', 'free_prose', 'none', '2024-06-01T12:00:00.000Z',
   );
 
   db.close();
@@ -485,5 +540,94 @@ describe('getIntakeLogs', () => {
   it('returns logs ordered by submitted_at desc', () => {
     const logs = getIntakeLogs();
     expect(logs[0].submitted_at).toBe('2024-06-01T11:30:00.000Z');
+  });
+});
+
+// --- Observations ---
+
+describe('getObservations', () => {
+  it('returns all observations', () => {
+    const obs = getObservations();
+    expect(obs).toHaveLength(3);
+  });
+
+  it('includes label status', () => {
+    const obs = getObservations();
+    const labelled = obs.find((o: any) => o.id === 2);
+    const unlabelled = obs.find((o: any) => o.id === 1);
+    expect(labelled!.has_label).toBe(1);
+    expect(unlabelled!.has_label).toBe(0);
+  });
+
+  it('filters by labelled status', () => {
+    const labelled = getObservations({ labelled: true });
+    expect(labelled).toHaveLength(1);
+    expect(labelled[0].id).toBe(2);
+
+    const unlabelled = getObservations({ labelled: false });
+    expect(unlabelled).toHaveLength(2);
+  });
+
+  it('filters by source_type', () => {
+    const passive = getObservations({ sourceType: 'passive_channel' });
+    expect(passive).toHaveLength(2);
+
+    const intake = getObservations({ sourceType: 'task_intake' });
+    expect(intake).toHaveLength(1);
+  });
+
+  it('respects limit and offset', () => {
+    const page1 = getObservations({ limit: 2, offset: 0 });
+    expect(page1).toHaveLength(2);
+
+    const page2 = getObservations({ limit: 2, offset: 2 });
+    expect(page2).toHaveLength(1);
+  });
+});
+
+describe('getObservationById', () => {
+  it('returns observation with label', () => {
+    const obs = getObservationById(2);
+    expect(obs).toBeDefined();
+    expect(obs!.raw_text).toBe('Fixed the auth issue');
+    expect(obs!.label).toBeDefined();
+    expect(obs!.label!.intent).toBe('status_update');
+  });
+
+  it('returns observation without label', () => {
+    const obs = getObservationById(1);
+    expect(obs).toBeDefined();
+    expect(obs!.raw_text).toBe('INC12345 is down again');
+    expect(obs!.label).toBeNull();
+  });
+
+  it('returns undefined for non-existent id', () => {
+    expect(getObservationById(999)).toBeUndefined();
+  });
+});
+
+describe('upsertLabel', () => {
+  it('inserts a new label', () => {
+    upsertLabel(1, {
+      intent: 'bug_report',
+      form: 'free_prose',
+      imperative_content: 'none',
+      addressee: 'nobody',
+    });
+
+    const obs = getObservationById(1);
+    expect(obs!.label).toBeDefined();
+    expect(obs!.label!.intent).toBe('bug_report');
+  });
+
+  it('updates an existing label', () => {
+    upsertLabel(2, {
+      intent: 'fyi',
+      notes: 'reclassified',
+    });
+
+    const obs = getObservationById(2);
+    expect(obs!.label!.intent).toBe('fyi');
+    expect(obs!.label!.notes).toBe('reclassified');
   });
 });
