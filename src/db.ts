@@ -6,7 +6,12 @@ import { ASSISTANT_NAME, DATA_DIR, STORE_DIR } from './config.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import {
+  EventRow,
+  EventStatus,
+  IntakeSourceContext,
   NewMessage,
+  ObservedMessageRow,
+  PipelineIntakeLogRow,
   RegisteredGroup,
   ScheduledTask,
   TaskRunLog,
@@ -254,6 +259,71 @@ function createSchema(database: Database.Database): void {
   } catch {
     /* columns already exist */
   }
+
+  // --- Observation pipeline tables ---
+
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT NOT NULL,
+      source_group TEXT NOT NULL,
+      source_task_id TEXT,
+      payload TEXT NOT NULL,
+      dedupe_key TEXT,
+      created_at TEXT NOT NULL,
+      expires_at TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      claimed_by TEXT,
+      claimed_at TEXT,
+      processed_at TEXT,
+      result_note TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_events_pending
+      ON events(status, type, created_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_events_dedupe
+      ON events(type, dedupe_key) WHERE dedupe_key IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS observed_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_chat_jid TEXT,
+      source_message_id TEXT,
+      source_type TEXT NOT NULL DEFAULT 'passive_channel',
+      source_task_id TEXT,
+      source_group TEXT,
+      intake_reason TEXT,
+      intake_event_id INTEGER,
+      thread_id TEXT,
+      related_observation_ids TEXT,
+      raw_text TEXT NOT NULL,
+      sanitised_json TEXT,
+      sanitiser_model TEXT,
+      sanitiser_version TEXT,
+      flags TEXT,
+      created_at TEXT NOT NULL,
+      sanitised_at TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_observed_msg_passive
+      ON observed_messages(source_chat_jid, source_message_id)
+      WHERE source_type = 'passive_channel';
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_observed_msg_intake
+      ON observed_messages(intake_event_id)
+      WHERE intake_event_id IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS pipeline_intake_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_id INTEGER NOT NULL,
+      raw_text_hash TEXT NOT NULL,
+      source_type TEXT NOT NULL,
+      source_group TEXT NOT NULL,
+      source_task_id TEXT,
+      source_channel TEXT,
+      source_message_id TEXT,
+      reason TEXT NOT NULL,
+      submitted_at TEXT NOT NULL,
+      processed_at TEXT,
+      observation_id INTEGER
+    );
+  `);
 }
 
 export function initDatabase(): void {
@@ -855,6 +925,281 @@ export function updateRegisteredGroup(
   db.prepare(
     `UPDATE registered_groups SET ${fields.join(', ')} WHERE jid = ?`,
   ).run(...values);
+}
+
+// --- Events ---
+
+export function publishEvent(
+  type: string,
+  sourceGroup: string,
+  sourceTaskId: string | null,
+  payload: string,
+  dedupeKey?: string | null,
+  ttlSeconds?: number | null,
+): { id: number; isNew: boolean } {
+  const now = new Date().toISOString();
+  const expiresAt =
+    ttlSeconds != null
+      ? new Date(Date.now() + ttlSeconds * 1000).toISOString()
+      : null;
+
+  if (dedupeKey) {
+    // Check for existing unprocessed event with same (type, dedupe_key)
+    const existing = db
+      .prepare(
+        `SELECT id FROM events WHERE type = ? AND dedupe_key = ? AND status IN ('pending', 'claimed')`,
+      )
+      .get(type, dedupeKey) as { id: number } | undefined;
+    if (existing) return { id: existing.id, isNew: false };
+  }
+
+  const result = db
+    .prepare(
+      `INSERT INTO events (type, source_group, source_task_id, payload, dedupe_key, created_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(type, sourceGroup, sourceTaskId, payload, dedupeKey ?? null, now, expiresAt);
+
+  return { id: result.lastInsertRowid as number, isNew: true };
+}
+
+export function consumeEvents(
+  types: string[],
+  claimedBy: string,
+  limit: number,
+): EventRow[] {
+  const now = new Date().toISOString();
+  const placeholders = types.map(() => '?').join(', ');
+
+  // Atomic claim: select pending, non-expired events and update in one statement
+  const rows = db
+    .prepare(
+      `UPDATE events
+         SET status = 'claimed', claimed_by = ?, claimed_at = ?
+       WHERE id IN (
+         SELECT id FROM events
+          WHERE status = 'pending'
+            AND type IN (${placeholders})
+            AND (expires_at IS NULL OR expires_at > ?)
+          ORDER BY created_at
+          LIMIT ?
+       )
+       RETURNING *`,
+    )
+    .all(claimedBy, now, ...types, now, limit) as EventRow[];
+
+  return rows;
+}
+
+export function ackEvent(
+  eventId: number,
+  status: 'done' | 'failed',
+  note?: string,
+): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `UPDATE events SET status = ?, processed_at = ?, result_note = ? WHERE id = ?`,
+  ).run(status, now, note ?? null, eventId);
+}
+
+export function getRecentEvents(
+  types?: string[],
+  limit?: number,
+  includeProcessed?: boolean,
+): EventRow[] {
+  const maxRows = limit ?? 50;
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+
+  if (types && types.length > 0) {
+    const placeholders = types.map(() => '?').join(', ');
+    conditions.push(`type IN (${placeholders})`);
+    params.push(...types);
+  }
+
+  if (!includeProcessed) {
+    conditions.push(`status IN ('pending', 'claimed')`);
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  params.push(maxRows);
+
+  return db
+    .prepare(`SELECT * FROM events ${where} ORDER BY created_at DESC LIMIT ?`)
+    .all(...params) as EventRow[];
+}
+
+// --- Observed messages ---
+
+export function insertObservedMessage(msg: {
+  source_chat_jid: string;
+  source_message_id: string;
+  source_type: 'passive_channel';
+  raw_text: string;
+  thread_id?: string | null;
+}): number {
+  const now = new Date().toISOString();
+
+  // Check for existing passive-channel observation (dedup)
+  const existing = db
+    .prepare(
+      `SELECT id FROM observed_messages
+       WHERE source_type = 'passive_channel'
+         AND source_chat_jid = ? AND source_message_id = ?`,
+    )
+    .get(msg.source_chat_jid, msg.source_message_id) as { id: number } | undefined;
+  if (existing) return existing.id;
+
+  const result = db
+    .prepare(
+      `INSERT INTO observed_messages
+         (source_chat_jid, source_message_id, source_type, raw_text, thread_id, created_at)
+       VALUES (?, ?, 'passive_channel', ?, ?, ?)`,
+    )
+    .run(
+      msg.source_chat_jid,
+      msg.source_message_id,
+      msg.raw_text,
+      msg.thread_id ?? null,
+      now,
+    );
+
+  return result.lastInsertRowid as number;
+}
+
+export function insertIntakeObservation(msg: {
+  raw_text: string;
+  source_task_id: string;
+  source_group: string;
+  intake_reason: string;
+  intake_event_id: number;
+  source_chat_jid?: string | null;
+  source_message_id?: string | null;
+  thread_id?: string | null;
+}): number {
+  const now = new Date().toISOString();
+
+  // Check for existing intake observation (dedup on intake_event_id)
+  const existing = db
+    .prepare(
+      `SELECT id FROM observed_messages WHERE intake_event_id = ?`,
+    )
+    .get(msg.intake_event_id) as { id: number } | undefined;
+  if (existing) return existing.id;
+
+  const result = db
+    .prepare(
+      `INSERT INTO observed_messages
+         (source_chat_jid, source_message_id, source_type, source_task_id, source_group,
+          intake_reason, intake_event_id, raw_text, thread_id, created_at)
+       VALUES (?, ?, 'task_intake', ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      msg.source_chat_jid ?? null,
+      msg.source_message_id ?? null,
+      msg.source_task_id,
+      msg.source_group,
+      msg.intake_reason,
+      msg.intake_event_id,
+      msg.raw_text,
+      msg.thread_id ?? null,
+      now,
+    );
+
+  return result.lastInsertRowid as number;
+}
+
+export function getUnprocessedObservations(
+  limit: number,
+): ObservedMessageRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM observed_messages
+       WHERE sanitised_json IS NULL
+       ORDER BY created_at
+       LIMIT ?`,
+    )
+    .all(limit) as ObservedMessageRow[];
+}
+
+export function updateObservationSanitised(
+  id: number,
+  fields: {
+    sanitised_json: string | null;
+    sanitiser_model: string;
+    sanitiser_version: string;
+    flags: string | null;
+  },
+): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `UPDATE observed_messages
+       SET sanitised_json = ?, sanitiser_model = ?, sanitiser_version = ?,
+           flags = ?, sanitised_at = ?
+     WHERE id = ?`,
+  ).run(
+    fields.sanitised_json,
+    fields.sanitiser_model,
+    fields.sanitiser_version,
+    fields.flags,
+    now,
+    id,
+  );
+}
+
+// --- Pipeline intake log ---
+
+export function insertIntakeLog(
+  eventId: number,
+  rawTextHash: string,
+  sourceContext: IntakeSourceContext,
+): { id: number } {
+  const now = new Date().toISOString();
+  const result = db
+    .prepare(
+      `INSERT INTO pipeline_intake_log
+         (event_id, raw_text_hash, source_type, source_group, source_task_id,
+          source_channel, source_message_id, reason, submitted_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      eventId,
+      rawTextHash,
+      sourceContext.source_type,
+      sourceContext.source_group,
+      sourceContext.source_task_id ?? null,
+      sourceContext.source_channel ?? null,
+      sourceContext.source_message_id ?? null,
+      sourceContext.reason,
+      now,
+    );
+
+  return { id: result.lastInsertRowid as number };
+}
+
+export function updateIntakeLogProcessed(
+  eventId: number,
+  observationId: number,
+): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `UPDATE pipeline_intake_log
+       SET processed_at = ?, observation_id = ?
+     WHERE event_id = ?`,
+  ).run(now, observationId, eventId);
+}
+
+export function getRecentIntakeLogs(
+  limit: number,
+  includeProcessed: boolean,
+): PipelineIntakeLogRow[] {
+  const condition = includeProcessed ? '' : 'WHERE processed_at IS NULL';
+  return db
+    .prepare(
+      `SELECT * FROM pipeline_intake_log ${condition}
+       ORDER BY submitted_at DESC, id DESC LIMIT ?`,
+    )
+    .all(limit) as PipelineIntakeLogRow[];
 }
 
 // --- JSON migration ---

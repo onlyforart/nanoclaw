@@ -540,6 +540,134 @@ server.tool(
   },
 );
 
+// --- Observation pipeline tools ---
+
+server.tool(
+  'publish_event',
+  'Publish an event to the NanoClaw event bus. Events are consumed by other pipeline tasks. Use for inter-task communication (e.g. publishing observation.* or candidate.* events).',
+  {
+    event_type: z.string().describe('Event type (e.g. "observation.support", "candidate.escalation")'),
+    payload: z.string().describe('JSON payload for the event'),
+    dedupe_key: z.string().optional().describe('Deduplication key. Events with the same (type, dedupe_key) are idempotent.'),
+    ttl_seconds: z.number().int().positive().optional().describe('Time-to-live in seconds. Expired events are skipped by consumers.'),
+    source_task_id: z.string().optional().describe('ID of the producing task (for audit trail)'),
+  },
+  async (args) => {
+    const result = await writeIpcFileAndWaitForResult(TASKS_DIR, {
+      type: 'publish_event',
+      eventType: args.event_type,
+      payload: args.payload,
+      dedupeKey: args.dedupe_key || undefined,
+      ttlSeconds: args.ttl_seconds || undefined,
+      sourceTaskId: args.source_task_id || undefined,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+
+    if (!result.success) {
+      return { content: [{ type: 'text' as const, text: `Error: ${result.error}` }], isError: true };
+    }
+
+    const r = result as any;
+    return {
+      content: [{ type: 'text' as const, text: `Event published. id=${r.id}, isNew=${r.isNew}` }],
+    };
+  },
+);
+
+server.tool(
+  'consume_events',
+  'Claim pending events from the event bus. Claimed events are atomically reserved for this consumer and will not be returned to other consumers. Use ack_event to finalise each event after processing.',
+  {
+    event_types: z.array(z.string()).describe('Event types to consume (e.g. ["observation.*"])'),
+    claimed_by: z.string().describe('Consumer identifier (e.g. "pipeline:monitor")'),
+    limit: z.number().int().positive().optional().describe('Maximum events to claim (default: 50)'),
+  },
+  async (args) => {
+    const result = await writeIpcFileAndWaitForResult(TASKS_DIR, {
+      type: 'consume_events',
+      eventTypes: args.event_types,
+      claimedBy: args.claimed_by,
+      limit: args.limit || 50,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+
+    if (!result.success) {
+      return { content: [{ type: 'text' as const, text: `Error: ${result.error}` }], isError: true };
+    }
+
+    const events = (result as any).events || [];
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify({ events_claimed: events.length, events }, null, 2) }],
+    };
+  },
+);
+
+server.tool(
+  'ack_event',
+  'Acknowledge a previously claimed event as done or failed. This finalises the event and records the outcome.',
+  {
+    event_id: z.number().int().describe('The event ID to acknowledge'),
+    status: z.enum(['done', 'failed']).describe('Final status: "done" (success) or "failed"'),
+    note: z.string().optional().describe('Optional note about the outcome'),
+  },
+  async (args) => {
+    const result = await writeIpcFileAndWaitForResult(TASKS_DIR, {
+      type: 'ack_event',
+      eventId: args.event_id,
+      status: args.status,
+      note: args.note || undefined,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+
+    if (!result.success) {
+      return { content: [{ type: 'text' as const, text: `Error: ${result.error}` }], isError: true };
+    }
+
+    return {
+      content: [{ type: 'text' as const, text: `Event ${args.event_id} acknowledged as ${args.status}.` }],
+    };
+  },
+);
+
+server.tool(
+  'submit_to_pipeline',
+  'Submit content to the observation pipeline for sanitisation. The content will be processed through the three-layer sanitiser (deterministic pre-processing, LLM extraction, deterministic post-processing) and become a structured observation. Use this to route content discovered during investigation into the pipeline.',
+  {
+    raw_text: z.string().describe('The raw text content to sanitise'),
+    source_context: z.object({
+      source_type: z.string().describe('Source type: "task", "message", or "external"'),
+      source_group: z.string().describe('Group that found this content'),
+      source_task_id: z.string().optional().describe('Task ID that found this (if scheduled task)'),
+      source_channel: z.string().optional().describe('Originating channel JID (if known)'),
+      source_message_id: z.string().optional().describe('Originating message ID (if known)'),
+      reason: z.string().describe('Why this content was submitted to the pipeline'),
+    }).describe('Provenance metadata — fully recorded for audit'),
+    dedupe_key: z.string().optional().describe('Deduplication key (e.g. derived from source_message_id)'),
+  },
+  async (args) => {
+    const result = await writeIpcFileAndWaitForResult(TASKS_DIR, {
+      type: 'submit_to_pipeline',
+      rawText: args.raw_text,
+      sourceContext: args.source_context,
+      dedupeKey: args.dedupe_key || undefined,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+
+    if (!result.success) {
+      return { content: [{ type: 'text' as const, text: `Error: ${result.error}` }], isError: true };
+    }
+
+    const r = result as any;
+    return {
+      content: [{ type: 'text' as const, text: `Submitted to pipeline. event_id=${r.eventId}, isNew=${r.isNew}` }],
+    };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);

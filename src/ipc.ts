@@ -5,15 +5,19 @@ import { CronExpressionParser } from 'cron-parser';
 
 import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import {
+  ackEvent,
+  consumeEvents,
   createTask,
   deleteTask,
   getTaskById,
+  insertIntakeLog,
+  publishEvent,
   updateRegisteredGroup,
   updateTask,
 } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
-import { RegisteredGroup } from './types.js';
+import { IntakeSourceContext, RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
@@ -591,6 +595,92 @@ function handleUpdateGroup(
   return ok();
 }
 
+// --- Event bus IPC handlers ---
+
+function handlePublishEvent(data: IpcData, sourceGroup: string): IpcResult {
+  const eventType = data.eventType as string | undefined;
+  const payload = data.payload as string | undefined;
+  if (!eventType || !payload) {
+    return fail('publish_event requires eventType and payload');
+  }
+  const sourceTaskId = (data.sourceTaskId as string) || null;
+  const dedupeKey = (data.dedupeKey as string) || null;
+  const ttlSeconds = (data.ttlSeconds as number) ?? null;
+
+  const result = publishEvent(
+    eventType,
+    sourceGroup,
+    sourceTaskId,
+    payload,
+    dedupeKey,
+    ttlSeconds,
+  );
+  return { success: true, ...result };
+}
+
+function handleConsumeEvents(data: IpcData): IpcResult {
+  const eventTypes = data.eventTypes as string[] | undefined;
+  const claimedBy = data.claimedBy as string | undefined;
+  const limit = (data.limit as number) ?? 50;
+
+  if (!eventTypes || !Array.isArray(eventTypes) || !claimedBy) {
+    return fail('consume_events requires eventTypes (array) and claimedBy');
+  }
+
+  const events = consumeEvents(eventTypes, claimedBy, limit);
+  return { success: true, events } as any;
+}
+
+function handleAckEvent(data: IpcData): IpcResult {
+  const eventId = data.eventId as number | undefined;
+  const status = data.status as 'done' | 'failed' | undefined;
+
+  if (eventId == null || !status) {
+    return fail('ack_event requires eventId and status');
+  }
+
+  const note = (data.note as string) || undefined;
+  ackEvent(eventId, status, note);
+  return ok();
+}
+
+function handleSubmitToPipeline(
+  data: IpcData,
+  sourceGroup: string,
+): IpcResult {
+  const rawText = data.rawText as string | undefined;
+  const sourceContext = data.sourceContext as IntakeSourceContext | undefined;
+
+  if (!rawText) {
+    return fail('submit_to_pipeline requires rawText');
+  }
+  if (!sourceContext?.source_group || !sourceContext?.reason) {
+    return fail(
+      'submit_to_pipeline requires sourceContext with source_group and reason',
+    );
+  }
+
+  const dedupeKey = (data.dedupeKey as string) || null;
+  const rawTextHash = crypto.createHash('sha256').update(rawText).digest('hex');
+
+  const eventPayload = JSON.stringify({ raw_text: rawText, source_context: sourceContext });
+  const eventResult = publishEvent(
+    'intake.raw',
+    sourceContext.source_group || sourceGroup,
+    sourceContext.source_task_id || null,
+    eventPayload,
+    dedupeKey,
+  );
+
+  // Log to pipeline_intake_log (only on new events to avoid duplicate logs)
+  if (eventResult.isNew) {
+    insertIntakeLog(eventResult.id, rawTextHash, sourceContext);
+  }
+
+  // Stub: bumpConsumerTaskNextRun('intake.raw') — wired in PR 4
+  return { success: true, eventId: eventResult.id, isNew: eventResult.isNew } as any;
+}
+
 // --- Main dispatcher ---
 
 export async function processTaskIpc(
@@ -635,6 +725,14 @@ export async function processTaskIpc(
         registeredGroups,
         deps,
       );
+    case 'publish_event':
+      return handlePublishEvent(data, sourceGroup);
+    case 'consume_events':
+      return handleConsumeEvents(data);
+    case 'ack_event':
+      return handleAckEvent(data);
+    case 'submit_to_pipeline':
+      return handleSubmitToPipeline(data, sourceGroup);
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');
       return fail(`Unknown IPC task type: ${data.type}`);

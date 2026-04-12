@@ -93,6 +93,74 @@ export interface TaskRunLog {
   cost_usd?: number | null;
 }
 
+// --- Event bus ---
+
+export type EventStatus = 'pending' | 'claimed' | 'done' | 'expired' | 'failed';
+
+export interface EventRow {
+  id: number;
+  type: string;
+  source_group: string;
+  source_task_id: string | null;
+  payload: string; // JSON
+  dedupe_key: string | null;
+  created_at: string;
+  expires_at: string | null;
+  status: EventStatus;
+  claimed_by: string | null;
+  claimed_at: string | null;
+  processed_at: string | null;
+  result_note: string | null;
+}
+
+// --- Observed messages ---
+
+export interface ObservedMessageRow {
+  id: number;
+  source_chat_jid: string | null;
+  source_message_id: string | null;
+  source_type: 'passive_channel' | 'task_intake';
+  source_task_id: string | null;
+  source_group: string | null;
+  intake_reason: string | null;
+  intake_event_id: number | null;
+  thread_id: string | null;
+  related_observation_ids: string | null; // JSON array
+  raw_text: string;
+  sanitised_json: string | null;
+  sanitiser_model: string | null;
+  sanitiser_version: string | null;
+  flags: string | null; // JSON array
+  created_at: string;
+  sanitised_at: string | null;
+}
+
+// --- Pipeline intake ---
+
+export interface IntakeSourceContext {
+  source_type: string;
+  source_group: string;
+  source_task_id?: string;
+  source_channel?: string;
+  source_message_id?: string;
+  reason: string;
+}
+
+export interface PipelineIntakeLogRow {
+  id: number;
+  event_id: number;
+  raw_text_hash: string;
+  source_type: string;
+  source_group: string;
+  source_task_id: string | null;
+  source_channel: string | null;
+  source_message_id: string | null;
+  reason: string;
+  submitted_at: string;
+  processed_at: string | null;
+  observation_id: number | null;
+}
+
 // --- Channel abstraction ---
 
 export interface Channel {

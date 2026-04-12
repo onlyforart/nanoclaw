@@ -2,17 +2,28 @@ import { describe, it, expect, beforeEach } from 'vitest';
 
 import {
   _initTestDatabase,
+  ackEvent,
+  consumeEvents,
   createTask,
   deleteTask,
   getAllChats,
   getAllRegisteredGroups,
   getMessagesSince,
   getNewMessages,
+  getRecentEvents,
+  getRecentIntakeLogs,
   getRegisteredGroup,
   getTaskById,
+  getUnprocessedObservations,
+  insertIntakeLog,
+  insertIntakeObservation,
+  insertObservedMessage,
+  publishEvent,
   setRegisteredGroup,
   storeChatMetadata,
   storeMessage,
+  updateIntakeLogProcessed,
+  updateObservationSanitised,
   updateRegisteredGroup,
   updateTask,
 } from './db.js';
@@ -615,5 +626,338 @@ describe('task maxToolRounds and timeoutMs', () => {
     const task = getTaskById('task-limits-3');
     expect(task!.maxToolRounds).toBe(8);
     expect(task!.timeoutMs).toBe(120_000);
+  });
+});
+
+// --- Events table ---
+
+describe('publishEvent', () => {
+  it('inserts a new event and returns its id', () => {
+    const result = publishEvent(
+      'observation.support',
+      'slack_main',
+      null,
+      JSON.stringify({ summary: 'test' }),
+    );
+    expect(result.id).toBeGreaterThan(0);
+    expect(result.isNew).toBe(true);
+  });
+
+  it('deduplicates on (type, dedupe_key)', () => {
+    const first = publishEvent(
+      'observation.support',
+      'slack_main',
+      null,
+      JSON.stringify({ summary: 'first' }),
+      'dedup-1',
+    );
+    const second = publishEvent(
+      'observation.support',
+      'slack_main',
+      null,
+      JSON.stringify({ summary: 'second' }),
+      'dedup-1',
+    );
+    expect(first.isNew).toBe(true);
+    expect(second.isNew).toBe(false);
+    expect(second.id).toBe(first.id);
+  });
+
+  it('allows same dedupe_key for different types', () => {
+    const a = publishEvent('type.a', 'g', null, '{}', 'key');
+    const b = publishEvent('type.b', 'g', null, '{}', 'key');
+    expect(a.id).not.toBe(b.id);
+    expect(a.isNew).toBe(true);
+    expect(b.isNew).toBe(true);
+  });
+
+  it('sets expires_at when ttlSeconds is provided', () => {
+    const result = publishEvent('test.ttl', 'g', null, '{}', null, 3600);
+    const events = getRecentEvents(['test.ttl'], 10, true);
+    expect(events).toHaveLength(1);
+    expect(events[0].expires_at).not.toBeNull();
+  });
+
+  it('stores source_task_id when provided', () => {
+    publishEvent('test.task', 'g', 'pipeline:sanitiser', '{}');
+    const events = getRecentEvents(['test.task'], 10, true);
+    expect(events[0].source_task_id).toBe('pipeline:sanitiser');
+  });
+});
+
+describe('consumeEvents', () => {
+  it('atomically claims pending events', () => {
+    publishEvent('obs.a', 'g', null, '{"n":1}');
+    publishEvent('obs.a', 'g', null, '{"n":2}');
+    publishEvent('obs.b', 'g', null, '{"n":3}');
+
+    const claimed = consumeEvents(['obs.a'], 'pipeline:monitor', 10);
+    expect(claimed).toHaveLength(2);
+    expect(claimed[0].status).toBe('claimed');
+    expect(claimed[0].claimed_by).toBe('pipeline:monitor');
+  });
+
+  it('does not return already-claimed events', () => {
+    publishEvent('obs.x', 'g', null, '{}');
+    const first = consumeEvents(['obs.x'], 'consumer-1', 10);
+    const second = consumeEvents(['obs.x'], 'consumer-2', 10);
+    expect(first).toHaveLength(1);
+    expect(second).toHaveLength(0);
+  });
+
+  it('respects the limit parameter', () => {
+    for (let i = 0; i < 5; i++) {
+      publishEvent('obs.lim', 'g', null, `{"i":${i}}`);
+    }
+    const claimed = consumeEvents(['obs.lim'], 'c', 2);
+    expect(claimed).toHaveLength(2);
+  });
+
+  it('skips expired events', () => {
+    // Publish with TTL of 0 seconds (already expired)
+    publishEvent('obs.exp', 'g', null, '{}', null, -1);
+    const claimed = consumeEvents(['obs.exp'], 'c', 10);
+    expect(claimed).toHaveLength(0);
+  });
+
+  it('claims events matching multiple types', () => {
+    publishEvent('obs.a', 'g', null, '{}');
+    publishEvent('obs.b', 'g', null, '{}');
+    publishEvent('obs.c', 'g', null, '{}');
+
+    const claimed = consumeEvents(['obs.a', 'obs.b'], 'c', 10);
+    expect(claimed).toHaveLength(2);
+  });
+});
+
+describe('ackEvent', () => {
+  it('transitions a claimed event to done', () => {
+    publishEvent('ack.test', 'g', null, '{}');
+    const [event] = consumeEvents(['ack.test'], 'c', 1);
+
+    ackEvent(event.id, 'done', 'processed successfully');
+    const events = getRecentEvents(['ack.test'], 10, true);
+    expect(events[0].status).toBe('done');
+    expect(events[0].result_note).toBe('processed successfully');
+    expect(events[0].processed_at).not.toBeNull();
+  });
+
+  it('transitions a claimed event to failed', () => {
+    publishEvent('ack.fail', 'g', null, '{}');
+    const [event] = consumeEvents(['ack.fail'], 'c', 1);
+
+    ackEvent(event.id, 'failed', 'LLM returned invalid JSON');
+    const events = getRecentEvents(['ack.fail'], 10, true);
+    expect(events[0].status).toBe('failed');
+  });
+});
+
+describe('getRecentEvents', () => {
+  it('returns events filtered by type', () => {
+    publishEvent('type.a', 'g', null, '{}');
+    publishEvent('type.b', 'g', null, '{}');
+
+    const events = getRecentEvents(['type.a'], 10, true);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('type.a');
+  });
+
+  it('returns all types when types is undefined', () => {
+    publishEvent('type.a', 'g', null, '{}');
+    publishEvent('type.b', 'g', null, '{}');
+
+    const events = getRecentEvents(undefined, 10, true);
+    expect(events).toHaveLength(2);
+  });
+
+  it('excludes processed events by default', () => {
+    publishEvent('rce.test', 'g', null, '{}');
+    const [event] = consumeEvents(['rce.test'], 'c', 1);
+    ackEvent(event.id, 'done');
+
+    const pending = getRecentEvents(['rce.test'], 10, false);
+    expect(pending).toHaveLength(0);
+
+    const all = getRecentEvents(['rce.test'], 10, true);
+    expect(all).toHaveLength(1);
+  });
+});
+
+// --- Observed messages table ---
+
+describe('insertObservedMessage', () => {
+  it('inserts a passive-channel observation', () => {
+    const id = insertObservedMessage({
+      source_chat_jid: 'sl:C123',
+      source_message_id: '1712345678.123456',
+      source_type: 'passive_channel',
+      raw_text: 'INC12345 is down',
+    });
+    expect(id).toBeGreaterThan(0);
+  });
+
+  it('deduplicates passive-channel observations on (jid, message_id)', () => {
+    const id1 = insertObservedMessage({
+      source_chat_jid: 'sl:C123',
+      source_message_id: 'msg-1',
+      source_type: 'passive_channel',
+      raw_text: 'first version',
+    });
+    const id2 = insertObservedMessage({
+      source_chat_jid: 'sl:C123',
+      source_message_id: 'msg-1',
+      source_type: 'passive_channel',
+      raw_text: 'duplicate',
+    });
+    expect(id2).toBe(id1);
+  });
+});
+
+describe('insertIntakeObservation', () => {
+  it('inserts a task-intake observation', () => {
+    const id = insertIntakeObservation({
+      raw_text: 'forwarded content',
+      source_task_id: 'pipeline:monitor',
+      source_group: 'slack_main',
+      intake_reason: 'found during investigation',
+      intake_event_id: 42,
+    });
+    expect(id).toBeGreaterThan(0);
+  });
+
+  it('deduplicates on intake_event_id', () => {
+    const id1 = insertIntakeObservation({
+      raw_text: 'content',
+      source_task_id: 't1',
+      source_group: 'g1',
+      intake_reason: 'reason',
+      intake_event_id: 99,
+    });
+    const id2 = insertIntakeObservation({
+      raw_text: 'content again',
+      source_task_id: 't1',
+      source_group: 'g1',
+      intake_reason: 'reason',
+      intake_event_id: 99,
+    });
+    expect(id2).toBe(id1);
+  });
+});
+
+describe('getUnprocessedObservations', () => {
+  it('returns observations without sanitised_json', () => {
+    insertObservedMessage({
+      source_chat_jid: 'sl:C1',
+      source_message_id: 'msg-a',
+      source_type: 'passive_channel',
+      raw_text: 'unsanitised',
+    });
+    const id2 = insertObservedMessage({
+      source_chat_jid: 'sl:C1',
+      source_message_id: 'msg-b',
+      source_type: 'passive_channel',
+      raw_text: 'also unsanitised',
+    });
+    updateObservationSanitised(id2, {
+      sanitised_json: '{"fact_summary":"test"}',
+      sanitiser_model: 'haiku',
+      sanitiser_version: '1',
+      flags: null,
+    });
+
+    const unprocessed = getUnprocessedObservations(10);
+    expect(unprocessed).toHaveLength(1);
+    expect(unprocessed[0].raw_text).toBe('unsanitised');
+  });
+});
+
+describe('updateObservationSanitised', () => {
+  it('sets sanitised fields and sanitised_at timestamp', () => {
+    const id = insertObservedMessage({
+      source_chat_jid: 'sl:C1',
+      source_message_id: 'msg-1',
+      source_type: 'passive_channel',
+      raw_text: 'some text',
+    });
+
+    updateObservationSanitised(id, {
+      sanitised_json: '{"fact_summary":"system down"}',
+      sanitiser_model: 'anthropic:haiku',
+      sanitiser_version: '1',
+      flags: '["review_required"]',
+    });
+
+    const unprocessed = getUnprocessedObservations(10);
+    expect(unprocessed).toHaveLength(0);
+  });
+});
+
+// --- Pipeline intake log ---
+
+describe('insertIntakeLog', () => {
+  it('inserts an intake log entry', () => {
+    const result = insertIntakeLog(1, 'abc123hash', {
+      source_type: 'task',
+      source_group: 'slack_main',
+      source_task_id: 'pipeline:monitor',
+      reason: 'found during investigation',
+    });
+    expect(result.id).toBeGreaterThan(0);
+  });
+});
+
+describe('updateIntakeLogProcessed', () => {
+  it('marks an intake log as processed with observation_id', () => {
+    const { id } = insertIntakeLog(1, 'hash1', {
+      source_type: 'task',
+      source_group: 'g1',
+      reason: 'test',
+    });
+
+    updateIntakeLogProcessed(1, 42);
+
+    const logs = getRecentIntakeLogs(10, true);
+    const log = logs.find((l) => l.id === id);
+    expect(log).toBeDefined();
+    expect(log!.processed_at).not.toBeNull();
+    expect(log!.observation_id).toBe(42);
+  });
+});
+
+describe('getRecentIntakeLogs', () => {
+  it('returns intake logs ordered by submitted_at desc', () => {
+    insertIntakeLog(1, 'h1', {
+      source_type: 'task',
+      source_group: 'g1',
+      reason: 'first',
+    });
+    insertIntakeLog(2, 'h2', {
+      source_type: 'task',
+      source_group: 'g1',
+      reason: 'second',
+    });
+
+    const logs = getRecentIntakeLogs(10, true);
+    expect(logs).toHaveLength(2);
+    // Most recent first
+    expect(logs[0].reason).toBe('second');
+  });
+
+  it('excludes processed logs when includeProcessed is false', () => {
+    insertIntakeLog(10, 'h3', {
+      source_type: 'task',
+      source_group: 'g1',
+      reason: 'will process',
+    });
+    insertIntakeLog(11, 'h4', {
+      source_type: 'task',
+      source_group: 'g1',
+      reason: 'stay pending',
+    });
+    updateIntakeLogProcessed(10, 100);
+
+    const unprocessed = getRecentIntakeLogs(10, false);
+    expect(unprocessed).toHaveLength(1);
+    expect(unprocessed[0].reason).toBe('stay pending');
   });
 });
