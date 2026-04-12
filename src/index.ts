@@ -63,6 +63,7 @@ import {
   loadSenderAllowlist,
   shouldDropMessage,
 } from './sender-allowlist.js';
+import { loadAllPipelineSpecs, reconcilePipelineTasks } from './pipeline-loader.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -731,6 +732,31 @@ async function main(): Promise<void> {
   setInterval(() => {
     registeredGroups = getAllRegisteredGroups();
   }, 60_000);
+
+  // Reconcile pipeline tasks from YAML specs
+  try {
+    const fs = await import('fs');
+    const path = await import('path');
+    const { parse: parseYaml } = await import('yaml');
+    const configPath = path.join(process.cwd(), 'pipeline', 'sanitiser-config.yaml');
+    if (fs.existsSync(configPath)) {
+      const config = parseYaml(fs.readFileSync(configPath, 'utf-8'));
+      if (config?.team_group_folder && config?.team_chat_jid) {
+        const specs = loadAllPipelineSpecs();
+        if (specs.length > 0) {
+          reconcilePipelineTasks(specs, config.team_group_folder, config.team_chat_jid);
+          logger.info(
+            { count: specs.length, teamGroup: config.team_group_folder },
+            'Pipeline tasks reconciled',
+          );
+        }
+      } else {
+        logger.info('Pipeline config missing team_group_folder/team_chat_jid — skipping reconciliation');
+      }
+    }
+  } catch (err) {
+    logger.warn({ err }, 'Pipeline reconciliation skipped');
+  }
 
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({
