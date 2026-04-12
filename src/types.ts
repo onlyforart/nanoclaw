@@ -74,6 +74,8 @@ export interface ScheduledTask {
   maxToolRounds?: number | null;
   timeoutMs?: number | null;
   useAgentSdk?: boolean | number | null;
+  allowedTools?: string[] | null;
+  allowedSendTargets?: string[] | null;
   next_run: string | null;
   last_run: string | null;
   last_result: string | null;

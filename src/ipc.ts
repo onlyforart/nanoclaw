@@ -184,6 +184,25 @@ export function startIpcWatcher(deps: IpcDeps): void {
                 // Cross-channel: any group can send to any registered group
                 const targetGroup = registeredGroups[data.targetChatJid];
                 if (targetGroup) {
+                  // Enforce allowed_send_targets when sourceTaskId is present
+                  const sourceTaskId = data.sourceTaskId as string | undefined;
+                  if (sourceTaskId) {
+                    const task = getTaskById(sourceTaskId);
+                    if (
+                      task?.allowedSendTargets &&
+                      !task.allowedSendTargets.includes(data.targetChatJid)
+                    ) {
+                      logger.warn(
+                        {
+                          targetChatJid: data.targetChatJid,
+                          sourceTaskId,
+                          allowedTargets: task.allowedSendTargets,
+                        },
+                        'Cross-channel message blocked: target not in allowed_send_targets',
+                      );
+                      continue;
+                    }
+                  }
                   await deps.sendMessage(data.targetChatJid, data.text);
                   logger.info(
                     {
@@ -645,10 +664,7 @@ function handleAckEvent(data: IpcData): IpcResult {
   return ok();
 }
 
-function handleSubmitToPipeline(
-  data: IpcData,
-  sourceGroup: string,
-): IpcResult {
+function handleSubmitToPipeline(data: IpcData, sourceGroup: string): IpcResult {
   const rawText = data.rawText as string | undefined;
   const sourceContext = data.sourceContext as IntakeSourceContext | undefined;
 
@@ -664,7 +680,10 @@ function handleSubmitToPipeline(
   const dedupeKey = (data.dedupeKey as string) || null;
   const rawTextHash = crypto.createHash('sha256').update(rawText).digest('hex');
 
-  const eventPayload = JSON.stringify({ raw_text: rawText, source_context: sourceContext });
+  const eventPayload = JSON.stringify({
+    raw_text: rawText,
+    source_context: sourceContext,
+  });
   const eventResult = publishEvent(
     'intake.raw',
     sourceContext.source_group || sourceGroup,
@@ -679,7 +698,11 @@ function handleSubmitToPipeline(
   }
 
   // Stub: bumpConsumerTaskNextRun('intake.raw') — wired in PR 4
-  return { success: true, eventId: eventResult.id, isNew: eventResult.isNew } as any;
+  return {
+    success: true,
+    eventId: eventResult.id,
+    isNew: eventResult.isNew,
+  } as any;
 }
 
 function handleReadChatMessages(
@@ -700,7 +723,12 @@ function handleReadChatMessages(
   const limit = (data.limit as number) ?? 50;
   const includeBotMessages = (data.includeBotMessages as boolean) ?? false;
 
-  const result = readChatMessages(targetGroup, since, limit, includeBotMessages);
+  const result = readChatMessages(
+    targetGroup,
+    since,
+    limit,
+    includeBotMessages,
+  );
   return { success: true, ...result } as any;
 }
 

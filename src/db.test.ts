@@ -1105,12 +1105,7 @@ describe('readChatMessages', () => {
   });
 
   it('includes bot messages when requested', () => {
-    const { messages } = readChatMessages(
-      'group@g.us',
-      undefined,
-      50,
-      true,
-    );
+    const { messages } = readChatMessages('group@g.us', undefined, 50, true);
     const botMsgs = messages.filter((m) => m.content === 'bot reply');
     expect(botMsgs).toHaveLength(1);
   });
@@ -1142,5 +1137,132 @@ describe('readChatMessages', () => {
   it('respects limit', () => {
     const { messages } = readChatMessages('group@g.us', undefined, 2);
     expect(messages).toHaveLength(2);
+  });
+});
+
+// --- Task allowed_tools and allowed_send_targets ---
+
+describe('task allowed_tools and allowed_send_targets', () => {
+  it('stores and retrieves allowed_tools as a string array', () => {
+    createTask({
+      id: 'task-allow-1',
+      group_folder: 'main',
+      chat_jid: 'group@g.us',
+      prompt: 'test',
+      schedule_type: 'once',
+      schedule_value: '2024-06-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: null,
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+      allowedTools: ['consume_events', 'publish_event'],
+    });
+
+    const task = getTaskById('task-allow-1');
+    expect(task).toBeDefined();
+    expect(task!.allowedTools).toEqual(['consume_events', 'publish_event']);
+  });
+
+  it('stores and retrieves allowed_send_targets as a string array', () => {
+    createTask({
+      id: 'task-allow-2',
+      group_folder: 'main',
+      chat_jid: 'group@g.us',
+      prompt: 'test',
+      schedule_type: 'once',
+      schedule_value: '2024-06-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: null,
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+      allowedSendTargets: ['slack_main'],
+    });
+
+    const task = getTaskById('task-allow-2');
+    expect(task!.allowedSendTargets).toEqual(['slack_main']);
+  });
+
+  it('defaults both to null when not specified', () => {
+    createTask({
+      id: 'task-allow-3',
+      group_folder: 'main',
+      chat_jid: 'group@g.us',
+      prompt: 'test',
+      schedule_type: 'once',
+      schedule_value: '2024-06-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: null,
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    const task = getTaskById('task-allow-3');
+    expect(task!.allowedTools).toBeNull();
+    expect(task!.allowedSendTargets).toBeNull();
+  });
+
+  it('updates allowed_tools via updateTask', () => {
+    createTask({
+      id: 'task-allow-4',
+      group_folder: 'main',
+      chat_jid: 'group@g.us',
+      prompt: 'test',
+      schedule_type: 'once',
+      schedule_value: '2024-06-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: null,
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    updateTask('task-allow-4', {
+      allowedTools: ['send_message', 'ack_event'],
+    });
+
+    const task = getTaskById('task-allow-4');
+    expect(task!.allowedTools).toEqual(['send_message', 'ack_event']);
+  });
+
+  it('updates allowed_send_targets via updateTask', () => {
+    createTask({
+      id: 'task-allow-5',
+      group_folder: 'main',
+      chat_jid: 'group@g.us',
+      prompt: 'test',
+      schedule_type: 'once',
+      schedule_value: '2024-06-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: null,
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    updateTask('task-allow-5', {
+      allowedSendTargets: ['slack_support'],
+    });
+
+    const task = getTaskById('task-allow-5');
+    expect(task!.allowedSendTargets).toEqual(['slack_support']);
+  });
+
+  it('clears allowed_tools by setting to null', () => {
+    createTask({
+      id: 'task-allow-6',
+      group_folder: 'main',
+      chat_jid: 'group@g.us',
+      prompt: 'test',
+      schedule_type: 'once',
+      schedule_value: '2024-06-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: null,
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+      allowedTools: ['send_message'],
+    });
+
+    updateTask('task-allow-6', { allowedTools: null });
+
+    const task = getTaskById('task-allow-6');
+    expect(task!.allowedTools).toBeNull();
   });
 });

@@ -234,6 +234,22 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  // Add capability allow-lists (observation pipeline)
+  try {
+    database.exec(
+      `ALTER TABLE scheduled_tasks ADD COLUMN allowed_tools TEXT`,
+    );
+  } catch {
+    /* column already exists */
+  }
+  try {
+    database.exec(
+      `ALTER TABLE scheduled_tasks ADD COLUMN allowed_send_targets TEXT`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
   // Add channel and is_group columns if they don't exist (migration for existing DBs)
   try {
     database.exec(`ALTER TABLE chats ADD COLUMN channel TEXT`);
@@ -587,8 +603,7 @@ export function readChatMessages(
 
   const rows = db.prepare(sql).all(chatJid, sinceTs, limit) as NewMessage[];
 
-  const cursor =
-    rows.length > 0 ? rows[rows.length - 1].timestamp : sinceTs;
+  const cursor = rows.length > 0 ? rows[rows.length - 1].timestamp : sinceTs;
 
   return { messages: rows, cursor };
 }
@@ -598,8 +613,8 @@ export function createTask(
 ): void {
   db.prepare(
     `
-    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, model, temperature, timezone, max_tool_rounds, timeout_ms, use_agent_sdk, next_run, status, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, model, temperature, timezone, max_tool_rounds, timeout_ms, use_agent_sdk, allowed_tools, allowed_send_targets, next_run, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `,
   ).run(
     task.id,
@@ -615,30 +630,43 @@ export function createTask(
     task.maxToolRounds ?? null,
     task.timeoutMs ?? null,
     task.useAgentSdk ? 1 : 0,
+    task.allowedTools ? JSON.stringify(task.allowedTools) : null,
+    task.allowedSendTargets ? JSON.stringify(task.allowedSendTargets) : null,
     task.next_run,
     task.status,
     task.created_at,
   );
 }
 
-const TASK_SELECT = `SELECT id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, model, temperature, timezone, max_tool_rounds AS maxToolRounds, timeout_ms AS timeoutMs, use_agent_sdk AS useAgentSdk, next_run, last_run, last_result, status, created_at FROM scheduled_tasks`;
+const TASK_SELECT = `SELECT id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, model, temperature, timezone, max_tool_rounds AS maxToolRounds, timeout_ms AS timeoutMs, use_agent_sdk AS useAgentSdk, allowed_tools, allowed_send_targets, next_run, last_run, last_result, status, created_at FROM scheduled_tasks`;
+
+function parseTaskRow(row: any): ScheduledTask {
+  return {
+    ...row,
+    allowedTools: row.allowed_tools ? JSON.parse(row.allowed_tools) : null,
+    allowedSendTargets: row.allowed_send_targets
+      ? JSON.parse(row.allowed_send_targets)
+      : null,
+  };
+}
 
 export function getTaskById(id: string): ScheduledTask | undefined {
-  return db.prepare(`${TASK_SELECT} WHERE id = ?`).get(id) as
-    | ScheduledTask
-    | undefined;
+  const row = db.prepare(`${TASK_SELECT} WHERE id = ?`).get(id);
+  return row ? parseTaskRow(row) : undefined;
 }
 
 export function getTasksForGroup(groupFolder: string): ScheduledTask[] {
   return db
     .prepare(`${TASK_SELECT} WHERE group_folder = ? ORDER BY created_at DESC`)
-    .all(groupFolder) as ScheduledTask[];
+    .all(groupFolder)
+    .map(parseTaskRow);
 }
 
 export function getAllTasks(): ScheduledTask[] {
   return db
     .prepare(`${TASK_SELECT} ORDER BY created_at DESC`)
-    .all() as ScheduledTask[];
+    .all()
+    .map(parseTaskRow);
 }
 
 export function updateTask(
@@ -657,6 +685,8 @@ export function updateTask(
       | 'maxToolRounds'
       | 'timeoutMs'
       | 'useAgentSdk'
+      | 'allowedTools'
+      | 'allowedSendTargets'
     >
   >,
 ): void {
@@ -707,6 +737,20 @@ export function updateTask(
     fields.push('use_agent_sdk = ?');
     values.push(updates.useAgentSdk ? 1 : 0);
   }
+  if (updates.allowedTools !== undefined) {
+    fields.push('allowed_tools = ?');
+    values.push(
+      updates.allowedTools ? JSON.stringify(updates.allowedTools) : null,
+    );
+  }
+  if (updates.allowedSendTargets !== undefined) {
+    fields.push('allowed_send_targets = ?');
+    values.push(
+      updates.allowedSendTargets
+        ? JSON.stringify(updates.allowedSendTargets)
+        : null,
+    );
+  }
 
   if (fields.length === 0) return;
 
@@ -728,7 +772,8 @@ export function getDueTasks(): ScheduledTask[] {
     .prepare(
       `${TASK_SELECT} WHERE status = 'active' AND next_run IS NOT NULL AND next_run <= ? ORDER BY next_run`,
     )
-    .all(now) as ScheduledTask[];
+    .all(now)
+    .map(parseTaskRow);
 }
 
 export function updateTaskAfterRun(
@@ -1031,7 +1076,15 @@ export function publishEvent(
       `INSERT INTO events (type, source_group, source_task_id, payload, dedupe_key, created_at, expires_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run(type, sourceGroup, sourceTaskId, payload, dedupeKey ?? null, now, expiresAt);
+    .run(
+      type,
+      sourceGroup,
+      sourceTaskId,
+      payload,
+      dedupeKey ?? null,
+      now,
+      expiresAt,
+    );
 
   return { id: result.lastInsertRowid as number, isNew: true };
 }
@@ -1094,7 +1147,8 @@ export function getRecentEvents(
     conditions.push(`status IN ('pending', 'claimed')`);
   }
 
-  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  const where =
+    conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   params.push(maxRows);
 
   return db
@@ -1120,7 +1174,9 @@ export function insertObservedMessage(msg: {
        WHERE source_type = 'passive_channel'
          AND source_chat_jid = ? AND source_message_id = ?`,
     )
-    .get(msg.source_chat_jid, msg.source_message_id) as { id: number } | undefined;
+    .get(msg.source_chat_jid, msg.source_message_id) as
+    | { id: number }
+    | undefined;
   if (existing) return existing.id;
 
   const result = db
@@ -1154,9 +1210,7 @@ export function insertIntakeObservation(msg: {
 
   // Check for existing intake observation (dedup on intake_event_id)
   const existing = db
-    .prepare(
-      `SELECT id FROM observed_messages WHERE intake_event_id = ?`,
-    )
+    .prepare(`SELECT id FROM observed_messages WHERE intake_event_id = ?`)
     .get(msg.intake_event_id) as { id: number } | undefined;
   if (existing) return existing.id;
 

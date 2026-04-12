@@ -11,7 +11,7 @@ import { RegisteredGroup } from './types.js';
 
 // Import startIpcWatcher and the deps interface
 import { IpcDeps, startIpcWatcher, _resetIpcWatcherForTests } from './ipc.js';
-import { _initTestDatabase } from './db.js';
+import { _initTestDatabase, createTask } from './db.js';
 
 const MAIN_GROUP: RegisteredGroup = {
   name: 'Main',
@@ -234,5 +234,102 @@ describe('cross_channel_message IPC', () => {
       .readdirSync(messagesDir)
       .filter((f) => f.endsWith('.json'));
     expect(remaining).toHaveLength(0);
+  });
+
+  // --- allowed_send_targets enforcement ---
+
+  it('blocks cross_channel_message when task has restricted send targets and target is not in list', async () => {
+    createTask({
+      id: 'restricted-task',
+      group_folder: 'slack_monitoring-channel',
+      chat_jid: 'slack:CDEV',
+      prompt: 'test',
+      schedule_type: 'once',
+      schedule_value: '2024-06-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: null,
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+      allowedSendTargets: ['slack:CMAIN'],
+    });
+
+    writeMessage('slack_monitoring-channel', {
+      type: 'cross_channel_message',
+      targetChatJid: 'slack:CSUPPORT',
+      text: 'Should be blocked by allowed_send_targets',
+      sourceTaskId: 'restricted-task',
+    });
+
+    await runOnce();
+
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('allows cross_channel_message when target is in allowed_send_targets', async () => {
+    createTask({
+      id: 'allowed-task',
+      group_folder: 'slack_monitoring-channel',
+      chat_jid: 'slack:CDEV',
+      prompt: 'test',
+      schedule_type: 'once',
+      schedule_value: '2024-06-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: null,
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+      allowedSendTargets: ['slack:CSUPPORT'],
+    });
+
+    writeMessage('slack_monitoring-channel', {
+      type: 'cross_channel_message',
+      targetChatJid: 'slack:CSUPPORT',
+      text: 'Should be allowed',
+      sourceTaskId: 'allowed-task',
+    });
+
+    await runOnce();
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      'slack:CSUPPORT',
+      'Should be allowed',
+    );
+  });
+
+  it('allows cross_channel_message when task has no send target restrictions (null)', async () => {
+    createTask({
+      id: 'unrestricted-task',
+      group_folder: 'slack_monitoring-channel',
+      chat_jid: 'slack:CDEV',
+      prompt: 'test',
+      schedule_type: 'once',
+      schedule_value: '2024-06-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: null,
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    writeMessage('slack_monitoring-channel', {
+      type: 'cross_channel_message',
+      targetChatJid: 'slack:CSUPPORT',
+      text: 'Unrestricted',
+      sourceTaskId: 'unrestricted-task',
+    });
+
+    await runOnce();
+
+    expect(sendMessage).toHaveBeenCalledWith('slack:CSUPPORT', 'Unrestricted');
+  });
+
+  it('allows cross_channel_message when no sourceTaskId is present (backwards-compatible)', async () => {
+    writeMessage('slack_monitoring-channel', {
+      type: 'cross_channel_message',
+      targetChatJid: 'slack:CSUPPORT',
+      text: 'No task ID',
+    });
+
+    await runOnce();
+
+    expect(sendMessage).toHaveBeenCalledWith('slack:CSUPPORT', 'No task ID');
   });
 });
