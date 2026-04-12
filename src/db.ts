@@ -1300,7 +1300,21 @@ export function consumeEvents(
   limit: number,
 ): EventRow[] {
   const now = new Date().toISOString();
-  const placeholders = types.map(() => '?').join(', ');
+
+  // Support glob patterns: observation.* → LIKE 'observation.%'
+  const hasGlob = types.some((t) => t.includes('*'));
+  let typeFilter: string;
+  let typeParams: string[];
+
+  if (hasGlob) {
+    const conditions = types.map(() => 'type LIKE ?');
+    typeFilter = `(${conditions.join(' OR ')})`;
+    typeParams = types.map((t) => t.replace(/\*/g, '%'));
+  } else {
+    const placeholders = types.map(() => '?').join(', ');
+    typeFilter = `type IN (${placeholders})`;
+    typeParams = types;
+  }
 
   // Atomic claim: select pending, non-expired events and update in one statement
   const rows = db
@@ -1310,14 +1324,14 @@ export function consumeEvents(
        WHERE id IN (
          SELECT id FROM events
           WHERE status = 'pending'
-            AND type IN (${placeholders})
+            AND ${typeFilter}
             AND (expires_at IS NULL OR expires_at > ?)
           ORDER BY created_at
           LIMIT ?
        )
        RETURNING *`,
     )
-    .all(claimedBy, now, ...types, now, limit) as EventRow[];
+    .all(claimedBy, now, ...typeParams, now, limit) as EventRow[];
 
   return rows;
 }
@@ -1343,9 +1357,16 @@ export function getRecentEvents(
   const params: unknown[] = [];
 
   if (types && types.length > 0) {
-    const placeholders = types.map(() => '?').join(', ');
-    conditions.push(`type IN (${placeholders})`);
-    params.push(...types);
+    const hasGlob = types.some((t) => t.includes('*'));
+    if (hasGlob) {
+      const globs = types.map(() => 'type LIKE ?');
+      conditions.push(`(${globs.join(' OR ')})`);
+      params.push(...types.map((t) => t.replace(/\*/g, '%')));
+    } else {
+      const placeholders = types.map(() => '?').join(', ');
+      conditions.push(`type IN (${placeholders})`);
+      params.push(...types);
+    }
   }
 
   if (!includeProcessed) {
@@ -1441,12 +1462,10 @@ export function insertIntakeObservation(msg: {
   return result.lastInsertRowid as number;
 }
 
-export function getObservationById(
-  id: number,
-): ObservedMessageRow | undefined {
-  return db
-    .prepare('SELECT * FROM observed_messages WHERE id = ?')
-    .get(id) as ObservedMessageRow | undefined;
+export function getObservationById(id: number): ObservedMessageRow | undefined {
+  return db.prepare('SELECT * FROM observed_messages WHERE id = ?').get(id) as
+    | ObservedMessageRow
+    | undefined;
 }
 
 export function getUnprocessedObservations(
