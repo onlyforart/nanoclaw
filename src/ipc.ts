@@ -12,6 +12,7 @@ import {
   getTaskById,
   insertIntakeLog,
   publishEvent,
+  readChatMessages,
   updateRegisteredGroup,
   updateTask,
 } from './db.js';
@@ -681,6 +682,28 @@ function handleSubmitToPipeline(
   return { success: true, eventId: eventResult.id, isNew: eventResult.isNew } as any;
 }
 
+function handleReadChatMessages(
+  data: IpcData,
+  registeredGroups: Record<string, RegisteredGroup>,
+): IpcResult {
+  const targetGroup = data.targetGroup as string | undefined;
+  if (!targetGroup) {
+    return fail('read_chat_messages requires targetGroup');
+  }
+
+  // Verify the target group is registered
+  if (!registeredGroups[targetGroup]) {
+    return fail(`Target group ${targetGroup} is not registered`);
+  }
+
+  const since = (data.since as string) || undefined;
+  const limit = (data.limit as number) ?? 50;
+  const includeBotMessages = (data.includeBotMessages as boolean) ?? false;
+
+  const result = readChatMessages(targetGroup, since, limit, includeBotMessages);
+  return { success: true, ...result } as any;
+}
+
 // --- Main dispatcher ---
 
 export async function processTaskIpc(
@@ -733,6 +756,8 @@ export async function processTaskIpc(
       return handleAckEvent(data);
     case 'submit_to_pipeline':
       return handleSubmitToPipeline(data, sourceGroup);
+    case 'read_chat_messages':
+      return handleReadChatMessages(data, registeredGroups);
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');
       return fail(`Unknown IPC task type: ${data.type}`);

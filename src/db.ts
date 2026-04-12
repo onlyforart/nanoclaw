@@ -193,6 +193,22 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  // Add mode and threading_mode columns to registered_groups (observation pipeline)
+  try {
+    database.exec(
+      `ALTER TABLE registered_groups ADD COLUMN mode TEXT NOT NULL DEFAULT 'active'`,
+    );
+  } catch {
+    /* column already exists */
+  }
+  try {
+    database.exec(
+      `ALTER TABLE registered_groups ADD COLUMN threading_mode TEXT NOT NULL DEFAULT 'temporal'`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
   // Add per-task configurable limits (Ollama direct mode)
   try {
     database.exec(
@@ -548,6 +564,35 @@ export function getMessagesSince(
     .all(chatJid, sinceTimestamp, `${botPrefix}:%`, limit) as NewMessage[];
 }
 
+export function readChatMessages(
+  chatJid: string,
+  since?: string,
+  limit: number = 50,
+  includeBotMessages: boolean = false,
+): { messages: NewMessage[]; cursor: string } {
+  const sinceTs = since || '';
+  const botFilter = includeBotMessages ? '' : 'AND is_bot_message = 0';
+
+  const sql = `
+    SELECT * FROM (
+      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message
+      FROM messages
+      WHERE chat_jid = ? AND timestamp > ?
+        ${botFilter}
+        AND content != '' AND content IS NOT NULL
+      ORDER BY timestamp DESC
+      LIMIT ?
+    ) ORDER BY timestamp
+  `;
+
+  const rows = db.prepare(sql).all(chatJid, sinceTs, limit) as NewMessage[];
+
+  const cursor =
+    rows.length > 0 ? rows[rows.length - 1].timestamp : sinceTs;
+
+  return { messages: rows, cursor };
+}
+
 export function createTask(
   task: Omit<ScheduledTask, 'last_run' | 'last_result'>,
 ): void {
@@ -784,6 +829,9 @@ export function getRegisteredGroup(
         temperature: number | null;
         max_tool_rounds: number | null;
         timeout_ms: number | null;
+        show_thinking: number | null;
+        mode: string | null;
+        threading_mode: string | null;
       }
     | undefined;
   if (!row) return undefined;
@@ -813,6 +861,10 @@ export function getRegisteredGroup(
         : undefined,
     maxToolRounds: row.max_tool_rounds ?? undefined,
     timeoutMs: row.timeout_ms ?? undefined,
+    showThinking: row.show_thinking === 1 ? true : undefined,
+    mode: (row.mode as RegisteredGroup['mode']) || undefined,
+    threadingMode:
+      (row.threading_mode as RegisteredGroup['threadingMode']) || undefined,
   };
 }
 
@@ -821,8 +873,8 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
     throw new Error(`Invalid group folder "${group.folder}" for JID ${jid}`);
   }
   db.prepare(
-    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main, model, temperature, max_tool_rounds, timeout_ms, show_thinking)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main, model, temperature, max_tool_rounds, timeout_ms, show_thinking, mode, threading_mode)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     jid,
     group.name,
@@ -837,6 +889,8 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
     group.maxToolRounds ?? null,
     group.timeoutMs ?? null,
     group.showThinking ? 1 : null,
+    group.mode || 'active',
+    group.threadingMode || 'temporal',
   );
 }
 
@@ -855,6 +909,8 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
     max_tool_rounds: number | null;
     timeout_ms: number | null;
     show_thinking: number | null;
+    mode: string | null;
+    threading_mode: string | null;
   }>;
   const result: Record<string, RegisteredGroup> = {};
   for (const row of rows) {
@@ -881,6 +937,9 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
       maxToolRounds: row.max_tool_rounds ?? undefined,
       timeoutMs: row.timeout_ms ?? undefined,
       showThinking: row.show_thinking === 1 ? true : undefined,
+      mode: (row.mode as RegisteredGroup['mode']) || undefined,
+      threadingMode:
+        (row.threading_mode as RegisteredGroup['threadingMode']) || undefined,
     };
   }
   return result;
@@ -891,7 +950,13 @@ export function updateRegisteredGroup(
   updates: Partial<
     Pick<
       RegisteredGroup,
-      'model' | 'temperature' | 'maxToolRounds' | 'timeoutMs' | 'showThinking'
+      | 'model'
+      | 'temperature'
+      | 'maxToolRounds'
+      | 'timeoutMs'
+      | 'showThinking'
+      | 'mode'
+      | 'threadingMode'
     >
   >,
 ): void {
@@ -917,6 +982,14 @@ export function updateRegisteredGroup(
   if (updates.showThinking !== undefined) {
     fields.push('show_thinking = ?');
     values.push(updates.showThinking ? 1 : null);
+  }
+  if (updates.mode !== undefined) {
+    fields.push('mode = ?');
+    values.push(updates.mode || 'active');
+  }
+  if (updates.threadingMode !== undefined) {
+    fields.push('threading_mode = ?');
+    values.push(updates.threadingMode || 'temporal');
   }
 
   if (fields.length === 0) return;

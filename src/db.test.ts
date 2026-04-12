@@ -18,6 +18,7 @@ import {
   insertIntakeLog,
   insertIntakeObservation,
   insertObservedMessage,
+  readChatMessages,
   publishEvent,
   setRegisteredGroup,
   storeChatMetadata,
@@ -959,5 +960,187 @@ describe('getRecentIntakeLogs', () => {
     const unprocessed = getRecentIntakeLogs(10, false);
     expect(unprocessed).toHaveLength(1);
     expect(unprocessed[0].reason).toBe('stay pending');
+  });
+});
+
+// --- registered group mode + threading_mode ---
+
+describe('registered group mode', () => {
+  it('defaults mode to active when not specified', () => {
+    setRegisteredGroup('group@g.us', {
+      name: 'Test',
+      folder: 'test_group',
+      trigger: '@Andy',
+      added_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    const group = getRegisteredGroup('group@g.us');
+    expect(group).toBeDefined();
+    // Should not be undefined — default is 'active'
+    expect(group!.mode).toBe('active');
+  });
+
+  it('persists mode=passive through set/get round-trip', () => {
+    setRegisteredGroup('passive@g.us', {
+      name: 'Passive Channel',
+      folder: 'slack_passive',
+      trigger: '@Andy',
+      added_at: '2024-01-01T00:00:00.000Z',
+      mode: 'passive',
+    });
+
+    const group = getRegisteredGroup('passive@g.us');
+    expect(group!.mode).toBe('passive');
+  });
+
+  it('persists threadingMode through set/get round-trip', () => {
+    setRegisteredGroup('threaded@g.us', {
+      name: 'Threaded Channel',
+      folder: 'slack_threaded',
+      trigger: '@Andy',
+      added_at: '2024-01-01T00:00:00.000Z',
+      threadingMode: 'thread_aware',
+    });
+
+    const group = getRegisteredGroup('threaded@g.us');
+    expect(group!.threadingMode).toBe('thread_aware');
+  });
+
+  it('round-trips mode through getAllRegisteredGroups', () => {
+    setRegisteredGroup('passive@g.us', {
+      name: 'Passive',
+      folder: 'slack_passive',
+      trigger: '@Andy',
+      added_at: '2024-01-01T00:00:00.000Z',
+      mode: 'passive',
+    });
+
+    const groups = getAllRegisteredGroups();
+    expect(groups['passive@g.us'].mode).toBe('passive');
+  });
+
+  it('updates mode via updateRegisteredGroup', () => {
+    setRegisteredGroup('group@g.us', {
+      name: 'Test',
+      folder: 'test_group',
+      trigger: '@Andy',
+      added_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    updateRegisteredGroup('group@g.us', { mode: 'passive' });
+
+    const group = getRegisteredGroup('group@g.us');
+    expect(group!.mode).toBe('passive');
+  });
+
+  it('updates threadingMode via updateRegisteredGroup', () => {
+    setRegisteredGroup('group@g.us', {
+      name: 'Test',
+      folder: 'test_group',
+      trigger: '@Andy',
+      added_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    updateRegisteredGroup('group@g.us', { threadingMode: 'thread_aware' });
+
+    const group = getRegisteredGroup('group@g.us');
+    expect(group!.threadingMode).toBe('thread_aware');
+  });
+});
+
+// --- readChatMessages ---
+
+describe('readChatMessages', () => {
+  beforeEach(() => {
+    storeChatMetadata('group@g.us', '2024-01-01T00:00:00.000Z');
+
+    store({
+      id: 'r1',
+      chat_jid: 'group@g.us',
+      sender: 'Alice@s.whatsapp.net',
+      sender_name: 'Alice',
+      content: 'first message',
+      timestamp: '2024-01-01T00:00:01.000Z',
+    });
+    store({
+      id: 'r2',
+      chat_jid: 'group@g.us',
+      sender: 'Bob@s.whatsapp.net',
+      sender_name: 'Bob',
+      content: 'second message',
+      timestamp: '2024-01-01T00:00:02.000Z',
+    });
+    storeMessage({
+      id: 'r3',
+      chat_jid: 'group@g.us',
+      sender: 'Bot@s.whatsapp.net',
+      sender_name: 'Bot',
+      content: 'bot reply',
+      timestamp: '2024-01-01T00:00:03.000Z',
+      is_bot_message: true,
+    });
+    store({
+      id: 'r4',
+      chat_jid: 'group@g.us',
+      sender: 'Carol@s.whatsapp.net',
+      sender_name: 'Carol',
+      content: 'third message',
+      timestamp: '2024-01-01T00:00:04.000Z',
+    });
+  });
+
+  it('returns messages in chronological order', () => {
+    const { messages } = readChatMessages('group@g.us');
+    expect(messages.length).toBeGreaterThanOrEqual(3);
+    // Chronological: first before second
+    const firstIdx = messages.findIndex((m) => m.content === 'first message');
+    const secondIdx = messages.findIndex((m) => m.content === 'second message');
+    expect(firstIdx).toBeLessThan(secondIdx);
+  });
+
+  it('excludes bot messages by default', () => {
+    const { messages } = readChatMessages('group@g.us');
+    const botMsgs = messages.filter((m) => m.content === 'bot reply');
+    expect(botMsgs).toHaveLength(0);
+  });
+
+  it('includes bot messages when requested', () => {
+    const { messages } = readChatMessages(
+      'group@g.us',
+      undefined,
+      50,
+      true,
+    );
+    const botMsgs = messages.filter((m) => m.content === 'bot reply');
+    expect(botMsgs).toHaveLength(1);
+  });
+
+  it('filters by since timestamp', () => {
+    const { messages } = readChatMessages(
+      'group@g.us',
+      '2024-01-01T00:00:02.000Z',
+    );
+    // Only messages after the timestamp (excludes first and second)
+    expect(messages).toHaveLength(1);
+    expect(messages[0].content).toBe('third message');
+  });
+
+  it('returns a cursor pointing to the last message timestamp', () => {
+    const { cursor } = readChatMessages('group@g.us');
+    expect(cursor).toBe('2024-01-01T00:00:04.000Z');
+  });
+
+  it('returns empty since as cursor when no messages match', () => {
+    const { messages, cursor } = readChatMessages(
+      'group@g.us',
+      '2099-01-01T00:00:00.000Z',
+    );
+    expect(messages).toHaveLength(0);
+    expect(cursor).toBe('2099-01-01T00:00:00.000Z');
+  });
+
+  it('respects limit', () => {
+    const { messages } = readChatMessages('group@g.us', undefined, 2);
+    expect(messages).toHaveLength(2);
   });
 });

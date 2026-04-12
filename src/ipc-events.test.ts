@@ -7,6 +7,8 @@ import {
   getRecentIntakeLogs,
   publishEvent,
   setRegisteredGroup,
+  storeChatMetadata,
+  storeMessage,
 } from './db.js';
 import { processTaskIpc, IpcDeps } from './ipc.js';
 import { RegisteredGroup } from './types.js';
@@ -304,6 +306,102 @@ describe('submit_to_pipeline IPC', () => {
           source_type: 'task',
           source_group: 'g1',
         },
+      },
+      'slack_main',
+      true,
+      deps,
+    );
+    expect(result.success).toBe(false);
+  });
+});
+
+// --- read_chat_messages IPC ---
+
+describe('read_chat_messages IPC', () => {
+  beforeEach(() => {
+    // Set up a target group with messages
+    setRegisteredGroup('slack:CTARGET', {
+      name: 'Target',
+      folder: 'slack_target',
+      trigger: '@Andy',
+      added_at: '2024-01-01T00:00:00.000Z',
+      mode: 'passive',
+    });
+    groups['slack:CTARGET'] = {
+      name: 'Target',
+      folder: 'slack_target',
+      trigger: '@Andy',
+      added_at: '2024-01-01T00:00:00.000Z',
+      mode: 'passive',
+    };
+
+    storeChatMetadata('slack:CTARGET', '2024-01-01T00:00:00.000Z');
+    storeMessage({
+      id: 'msg-1',
+      chat_jid: 'slack:CTARGET',
+      sender: 'user1',
+      sender_name: 'Alice',
+      content: 'INC12345 is down',
+      timestamp: '2024-01-01T00:00:01.000Z',
+    });
+    storeMessage({
+      id: 'msg-2',
+      chat_jid: 'slack:CTARGET',
+      sender: 'user2',
+      sender_name: 'Bob',
+      content: 'looking into it',
+      timestamp: '2024-01-01T00:00:02.000Z',
+    });
+  });
+
+  it('returns messages from the target group', async () => {
+    const result = await processTaskIpc(
+      {
+        type: 'read_chat_messages',
+        targetGroup: 'slack:CTARGET',
+      },
+      'slack_main',
+      true,
+      deps,
+    );
+
+    expect(result.success).toBe(true);
+    expect((result as any).messages).toHaveLength(2);
+    expect((result as any).cursor).toBe('2024-01-01T00:00:02.000Z');
+  });
+
+  it('filters by since timestamp', async () => {
+    const result = await processTaskIpc(
+      {
+        type: 'read_chat_messages',
+        targetGroup: 'slack:CTARGET',
+        since: '2024-01-01T00:00:01.000Z',
+      },
+      'slack_main',
+      true,
+      deps,
+    );
+
+    expect(result.success).toBe(true);
+    expect((result as any).messages).toHaveLength(1);
+    expect((result as any).messages[0].content).toBe('looking into it');
+  });
+
+  it('rejects missing targetGroup', async () => {
+    const result = await processTaskIpc(
+      { type: 'read_chat_messages' },
+      'slack_main',
+      true,
+      deps,
+    );
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects unregistered target group', async () => {
+    const result = await processTaskIpc(
+      {
+        type: 'read_chat_messages',
+        targetGroup: 'slack:CUNKNOWN',
       },
       'slack_main',
       true,

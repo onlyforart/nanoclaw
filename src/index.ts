@@ -225,6 +225,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     return true;
   }
 
+  // Passive groups capture messages but never invoke the agent
+  if (group.mode === 'passive') return true;
+
   const isMainGroup = group.isMain === true;
 
   const sinceTimestamp = lastAgentTimestamp[chatJid] || '';
@@ -474,6 +477,9 @@ async function startMessageLoop(): Promise<void> {
             logger.warn({ chatJid }, 'No channel owns JID, skipping messages');
             continue;
           }
+
+          // Passive groups capture messages but never invoke the agent
+          if (group.mode === 'passive') continue;
 
           const isMainGroup = group.isMain === true;
           const needsTrigger = !isMainGroup && group.requiresTrigger !== false;

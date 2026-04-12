@@ -45,6 +45,8 @@ export interface RegisteredGroup {
   maxToolRounds?: number; // Max tool-calling rounds. NULL = use backend default.
   timeoutMs?: number; // Per-invocation timeout in ms. NULL = use backend default.
   showThinking?: boolean; // Send thinking/reasoning to channel. Ollama only. Default: false.
+  mode?: 'active' | 'passive' | 'control'; // Default: 'active'
+  threadingMode?: 'temporal' | 'thread_aware'; // Default: 'temporal'
 }
 
 export interface NewMessage {
