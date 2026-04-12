@@ -8,11 +8,9 @@ import {
   createTask,
   getTaskById,
   setRegisteredGroup,
+  updateTask,
 } from './db.js';
-import {
-  loadPipelineSpec,
-  reconcilePipelineTasks,
-} from './pipeline-loader.js';
+import { loadPipelineSpec, reconcilePipelineTasks } from './pipeline-loader.js';
 
 let tmpDir: string;
 
@@ -146,7 +144,7 @@ describe('reconcilePipelineTasks', () => {
     expect(task!.allowedSendTargets).toEqual([]);
   });
 
-  it('updates a task when spec version is higher', () => {
+  it('updates spec-derived fields but not operational fields on version bump', () => {
     const specs = [
       {
         name: 'monitor',
@@ -155,21 +153,30 @@ describe('reconcilePipelineTasks', () => {
         model: 'anthropic:haiku',
         cron: '*/2 * * * *',
         system: 'Version 1 prompt.',
-        tools: { default_enabled: false, enabled: [] },
+        tools: { default_enabled: false, enabled: ['consume_events'] },
         send_targets: [],
       },
     ];
 
     reconcilePipelineTasks(specs, 'slack_main', 'slack:CMAIN');
 
-    // Bump version
+    // Simulate operational edit: change model in DB
+    updateTask('pipeline:monitor', { model: 'ollama:gemma4' });
+
+    // Bump version and change tools in spec
     specs[0].version = 2;
     specs[0].system = 'Version 2 prompt.';
+    specs[0].tools.enabled = ['consume_events', 'publish_event'];
 
     reconcilePipelineTasks(specs, 'slack_main', 'slack:CMAIN');
 
     const task = getTaskById('pipeline:monitor');
-    expect(task!.prompt).toContain('Version 2');
+    // Spec-derived: tools updated
+    expect(task!.allowedTools).toEqual(['consume_events', 'publish_event']);
+    // Operational: model NOT overridden
+    expect(task!.model).toBe('ollama:gemma4');
+    // Operational: prompt NOT overridden
+    expect(task!.prompt).toContain('Version 1');
   });
 
   it('no-ops when spec version matches existing', () => {
@@ -256,7 +263,10 @@ describe('reconcilePipelineTasks', () => {
         model: 'anthropic:haiku',
         cron: '*/1 * * * *',
         system: 'Deliver approved replies.',
-        tools: { default_enabled: false, enabled: ['send_cross_channel_message'] },
+        tools: {
+          default_enabled: false,
+          enabled: ['send_cross_channel_message'],
+        },
         send_targets: ['{source_channel}'],
       },
     ];

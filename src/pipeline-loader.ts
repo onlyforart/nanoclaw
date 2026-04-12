@@ -95,26 +95,45 @@ export function reconcilePipelineTasks(
       });
       logger.info({ taskId, version: spec.version }, 'Pipeline task created');
     } else {
-      // Check version — only update if spec version is higher
-      const storedVersion = getTaskVersion(taskId);
-      if (spec.version > storedVersion) {
-        // Only update structurally-derived fields (tools, execution mode).
-        // Operational settings (model, prompt, schedule, send targets) are
-        // owned by the DB — editable via web UI, never overridden by spec.
-        updateTask(taskId, {
-          allowedTools: resolvedTools,
-          executionMode:
-            spec.type === 'host_pipeline' ? 'host_pipeline' : 'container',
-          subscribedEventTypes: spec.subscribed_event_types ?? null,
-        });
+      // Compare spec-derived values against DB — only update fields that
+      // actually changed in the spec. DB always wins for operational
+      // settings (model, prompt, schedule, send targets).
+      const changes: Record<string, unknown> = {};
+      const changeLog: string[] = [];
+
+      // Tools: derived from profiles + enabled — spec-owned
+      const existingTools = JSON.stringify(existing.allowedTools ?? []);
+      const specTools = JSON.stringify(resolvedTools);
+      if (existingTools !== specTools) {
+        changes.allowedTools = resolvedTools;
+        changeLog.push(`allowedTools: ${existingTools} → ${specTools}`);
+      }
+
+      // Execution mode: spec-owned
+      const specExecMode = spec.type === 'host_pipeline' ? 'host_pipeline' : 'container';
+      if ((existing.executionMode || 'container') !== specExecMode) {
+        changes.executionMode = specExecMode;
+        changeLog.push(`executionMode: ${existing.executionMode} → ${specExecMode}`);
+      }
+
+      // Subscribed event types: spec-owned
+      const existingEvents = JSON.stringify(existing.subscribedEventTypes ?? null);
+      const specEvents = JSON.stringify(spec.subscribed_event_types ?? null);
+      if (existingEvents !== specEvents) {
+        changes.subscribedEventTypes = spec.subscribed_event_types ?? null;
+        changeLog.push(`subscribedEventTypes: ${existingEvents} → ${specEvents}`);
+      }
+
+      if (Object.keys(changes).length > 0) {
+        updateTask(taskId, changes as any);
         logger.info(
-          { taskId, oldVersion: storedVersion, newVersion: spec.version },
-          'Pipeline task updated',
+          { taskId, changes: changeLog },
+          'Pipeline task updated (spec-derived fields only)',
         );
       }
     }
 
-    // Store version in a router_state key for comparison
+    // Always store the current spec version for reference
     setTaskVersion(taskId, spec.version);
   }
 }
