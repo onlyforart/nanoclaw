@@ -699,6 +699,35 @@ server.tool(
   },
 );
 
+server.tool(
+  're_extract_observation',
+  'Request additional structured fields from an observation. Fields are extracted from the raw message using server-controlled prompts. You supply field names from the registered catalog — you cannot supply prompt text. Cached per (observation_id, field_name, sanitiser_version).',
+  {
+    observation_id: z.number().int().describe('The observation ID to re-extract from'),
+    request_fields: z.array(z.string()).describe('Field names from the catalog (e.g. ["code_snippets", "error_messages"])'),
+    sanitiser_version: z.string().optional().describe('Sanitiser version for cache key (default: "1")'),
+  },
+  async (args) => {
+    const result = await writeIpcFileAndWaitForResult(TASKS_DIR, {
+      type: 'reextract_observation',
+      observationId: args.observation_id,
+      requestFields: args.request_fields,
+      sanitiserVersion: args.sanitiser_version || '1',
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+
+    if (!result.success) {
+      return { content: [{ type: 'text' as const, text: `Error: ${result.error}` }], isError: true };
+    }
+
+    const r = result as any;
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify({ fields: r.fields }, null, 2) }],
+    };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);
