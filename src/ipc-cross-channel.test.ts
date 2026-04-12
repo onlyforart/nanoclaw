@@ -150,6 +150,7 @@ describe('cross_channel_message IPC', () => {
     expect(sendMessage).toHaveBeenCalledWith(
       'slack:CSUPPORT',
       'Alert: something happened',
+      undefined,
     );
   });
 
@@ -196,7 +197,7 @@ describe('cross_channel_message IPC', () => {
 
     await runOnce();
 
-    expect(sendMessage).toHaveBeenCalledWith('slack:CSUPPORT', 'From main');
+    expect(sendMessage).toHaveBeenCalledWith('slack:CSUPPORT', 'From main', undefined);
   });
 
   it('cleans up the IPC file after processing', async () => {
@@ -297,6 +298,7 @@ describe('cross_channel_message IPC', () => {
     expect(sendMessage).toHaveBeenCalledWith(
       'slack:CSUPPORT',
       'Should be allowed',
+      undefined,
     );
   });
 
@@ -323,7 +325,7 @@ describe('cross_channel_message IPC', () => {
 
     await runOnce();
 
-    expect(sendMessage).toHaveBeenCalledWith('slack:CSUPPORT', 'Unrestricted');
+    expect(sendMessage).toHaveBeenCalledWith('slack:CSUPPORT', 'Unrestricted', undefined);
   });
 
   it('allows cross_channel_message when no sourceTaskId is present (backwards-compatible)', async () => {
@@ -335,7 +337,7 @@ describe('cross_channel_message IPC', () => {
 
     await runOnce();
 
-    expect(sendMessage).toHaveBeenCalledWith('slack:CSUPPORT', 'No task ID');
+    expect(sendMessage).toHaveBeenCalledWith('slack:CSUPPORT', 'No task ID', undefined);
   });
 
   // --- idempotency ---
@@ -363,7 +365,7 @@ describe('cross_channel_message IPC', () => {
 
     // Should only have been called once (first send)
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage).toHaveBeenCalledWith('slack:CSUPPORT', 'First send');
+    expect(sendMessage).toHaveBeenCalledWith('slack:CSUPPORT', 'First send', undefined);
   });
 
   it('allows different idempotency_keys for same target', async () => {

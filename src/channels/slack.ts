@@ -153,7 +153,7 @@ export class SlackChannel implements Channel {
     await this.syncChannelMetadata();
   }
 
-  async sendMessage(jid: string, text: string): Promise<void> {
+  async sendMessage(jid: string, text: string, options?: { threadTs?: string }): Promise<void> {
     const channelId = jid.replace(/^slack:/, '');
 
     if (!this.connected) {
@@ -170,6 +170,7 @@ export class SlackChannel implements Channel {
       await this.app.client.chat.postMessage({
         channel: channelId,
         ...payload,
+        ...(options?.threadTs && { thread_ts: options.threadTs }),
       });
       logger.info({ jid, length: text.length }, 'Slack message sent');
     } catch (err) {

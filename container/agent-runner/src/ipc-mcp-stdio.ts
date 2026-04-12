@@ -111,6 +111,7 @@ server.tool(
         'The name of the target group as it appears in available_groups.json (e.g. "support-channel"). Case-insensitive match.',
       ),
     text: z.string().describe('The message text to send'),
+    thread_ts: z.string().optional().describe('Reply in a thread attached to this message timestamp. Use the source_message_id from an observation to thread replies on the original message.'),
   },
   async (args) => {
     // Read available_groups.json to resolve group name to JID
@@ -159,11 +160,12 @@ server.tool(
       };
     }
 
-    const data = {
+    const data: Record<string, string | undefined> = {
       type: 'cross_channel_message',
       targetChatJid: match.jid,
       text: args.text,
       sourceGroup: groupFolder,
+      threadTs: args.thread_ts || undefined,
       timestamp: new Date().toISOString(),
     };
 

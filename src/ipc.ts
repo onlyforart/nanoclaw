@@ -27,7 +27,7 @@ import { callExtractionLLM } from './sanitiser/llm-client.js';
 import { IntakeSourceContext, RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
-  sendMessage: (jid: string, text: string) => Promise<void>;
+  sendMessage: (jid: string, text: string, options?: { threadTs?: string }) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   updateGroup: (
@@ -263,7 +263,12 @@ export function startIpcWatcher(deps: IpcDeps): void {
                     writeIpcResult(`${filePath}.result`, crossChannelResult);
                     continue;
                   }
-                  await deps.sendMessage(data.targetChatJid, data.text);
+                  const threadTs = data.threadTs as string | undefined;
+                  await deps.sendMessage(
+                    data.targetChatJid,
+                    data.text,
+                    threadTs ? { threadTs } : undefined,
+                  );
                   if (idempotencyKey) {
                     recordCrossChannelDelivery(
                       data.targetChatJid,
@@ -689,7 +694,11 @@ function handleUpdateGroup(
 
 // --- Event bus IPC handlers ---
 
-function handlePublishEvent(data: IpcData, sourceGroup: string): IpcResult {
+function handlePublishEvent(
+  data: IpcData,
+  sourceGroup: string,
+  deps?: IpcDeps,
+): IpcResult {
   const eventType = data.eventType as string | undefined;
   const payload = data.payload as string | undefined;
   if (!eventType || !payload) {
@@ -709,6 +718,22 @@ function handlePublishEvent(data: IpcData, sourceGroup: string): IpcResult {
   );
   if (result.isNew) {
     bumpConsumerTaskNextRun(eventType);
+
+    // Auto-acknowledge escalations in the source channel
+    if (eventType === 'candidate.escalation' && deps?.sendMessage) {
+      try {
+        const payloadObj = JSON.parse(payload);
+        const sourceChannel = payloadObj.source_channel;
+        const sourceMessageId = payloadObj.source_message_id;
+        if (sourceChannel) {
+          deps.sendMessage(
+            sourceChannel,
+            'Looking into this — investigation in progress.',
+            sourceMessageId ? { threadTs: sourceMessageId } : undefined,
+          ).catch((err) => logger.warn({ err }, 'Auto-ack send failed'));
+        }
+      } catch { /* payload parse failure — skip auto-ack */ }
+    }
   }
   return { success: true, ...result };
 }
@@ -811,7 +836,11 @@ function handleReadChatMessages(
 
 async function handleReextractObservation(data: IpcData): Promise<IpcResult> {
   // Ensure field catalog is loaded
-  try { loadFieldCatalog(); } catch { /* catalog file may not exist */ }
+  try {
+    loadFieldCatalog();
+  } catch {
+    /* catalog file may not exist */
+  }
 
   const observationId = data.observationId as number | undefined;
   const requestFields = data.requestFields as string[] | undefined;
@@ -861,10 +890,18 @@ async function handleReextractObservation(data: IpcData): Promise<IpcResult> {
         });
 
         const resultJson = response.response;
-        cacheReextraction(observationId, fieldName, sanitiserVersion, resultJson);
+        cacheReextraction(
+          observationId,
+          fieldName,
+          sanitiserVersion,
+          resultJson,
+        );
         fields[fieldName] = resultJson;
       } catch (err) {
-        logger.warn({ fieldName, observationId, err }, 'Re-extraction LLM call failed');
+        logger.warn(
+          { fieldName, observationId, err },
+          'Re-extraction LLM call failed',
+        );
         fields[fieldName] = null;
       }
     }
@@ -918,7 +955,7 @@ export async function processTaskIpc(
         deps,
       );
     case 'publish_event':
-      return handlePublishEvent(data, sourceGroup);
+      return handlePublishEvent(data, sourceGroup, deps);
     case 'consume_events':
       return handleConsumeEvents(data);
     case 'ack_event':

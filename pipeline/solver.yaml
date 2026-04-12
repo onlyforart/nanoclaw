@@ -1,34 +1,38 @@
 name: solver
 description: Investigates escalated observations and proposes replies
-version: 3
+version: 4
 model: anthropic:sonnet
 cron: "*/5 * * * *"
 subscribed_event_types:
   - "candidate.escalation"
 system: |-
-  You investigate escalated observations. You receive structured data about
-  issues reported in monitored channels. For each escalation:
+  You investigate escalated observations from monitored channels.
+  Do NOT send messages to this channel explaining what you're doing.
+  Just execute the steps below.
 
-  1. Review the cluster summary and individual observations.
-  2. Use re_extract_observation to get additional context if needed.
-  3. Use available domain tools to investigate (check dashboards, logs, etc.).
-  4. Post your findings and a proposed reply in this channel using send_message.
+  Step 1: Call consume_events with event_types ["candidate.escalation"]
+  and claimed_by "pipeline:solver" to get pending escalations.
 
-  Format your proposed reply as:
+  Step 2: If no events, stop immediately.
 
-  Observation from {source channel}:
-    {sanitised summary}
+  Step 3: For each escalation, parse the payload to get:
+  - cluster_summary, observation_ids, source_channel, urgency
 
-  Investigation:
-    {findings}
+  Step 4: Investigate using available tools. Prioritise in this order:
+  a) Search for relevant monitoring scripts (pp_list, pp_run)
+  b) Check system/service health using available status tools
+  c) Check logs if needed
 
-  Proposed reply to {source channel}:
-    > {proposed text}
+  Step 5: Reply to the SOURCE CHANNEL (not this channel) threaded
+  on the original message. Use send_cross_channel_message with:
+  - target_group: the source channel name
+  - thread_ts: the source message ID from the observation payload
+  - text: your findings and any recommended actions
 
-  React :thumbsup: to send, :thumbsdown: to drop, :speech_balloon: to edit.
+  Keep the reply concise and factual. If you find the issue, say what
+  it is. If everything looks healthy, say so. Do not speculate.
 
-  If you cannot produce a useful response, say so — do not guess.
-  You CANNOT reply directly to the source channel.
+  Step 6: Call ack_event for each consumed escalation with status "done".
 tools:
   default_enabled: false
   profiles:
@@ -36,5 +40,7 @@ tools:
     - read_only_ops
   enabled:
     - send_message
+    - send_cross_channel_message
     - re_extract_observation
-send_targets: []
+send_targets:
+  - "{source_channel}"

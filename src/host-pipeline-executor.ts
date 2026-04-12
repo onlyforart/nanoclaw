@@ -163,6 +163,7 @@ export async function executeHostPipeline(
           channel_id: chatJid,
           timestamp: msg.timestamp,
           is_bot_message: !!msg.is_bot_message,
+          source_message_id: msg.id,
         },
         deps,
         schema,
@@ -226,6 +227,7 @@ async function processObservation(
     channel_id: string;
     timestamp: string;
     is_bot_message: boolean;
+    source_message_id?: string;
   },
   deps: PipelineDeps,
   schema: SanitiserSchema,
@@ -266,7 +268,12 @@ async function processObservation(
   });
 
   logger.debug(
-    { obsId, model: deps.model, responseLength: llmResponse.response.length, response: llmResponse.response.slice(0, 500) },
+    {
+      obsId,
+      model: deps.model,
+      responseLength: llmResponse.response.length,
+      response: llmResponse.response.slice(0, 500),
+    },
     'Layer 2 LLM response',
   );
 
@@ -310,6 +317,8 @@ async function processObservation(
       'pipeline:sanitiser',
       JSON.stringify({
         observation_id: obsId,
+        source_message_id: meta.source_message_id || null,
+        source_channel: meta.channel_id,
         sanitised: layer3.sanitised_json,
       }),
       `obs:${obsId}`,

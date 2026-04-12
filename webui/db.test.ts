@@ -326,7 +326,7 @@ describe('updateGroup', () => {
 describe('getTasksByGroup', () => {
   it('returns tasks for a group', () => {
     const tasks = getTasksByGroup('whatsapp_main');
-    expect(tasks).toHaveLength(4); // 2 regular + 2 pipeline
+    expect(tasks).toHaveLength(2); // pipeline tasks excluded
   });
 
   it('returns empty array for group with no tasks', () => {

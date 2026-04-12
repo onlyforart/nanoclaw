@@ -69,4 +69,5 @@ paths = [
   '''SLACK_SETUP\.md$''',
   '''SKILL\.md$''',
   '''repo-tokens/''',
+  '''^data/''',
 ]
