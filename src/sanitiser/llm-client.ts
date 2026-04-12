@@ -47,12 +47,46 @@ export async function callExtractionLLM(
 
 // --- Ollama ---
 
+/**
+ * Resolve a short Ollama model name against the installed model list.
+ * Same logic as container/agent-runner/src/ollama-chat-engine.ts resolveOllamaModel.
+ */
+async function resolveOllamaModel(
+  requested: string,
+  host: string,
+): Promise<string> {
+  try {
+    const res = await fetch(`${host}/api/tags`);
+    if (!res.ok) return requested;
+    const data = (await res.json()) as { models?: Array<{ name: string }> };
+    const installed = (data.models ?? []).map((m) => m.name);
+
+    const nameOnly = (m: string) => m.split(':')[0];
+    // Exact full match
+    const exactFull = installed.find((m) => m === requested);
+    if (exactFull) return exactFull;
+    // Exact name-before-tag match
+    const exactName = installed.find((m) => nameOnly(m) === requested);
+    if (exactName) return exactName;
+    // Prefix match on full string
+    const prefixFull = installed.find((m) => m.startsWith(requested));
+    if (prefixFull) return prefixFull;
+    // Prefix match on name part
+    const prefixName = installed.find((m) => nameOnly(m).startsWith(requested));
+    if (prefixName) return prefixName;
+  } catch {
+    // Fall through to requested name
+  }
+  return requested;
+}
+
 async function callOllama(
   request: LlmRequest,
   options?: LlmClientOptions,
 ): Promise<LlmResponse> {
   const host = options?.ollamaHost || process.env.OLLAMA_HOST || 'http://localhost:11434';
-  const modelName = request.model.replace(/^ollama:/, '');
+  const shortName = request.model.replace(/^ollama:/, '');
+  const modelName = await resolveOllamaModel(shortName, host);
 
   const body: Record<string, unknown> = {
     model: modelName,
