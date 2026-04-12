@@ -872,6 +872,10 @@ async function runAnthropicApiMode(containerInput: ContainerInput): Promise<void
     ? ['send_message', 'send_cross_channel_message', 'list_tasks', 'publish_event', 'consume_events', 'ack_event', 'submit_to_pipeline', 'read_chat_messages', 're_extract_observation']
     : ['send_message', 'send_cross_channel_message', 'schedule_task', 'list_tasks', 'pause_task', 'resume_task', 'cancel_task', 'update_task', 'register_group', 'update_group', 'list_groups', 'publish_event', 'consume_events', 'ack_event', 'submit_to_pipeline', 'read_chat_messages', 're_extract_observation'];
 
+  // Pipeline allow-list
+  const allowedToolsSet = containerInput.allowedTools
+    ? new Set(containerInput.allowedTools)
+    : null;
   if (allowedToolsSet) {
     nanoclawTools = nanoclawTools.filter((t) => allowedToolsSet.has(t));
   }
