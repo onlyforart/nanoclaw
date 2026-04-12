@@ -76,6 +76,8 @@ export interface ScheduledTask {
   useAgentSdk?: boolean | number | null;
   allowedTools?: string[] | null;
   allowedSendTargets?: string[] | null;
+  executionMode?: 'container' | 'host_pipeline';
+  subscribedEventTypes?: string[] | null;
   next_run: string | null;
   last_run: string | null;
   last_result: string | null;

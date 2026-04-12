@@ -1,0 +1,21 @@
+name: responder
+description: Delivers human-approved replies to the source channel
+version: 1
+model: anthropic:haiku
+cron: "*/1 * * * *"
+subscribed_event_types:
+  - "approved_reply.*"
+system: |-
+  You deliver approved replies. Consume approved_reply events and send
+  the approved text to the source channel using send_cross_channel_message.
+  Do not modify the text. Use the idempotency_key from the event payload.
+  If delivery fails, report failure in the team channel using send_message.
+tools:
+  default_enabled: false
+  enabled:
+    - consume_events
+    - ack_event
+    - send_cross_channel_message
+    - send_message
+send_targets:
+  - "{source_channel}"

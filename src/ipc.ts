@@ -6,6 +6,7 @@ import { CronExpressionParser } from 'cron-parser';
 import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import {
   ackEvent,
+  bumpConsumerTaskNextRun,
   consumeEvents,
   createTask,
   deleteTask,
@@ -99,10 +100,39 @@ export function hasRecentIpcDelivery(
   return valid.some((e) => e.textHash === targetHash);
 }
 
+// --- Cross-channel idempotency tracking ---
+const IDEMPOTENCY_TTL_MS = 5 * 60 * 1000; // 5 minutes
+// key: `${targetJid}:${idempotencyKey}` → timestamp
+const crossChannelIdempotency = new Map<string, number>();
+
+function isCrossChannelDuplicate(
+  targetJid: string,
+  idempotencyKey: string,
+): boolean {
+  const key = `${targetJid}:${idempotencyKey}`;
+  const ts = crossChannelIdempotency.get(key);
+  if (ts && Date.now() - ts < IDEMPOTENCY_TTL_MS) return true;
+  return false;
+}
+
+function recordCrossChannelDelivery(
+  targetJid: string,
+  idempotencyKey: string,
+): void {
+  const key = `${targetJid}:${idempotencyKey}`;
+  crossChannelIdempotency.set(key, Date.now());
+}
+
 /** Reset singleton guard and delivery tracking — test-only. */
 export function _resetIpcWatcherForTests(): void {
   ipcWatcherRunning = false;
   recentDeliveries.clear();
+  crossChannelIdempotency.clear();
+}
+
+/** Reset only the singleton guard so startIpcWatcher can run again — test-only. */
+export function _resetIpcWatcherGuardForTests(): void {
+  ipcWatcherRunning = false;
 }
 
 /** Reset delivery tracking only — test-only. */
@@ -181,6 +211,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
                 data.targetChatJid &&
                 data.text
               ) {
+                let crossChannelResult: IpcResult = { success: false };
                 // Cross-channel: any group can send to any registered group
                 const targetGroup = registeredGroups[data.targetChatJid];
                 if (targetGroup) {
@@ -200,10 +231,41 @@ export function startIpcWatcher(deps: IpcDeps): void {
                         },
                         'Cross-channel message blocked: target not in allowed_send_targets',
                       );
+                      crossChannelResult = {
+                        success: false,
+                        error: 'Target not in allowed_send_targets',
+                      };
+                      writeIpcResult(`${filePath}.result`, crossChannelResult);
                       continue;
                     }
                   }
+                  // Idempotency check
+                  const idempotencyKey = data.idempotencyKey as
+                    | string
+                    | undefined;
+                  if (
+                    idempotencyKey &&
+                    isCrossChannelDuplicate(data.targetChatJid, idempotencyKey)
+                  ) {
+                    logger.info(
+                      {
+                        targetChatJid: data.targetChatJid,
+                        idempotencyKey,
+                      },
+                      'Cross-channel message deduplicated by idempotency key',
+                    );
+                    crossChannelResult = { success: true };
+                    writeIpcResult(`${filePath}.result`, crossChannelResult);
+                    continue;
+                  }
                   await deps.sendMessage(data.targetChatJid, data.text);
+                  if (idempotencyKey) {
+                    recordCrossChannelDelivery(
+                      data.targetChatJid,
+                      idempotencyKey,
+                    );
+                  }
+                  crossChannelResult = { success: true };
                   logger.info(
                     {
                       targetChatJid: data.targetChatJid,
@@ -217,7 +279,12 @@ export function startIpcWatcher(deps: IpcDeps): void {
                     { targetChatJid: data.targetChatJid, sourceGroup },
                     'Cross-channel message blocked: target group not registered',
                   );
+                  crossChannelResult = {
+                    success: false,
+                    error: 'Target group not registered',
+                  };
                 }
+                writeIpcResult(`${filePath}.result`, crossChannelResult);
               }
               fs.unlinkSync(filePath);
             } catch (err) {
@@ -635,6 +702,9 @@ function handlePublishEvent(data: IpcData, sourceGroup: string): IpcResult {
     dedupeKey,
     ttlSeconds,
   );
+  if (result.isNew) {
+    bumpConsumerTaskNextRun(eventType);
+  }
   return { success: true, ...result };
 }
 
@@ -697,7 +767,9 @@ function handleSubmitToPipeline(data: IpcData, sourceGroup: string): IpcResult {
     insertIntakeLog(eventResult.id, rawTextHash, sourceContext);
   }
 
-  // Stub: bumpConsumerTaskNextRun('intake.raw') — wired in PR 4
+  if (eventResult.isNew) {
+    bumpConsumerTaskNextRun('intake.raw');
+  }
   return {
     success: true,
     eventId: eventResult.id,

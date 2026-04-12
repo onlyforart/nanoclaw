@@ -10,7 +10,12 @@ import { RegisteredGroup } from './types.js';
 // so we create real files in a temp directory to test end-to-end.
 
 // Import startIpcWatcher and the deps interface
-import { IpcDeps, startIpcWatcher, _resetIpcWatcherForTests } from './ipc.js';
+import {
+  IpcDeps,
+  startIpcWatcher,
+  _resetIpcWatcherForTests,
+  _resetIpcWatcherGuardForTests,
+} from './ipc.js';
 import { _initTestDatabase, createTask } from './db.js';
 
 const MAIN_GROUP: RegisteredGroup = {
@@ -331,5 +336,86 @@ describe('cross_channel_message IPC', () => {
     await runOnce();
 
     expect(sendMessage).toHaveBeenCalledWith('slack:CSUPPORT', 'No task ID');
+  });
+
+  // --- idempotency ---
+
+  it('deduplicates cross_channel_message with same idempotency_key', async () => {
+    writeMessage('slack_monitoring-channel', {
+      type: 'cross_channel_message',
+      targetChatJid: 'slack:CSUPPORT',
+      text: 'First send',
+      idempotencyKey: 'idem-1',
+    });
+
+    await runOnce();
+
+    _resetIpcWatcherGuardForTests();
+
+    writeMessage('slack_monitoring-channel', {
+      type: 'cross_channel_message',
+      targetChatJid: 'slack:CSUPPORT',
+      text: 'Duplicate send',
+      idempotencyKey: 'idem-1',
+    });
+
+    await runOnce();
+
+    // Should only have been called once (first send)
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith('slack:CSUPPORT', 'First send');
+  });
+
+  it('allows different idempotency_keys for same target', async () => {
+    writeMessage('slack_monitoring-channel', {
+      type: 'cross_channel_message',
+      targetChatJid: 'slack:CSUPPORT',
+      text: 'Message A',
+      idempotencyKey: 'key-a',
+    });
+
+    await runOnce();
+
+    _resetIpcWatcherGuardForTests();
+
+    writeMessage('slack_monitoring-channel', {
+      type: 'cross_channel_message',
+      targetChatJid: 'slack:CSUPPORT',
+      text: 'Message B',
+      idempotencyKey: 'key-b',
+    });
+
+    await runOnce();
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+  });
+
+  // --- .result file confirmation ---
+
+  it('writes .result file after cross-channel delivery', async () => {
+    writeMessage('slack_monitoring-channel', {
+      type: 'cross_channel_message',
+      targetChatJid: 'slack:CSUPPORT',
+      text: 'Confirm delivery',
+    });
+
+    await runOnce();
+
+    // The message .json is deleted, and a .result should exist
+    const messagesDir = path.join(
+      tmpDir,
+      'ipc',
+      'slack_monitoring-channel',
+      'messages',
+    );
+    const resultFiles = fs
+      .readdirSync(messagesDir)
+      .filter((f) => f.endsWith('.result'));
+    expect(resultFiles).toHaveLength(1);
+
+    const result = JSON.parse(
+      fs.readFileSync(path.join(messagesDir, resultFiles[0]), 'utf-8'),
+    );
+    expect(result.success).toBe(true);
   });
 });

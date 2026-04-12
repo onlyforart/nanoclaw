@@ -236,15 +236,29 @@ function createSchema(database: Database.Database): void {
 
   // Add capability allow-lists (observation pipeline)
   try {
-    database.exec(
-      `ALTER TABLE scheduled_tasks ADD COLUMN allowed_tools TEXT`,
-    );
+    database.exec(`ALTER TABLE scheduled_tasks ADD COLUMN allowed_tools TEXT`);
   } catch {
     /* column already exists */
   }
   try {
     database.exec(
       `ALTER TABLE scheduled_tasks ADD COLUMN allowed_send_targets TEXT`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
+  // Add execution_mode and subscribed_event_types columns (pipeline YAML loader)
+  try {
+    database.exec(
+      `ALTER TABLE scheduled_tasks ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'container'`,
+    );
+  } catch {
+    /* column already exists */
+  }
+  try {
+    database.exec(
+      `ALTER TABLE scheduled_tasks ADD COLUMN subscribed_event_types TEXT`,
     );
   } catch {
     /* column already exists */
@@ -613,8 +627,8 @@ export function createTask(
 ): void {
   db.prepare(
     `
-    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, model, temperature, timezone, max_tool_rounds, timeout_ms, use_agent_sdk, allowed_tools, allowed_send_targets, next_run, status, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, model, temperature, timezone, max_tool_rounds, timeout_ms, use_agent_sdk, allowed_tools, allowed_send_targets, execution_mode, subscribed_event_types, next_run, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `,
   ).run(
     task.id,
@@ -632,13 +646,17 @@ export function createTask(
     task.useAgentSdk ? 1 : 0,
     task.allowedTools ? JSON.stringify(task.allowedTools) : null,
     task.allowedSendTargets ? JSON.stringify(task.allowedSendTargets) : null,
+    task.executionMode || 'container',
+    task.subscribedEventTypes
+      ? JSON.stringify(task.subscribedEventTypes)
+      : null,
     task.next_run,
     task.status,
     task.created_at,
   );
 }
 
-const TASK_SELECT = `SELECT id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, model, temperature, timezone, max_tool_rounds AS maxToolRounds, timeout_ms AS timeoutMs, use_agent_sdk AS useAgentSdk, allowed_tools, allowed_send_targets, next_run, last_run, last_result, status, created_at FROM scheduled_tasks`;
+const TASK_SELECT = `SELECT id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, model, temperature, timezone, max_tool_rounds AS maxToolRounds, timeout_ms AS timeoutMs, use_agent_sdk AS useAgentSdk, allowed_tools, allowed_send_targets, execution_mode AS executionMode, subscribed_event_types, next_run, last_run, last_result, status, created_at FROM scheduled_tasks`;
 
 function parseTaskRow(row: any): ScheduledTask {
   return {
@@ -646,6 +664,10 @@ function parseTaskRow(row: any): ScheduledTask {
     allowedTools: row.allowed_tools ? JSON.parse(row.allowed_tools) : null,
     allowedSendTargets: row.allowed_send_targets
       ? JSON.parse(row.allowed_send_targets)
+      : null,
+    executionMode: row.executionMode || 'container',
+    subscribedEventTypes: row.subscribed_event_types
+      ? JSON.parse(row.subscribed_event_types)
       : null,
   };
 }
@@ -687,6 +709,8 @@ export function updateTask(
       | 'useAgentSdk'
       | 'allowedTools'
       | 'allowedSendTargets'
+      | 'executionMode'
+      | 'subscribedEventTypes'
     >
   >,
 ): void {
@@ -748,6 +772,18 @@ export function updateTask(
     values.push(
       updates.allowedSendTargets
         ? JSON.stringify(updates.allowedSendTargets)
+        : null,
+    );
+  }
+  if (updates.executionMode !== undefined) {
+    fields.push('execution_mode = ?');
+    values.push(updates.executionMode || 'container');
+  }
+  if (updates.subscribedEventTypes !== undefined) {
+    fields.push('subscribed_event_types = ?');
+    values.push(
+      updates.subscribedEventTypes
+        ? JSON.stringify(updates.subscribedEventTypes)
         : null,
     );
   }
@@ -1043,6 +1079,26 @@ export function updateRegisteredGroup(
   db.prepare(
     `UPDATE registered_groups SET ${fields.join(', ')} WHERE jid = ?`,
   ).run(...values);
+}
+
+// --- Pipeline helpers ---
+
+export function bumpConsumerTaskNextRun(eventType: string): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `UPDATE scheduled_tasks
+       SET next_run = ?
+     WHERE status = 'active'
+       AND subscribed_event_types LIKE ?`,
+  ).run(now, `%${eventType}%`);
+}
+
+export function getPassiveGroups(): Array<{ jid: string; folder: string }> {
+  return db
+    .prepare(
+      `SELECT jid, folder FROM registered_groups WHERE mode = 'passive'`,
+    )
+    .all() as Array<{ jid: string; folder: string }>;
 }
 
 // --- Events ---
