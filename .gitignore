@@ -1,17 +1,47 @@
 # Dependencies
 node_modules/
-
+.npm-cache/
 # Build output
 dist/
+
+# Local config (installation-specific, not committed)
+.gitleaks-local.toml
 
 # Local data & auth
 store/
 data/
 logs/
 
+# Groups - only track base structure and specific CLAUDE.md files
+groups/*
+!groups/main/
+!groups/global/
+groups/main/*
+groups/global/*
+!groups/main/CLAUDE.md
+!groups/global/CLAUDE.md
+# Shared pagepilot script library — never commit, even if `groups/*`
+# is ever loosened. Scripts may contain selectors and URLs for
+# private monitoring targets.
+groups/.pagepilot/
+
 # Secrets
 *.keys.json
 .env
+
+# MCP servers
+mcp-servers/
+**/mcp-servers/
+
+# Backups
+backups/
+
+# Temp files
+.tmp-*
+
+# Runtime state and local scripts
+nanoclaw.pid
+start-nanoclaw.sh
 
 # OS
 .DS_Store
@@ -19,5 +49,11 @@ logs/
 # IDE
 .idea/
 .vscode/
+
+# Skills system — ignore all by default (copied from other repos per-install),
+# then whitelist skills that are part of this repo.
+.nanoclaw/
+container/skills/*
+!container/skills/agent-browser/
 
 agents-sdk-docs

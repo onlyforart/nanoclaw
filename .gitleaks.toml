@@ -1,0 +1,72 @@
+# Gitleaks configuration for NanoClaw
+# Extends the built-in rules (Slack tokens, Anthropic keys, AWS, etc.)
+# with custom rules for messaging platform identifiers.
+
+[extend]
+# Use all built-in gitleaks rules
+useDefault = true
+
+# Custom rules for messaging platform identifiers
+[[rules]]
+id = "whatsapp-phone-number"
+description = "WhatsApp phone number in JID format"
+regex = '''\d{10,15}@s\.whatsapp\.net'''
+tags = ["pii", "whatsapp"]
+[rules.allowlist]
+paths = ['''\.test\.[tj]s$''']
+
+[[rules]]
+id = "whatsapp-group-jid"
+description = "WhatsApp group JID"
+regex = '''\d{15,}@g\.us'''
+tags = ["pii", "whatsapp"]
+[rules.allowlist]
+# Allow the example JID used in upstream docs/code, plus test files
+regexes = ['''120363336345536173@g\.us''']
+paths = ['''\.test\.[tj]s$''']
+
+[[rules]]
+id = "whatsapp-lid"
+description = "WhatsApp LID identifier"
+regex = '''\d{10,}:\d+@lid'''
+tags = ["pii", "whatsapp"]
+[rules.allowlist]
+paths = ['''\.test\.[tj]s$''']
+
+[[rules]]
+id = "slack-user-id"
+description = "Slack user ID (real, not test fixtures)"
+# Slack user IDs: U followed by alphanumeric chars that must include digits
+regex = '''(?:^|[^A-Z0-9_])U[A-Z0-9]*[0-9][A-Z0-9]*(?:[^A-Z0-9_]|$)'''
+tags = ["pii", "slack"]
+[rules.allowlist]
+# Allow test fixtures and example IDs in docs/comments
+regexes = ['''U_\w+''', '''U12345''', '''U9[^A-Z0-9]''']
+paths = ['''\.test\.[tj]s$''']
+
+[[rules]]
+id = "slack-channel-id"
+description = "Slack channel ID (real, not test fixtures)"
+# Slack channel IDs: C followed by alphanumeric chars that must include digits
+regex = '''(?:^|[^A-Z0-9_])C0[A-Z0-9]{7,10}(?:[^A-Z0-9_]|$)'''
+tags = ["pii", "slack"]
+[rules.allowlist]
+paths = ['''\.test\.[tj]s$''']
+
+# Installation-specific rules (e.g. proprietary identifiers) go in
+# .gitleaks-local.toml (gitignored). The pre-commit hook uses the local
+# file if present, which extends this one via [extend] path.
+
+# Global allowlist — paths and patterns that are safe to skip.
+# IMPORTANT: this applies to ALL rules, including installation-specific
+# ones in .gitleaks-local.toml. Only put paths here that are genuinely
+# safe for every rule. Test files are NOT globally safe — proprietary
+# names in test fixtures must be caught. Use per-rule allowlists instead.
+[allowlist]
+paths = [
+  '''\.env\.example$''',
+  '''docs/SPEC\.md$''',
+  '''SLACK_SETUP\.md$''',
+  '''SKILL\.md$''',
+  '''repo-tokens/''',
+]

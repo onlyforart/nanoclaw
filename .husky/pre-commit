@@ -1,0 +1,39 @@
+npm run format:fix
+
+# Block force-added files that .gitignore would normally exclude.
+# This catches files added with "git add -f" or explicit paths that override
+# ignore rules — a common mistake when AI assistants stage files.
+IGNORED_BUT_STAGED=$(git diff --cached --name-only --diff-filter=A | while read -r f; do
+  if git check-ignore -q "$f" 2>/dev/null; then
+    echo "  $f"
+  fi
+done)
+if [ -n "$IGNORED_BUT_STAGED" ]; then
+  echo ""
+  echo "ERROR: The following staged files are covered by .gitignore:"
+  echo "$IGNORED_BUT_STAGED"
+  echo ""
+  echo "These files should not be committed. Remove them with:"
+  echo "  git reset HEAD <file>"
+  echo ""
+  exit 1
+fi
+
+# Secret scanning — block commits containing secrets or PII
+GITLEAKS="${HOME}/.local/bin/gitleaks"
+if [ ! -x "$GITLEAKS" ]; then
+  GITLEAKS="$(command -v gitleaks 2>/dev/null || true)"
+fi
+
+if [ -n "$GITLEAKS" ]; then
+  # Prefer local config (extends tracked config with installation-specific rules)
+  if [ -f ".gitleaks-local.toml" ]; then
+    GITLEAKS_CONFIG="--config .gitleaks-local.toml"
+  else
+    GITLEAKS_CONFIG=""
+  fi
+  "$GITLEAKS" git --staged --pre-commit --verbose --redact $GITLEAKS_CONFIG
+else
+  echo "WARNING: gitleaks not found — skipping secret scan"
+  echo "Install: https://github.com/gitleaks/gitleaks#installing"
+fi
