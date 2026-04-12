@@ -19,6 +19,9 @@ import {
   getObservations,
   getObservationById,
   upsertLabel,
+  getPipelineTasks,
+  getPipelineTokenUsage,
+  getPassiveChannels,
 } from './db.js';
 
 let tmpDir: string;
@@ -82,6 +85,11 @@ beforeEach(() => {
       status TEXT NOT NULL,
       result TEXT,
       error TEXT,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      cache_read_input_tokens INTEGER,
+      cache_creation_input_tokens INTEGER,
+      cost_usd REAL,
       FOREIGN KEY (task_id) REFERENCES scheduled_tasks(id)
     );
 
@@ -171,12 +179,27 @@ beforeEach(() => {
     'task-3', 'whatsapp_family', 'family@g.us', 'Family reminder', 'cron', '0 18 * * *', '2024-06-03T18:00:00.000Z', 'paused', '2024-02-01T00:00:00.000Z', 'isolated',
   );
 
+  // Seed pipeline tasks
+  db.prepare(`INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, next_run, status, created_at, context_mode, model, execution_mode, allowed_tools, subscribed_event_types) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    'pipeline:sanitiser', 'whatsapp_main', 'main@s.whatsapp.net', 'Extract observations', 'cron', '*/1 * * * *', '2024-06-03T10:00:00.000Z', 'active', '2024-01-01T00:00:00.000Z', 'isolated', 'ollama:gemma4', 'host_pipeline', '[]', '["intake.raw"]',
+  );
+  db.prepare(`INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, next_run, status, created_at, context_mode, model, execution_mode, allowed_tools) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    'pipeline:monitor', 'whatsapp_main', 'main@s.whatsapp.net', 'Cluster observations', 'cron', '*/2 * * * *', '2024-06-03T10:00:00.000Z', 'active', '2024-01-01T00:00:00.000Z', 'isolated', 'ollama:gemma4', 'container', '["consume_events","publish_event"]',
+  );
+
   // Seed task run logs
   db.prepare(`INSERT INTO task_run_logs (task_id, run_at, duration_ms, status, result, error) VALUES (?, ?, ?, ?, ?, ?)`).run(
     'task-1', '2024-06-02T09:00:00.000Z', 5000, 'success', 'Briefing sent', null,
   );
   db.prepare(`INSERT INTO task_run_logs (task_id, run_at, duration_ms, status, result, error) VALUES (?, ?, ?, ?, ?, ?)`).run(
     'task-1', '2024-06-01T09:00:00.000Z', 3000, 'error', null, 'Timeout',
+  );
+  // Pipeline task run logs
+  db.prepare(`INSERT INTO task_run_logs (task_id, run_at, duration_ms, status, result, error, input_tokens, output_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    'pipeline:sanitiser', '2024-06-02T10:00:00.000Z', 1500, 'success', 'Processed 5 messages', null, 500, 250,
+  );
+  db.prepare(`INSERT INTO task_run_logs (task_id, run_at, duration_ms, status, result, error, input_tokens, output_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    'pipeline:sanitiser', '2024-06-02T10:01:00.000Z', 800, 'success', 'Processed 2 messages', null, 200, 100,
   );
 
   // Seed a passive group
@@ -303,7 +326,7 @@ describe('updateGroup', () => {
 describe('getTasksByGroup', () => {
   it('returns tasks for a group', () => {
     const tasks = getTasksByGroup('whatsapp_main');
-    expect(tasks).toHaveLength(2);
+    expect(tasks).toHaveLength(4); // 2 regular + 2 pipeline
   });
 
   it('returns empty array for group with no tasks', () => {
@@ -312,8 +335,9 @@ describe('getTasksByGroup', () => {
 
   it('returns tasks sorted by next_run', () => {
     const tasks = getTasksByGroup('whatsapp_main');
-    expect(tasks[0].id).toBe('task-1'); // 2024-06-03
-    expect(tasks[1].id).toBe('task-2'); // 2024-06-07
+    // task-1 (June 3) before task-2 (June 7); pipeline tasks also in the mix
+    const taskIds = tasks.map((t: any) => t.id);
+    expect(taskIds.indexOf('task-1')).toBeLessThan(taskIds.indexOf('task-2'));
   });
 
   it('includes all expected fields', () => {
@@ -629,5 +653,41 @@ describe('upsertLabel', () => {
     const obs = getObservationById(2);
     expect(obs!.label!.intent).toBe('fyi');
     expect(obs!.label!.notes).toBe('reclassified');
+  });
+});
+
+// --- Pipeline ---
+
+describe('getPipelineTasks', () => {
+  it('returns only pipeline:* tasks', () => {
+    const tasks = getPipelineTasks();
+    expect(tasks).toHaveLength(2);
+    expect(tasks.every((t: any) => t.id.startsWith('pipeline:'))).toBe(true);
+  });
+
+  it('includes model, execution_mode, and allowed_tools', () => {
+    const tasks = getPipelineTasks();
+    const sanitiser = tasks.find((t: any) => t.id === 'pipeline:sanitiser');
+    expect(sanitiser).toBeDefined();
+    expect(sanitiser!.model).toBe('ollama:gemma4');
+    expect(sanitiser!.execution_mode).toBe('host_pipeline');
+  });
+});
+
+describe('getPipelineTokenUsage', () => {
+  it('returns aggregated token usage for pipeline tasks', () => {
+    const usage = getPipelineTokenUsage(365 * 3); // wide window to catch seed data
+    expect(usage.length).toBeGreaterThanOrEqual(1);
+    expect(usage[0].input_tokens).toBe(700); // 500 + 200
+    expect(usage[0].output_tokens).toBe(350); // 250 + 100
+  });
+});
+
+describe('getPassiveChannels', () => {
+  it('returns groups with mode=passive', () => {
+    const channels = getPassiveChannels();
+    expect(channels).toHaveLength(1);
+    expect(channels[0].name).toBe('Passive Channel');
+    expect(channels[0].mode).toBe('passive');
   });
 });

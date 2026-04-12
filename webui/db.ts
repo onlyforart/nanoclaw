@@ -292,6 +292,58 @@ export function getGroupDailyTokensByModel(groupFolder: string, days: number = 3
 
 // --- Task Runs ---
 
+// --- Pipeline ---
+
+export function getPipelineTasks(): TaskRow[] {
+  return db
+    .prepare(
+      `SELECT id, group_folder, chat_jid, prompt, schedule_type, schedule_value,
+              context_mode, model, temperature, timezone, max_tool_rounds, timeout_ms, use_agent_sdk,
+              allowed_tools, allowed_send_targets, execution_mode, subscribed_event_types,
+              next_run, last_run, last_result, status, created_at
+       FROM scheduled_tasks WHERE id LIKE 'pipeline:%' ORDER BY id`,
+    )
+    .all() as TaskRow[];
+}
+
+export interface PipelineTokenUsageRow {
+  date: string;
+  task_id: string;
+  input_tokens: number;
+  output_tokens: number;
+  runs: number;
+}
+
+export function getPipelineTokenUsage(days: number = 30): PipelineTokenUsageRow[] {
+  return db
+    .prepare(
+      `SELECT date(r.run_at) as date,
+              r.task_id,
+              SUM(COALESCE(r.input_tokens, 0)) as input_tokens,
+              SUM(COALESCE(r.output_tokens, 0)) as output_tokens,
+              COUNT(*) as runs
+       FROM task_run_logs r
+       WHERE r.task_id LIKE 'pipeline:%'
+         AND r.run_at >= date('now', ? || ' days')
+       GROUP BY date(r.run_at), r.task_id
+       ORDER BY date(r.run_at)`,
+    )
+    .all(-(days - 1)) as PipelineTokenUsageRow[];
+}
+
+export function getPassiveChannels(): GroupRow[] {
+  return db
+    .prepare(
+      `SELECT jid, name, folder, trigger_pattern, is_main, requires_trigger,
+              model, temperature, max_tool_rounds, timeout_ms, show_thinking,
+              mode, threading_mode
+       FROM registered_groups WHERE mode = 'passive' ORDER BY name`,
+    )
+    .all() as GroupRow[];
+}
+
+// --- Task Runs ---
+
 export function getTaskRuns(taskId: string, limit: number = 20): TaskRunRow[] {
   return db
     .prepare(

@@ -29,6 +29,7 @@ import { handleGetContainers } from './routes/containers.js';
 import { handleGetEvents } from './routes/events.js';
 import { handleGetIntakeLogs } from './routes/intake.js';
 import { handleGetObservations, handleGetObservation, handlePatchLabel } from './routes/observations.js';
+import { handleGetPipeline } from './routes/pipeline.js';
 
 const startTime = Date.now();
 
@@ -234,8 +235,15 @@ export function createApp(groupsDir: string, publicDir?: string): http.Server {
       compiled: compilePath('/api/v1/observations/:id/label'),
       handler: async (params, req) => {
         const body = await parseJsonBody(req);
-        return handlePatchLabel(parseInt(params.id, 10), body);
+        return handlePatchLabel(parseInt(params.id, 10), body as any);
       },
+    },
+
+    // Pipeline
+    {
+      method: 'GET',
+      compiled: compilePath('/api/v1/pipeline'),
+      handler: (_params, _req, query) => handleGetPipeline(query),
     },
   ];
 

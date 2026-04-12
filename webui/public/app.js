@@ -220,6 +220,12 @@ const AppSidebar = {
           <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons.prompts}</svg>
           Global Prompts
         </a>
+        <a href="#/pipeline"
+          :class="isActive('/pipeline') ? 'bg-gray-800 text-white border-l-3 border-blue-500' : 'hover:bg-white/10 hover:text-gray-200 border-l-3 border-transparent'"
+          class="flex items-center gap-3 px-3 py-2 rounded-r-lg text-sm font-medium transition-colors">
+          <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons.dashboard}</svg>
+          Pipeline
+        </a>
         <a href="#/observations"
           :class="isActive('/observations') ? 'bg-gray-800 text-white border-l-3 border-blue-500' : 'hover:bg-white/10 hover:text-gray-200 border-l-3 border-transparent'"
           class="flex items-center gap-3 px-3 py-2 rounded-r-lg text-sm font-medium transition-colors">
@@ -1311,6 +1317,107 @@ const AppTaskDetail = {
 
 // ── App ────────────────────────────────────────────────────
 
+// Pipeline page
+const AppPipeline = {
+  template: `
+    <div>
+      <h1 class="text-2xl font-bold mb-6">Pipeline</h1>
+
+      <!-- Source Channels -->
+      <div class="mb-6">
+        <h2 class="text-sm font-semibold text-gray-500 uppercase mb-3">Source Channels (passive)</h2>
+        <div v-if="data.sourceChannels?.length" class="flex flex-wrap gap-2">
+          <span v-for="ch in data.sourceChannels" :key="ch.jid"
+            class="px-3 py-1.5 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded-full text-sm font-medium">
+            {{ ch.name }}
+            <span class="text-xs opacity-60 ml-1">({{ ch.threading_mode }})</span>
+          </span>
+        </div>
+        <div v-else class="text-sm text-gray-400">No passive channels configured</div>
+      </div>
+
+      <!-- Tasks -->
+      <div class="mb-6">
+        <h2 class="text-sm font-semibold text-gray-500 uppercase mb-3">Pipeline Tasks</h2>
+        <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+          <table v-if="data.tasks?.length" class="w-full text-sm">
+            <thead>
+              <tr class="border-b border-gray-200 dark:border-gray-700">
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Task</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Model</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Mode</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Schedule</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Last Run</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Last Result</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="t in data.tasks" :key="t.id"
+                @click="window.location.hash = '#/tasks/' + t.id"
+                class="border-b border-gray-100 dark:border-gray-700/50 hover:bg-gray-50 dark:hover:bg-gray-750 cursor-pointer">
+                <td class="px-4 py-3 font-medium">{{ t.id.replace('pipeline:', '') }}</td>
+                <td class="px-4 py-3 font-mono text-xs">{{ t.model || '-' }}</td>
+                <td class="px-4 py-3">
+                  <span :class="t.execution_mode === 'host_pipeline' ? 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200' : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200'"
+                    class="px-2 py-0.5 rounded-full text-xs font-medium">{{ t.execution_mode }}</span>
+                </td>
+                <td class="px-4 py-3 font-mono text-xs">{{ t.schedule_value }}</td>
+                <td class="px-4 py-3"><status-badge :status="t.status" /></td>
+                <td class="px-4 py-3 text-gray-500 text-xs">{{ t.last_run ? new Date(t.last_run).toLocaleString() : '-' }}</td>
+                <td class="px-4 py-3 text-xs max-w-xs truncate">{{ t.last_result || '-' }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-else class="p-8 text-center text-gray-400">No pipeline tasks</div>
+        </div>
+      </div>
+
+      <!-- Token Usage -->
+      <div>
+        <h2 class="text-sm font-semibold text-gray-500 uppercase mb-3">Token Usage (last 30 days)</h2>
+        <div v-if="data.tokenUsage?.length" class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="border-b border-gray-200 dark:border-gray-700">
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+                <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Task</th>
+                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Input</th>
+                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Output</th>
+                <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Runs</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(row, i) in data.tokenUsage" :key="i"
+                class="border-b border-gray-100 dark:border-gray-700/50">
+                <td class="px-4 py-3 text-gray-500">{{ row.date }}</td>
+                <td class="px-4 py-3 font-mono text-xs">{{ row.task_id.replace('pipeline:', '') }}</td>
+                <td class="px-4 py-3 text-right font-mono">{{ row.input_tokens.toLocaleString() }}</td>
+                <td class="px-4 py-3 text-right font-mono">{{ row.output_tokens.toLocaleString() }}</td>
+                <td class="px-4 py-3 text-right">{{ row.runs }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div v-else class="text-sm text-gray-400">No token usage recorded yet</div>
+      </div>
+    </div>
+  `,
+  setup() {
+    const data = ref({ tasks: [], sourceChannels: [], tokenUsage: [] });
+
+    const fetch = async () => {
+      try { data.value = await api('/pipeline'); } catch {}
+    };
+
+    onMounted(fetch);
+    const interval = setInterval(fetch, 15000);
+    onUnmounted(() => clearInterval(interval));
+
+    return { data, window };
+  },
+};
+
 // Events + Intake page
 const AppEvents = {
   template: `
@@ -1750,6 +1857,7 @@ const app = createApp({
           <app-dashboard v-if="route.view === 'dashboard'" :groups="groups" />
           <app-global-prompts v-if="route.view === 'global-prompts'" />
           <app-events v-if="route.view === 'events'" />
+          <app-pipeline v-if="route.view === 'pipeline'" />
           <app-observations v-if="route.view === 'observations'" />
           <app-observation-detail v-if="route.view === 'observation-detail'" :observation-id="route.id" :key="route.id" />
           <app-group-detail v-if="route.view === 'group-detail'" :folder="route.folder" :initial-tab="route.tab" :key="route.folder + (route.tab || '')" />
@@ -1776,6 +1884,7 @@ const app = createApp({
       if (path === '/') return { view: 'dashboard' };
       if (path === '/prompts/global') return { view: 'global-prompts' };
       if (path === '/events') return { view: 'events' };
+      if (path === '/pipeline') return { view: 'pipeline' };
       if (path === '/observations') return { view: 'observations' };
       const om = path.match(/^\/observations\/(\d+)$/);
       if (om) return { view: 'observation-detail', id: parseInt(om[1], 10) };
@@ -1825,6 +1934,7 @@ app.component('app-global-prompts', AppGlobalPrompts);
 app.component('app-group-detail', AppGroupDetail);
 app.component('app-task-detail', AppTaskDetail);
 app.component('app-events', AppEvents);
+app.component('app-pipeline', AppPipeline);
 app.component('app-observations', AppObservations);
 app.component('app-observation-detail', AppObservationDetail);
 app.component('tab-bar', TabBar);
