@@ -17,7 +17,7 @@ system: |-
   A single message is a valid cluster. Cross-day continuations are real.
 tools:
   default_enabled: false
-  enabled:
-    - consume_events
-    - publish_event
+  profiles:
+    - pipeline_events
+  enabled: []
 send_targets: []

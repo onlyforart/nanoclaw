@@ -15,6 +15,7 @@ export interface PipelineSpec {
   system: string;
   tools: {
     default_enabled: boolean;
+    profiles?: string[];
     enabled: string[];
   };
   send_targets: string[];
@@ -51,6 +52,7 @@ export function reconcilePipelineTasks(
   specs: PipelineSpec[],
   teamGroupFolder: string,
   teamChatJid: string,
+  toolProfiles?: Record<string, string[]>,
 ): void {
   // Resolve {source_channel} placeholders from passive groups
   const passiveGroups = getPassiveGroups();
@@ -65,6 +67,9 @@ export function reconcilePipelineTasks(
       t === '{source_channel}' ? passiveJids : [t],
     );
 
+    // Resolve tools: merge profile tools + explicitly enabled tools
+    const resolvedTools = resolveToolList(spec.tools, toolProfiles);
+
     if (!existing) {
       // Create new task
       const now = new Date().toISOString();
@@ -77,7 +82,7 @@ export function reconcilePipelineTasks(
         schedule_value: spec.cron,
         context_mode: 'isolated',
         model: spec.model,
-        allowedTools: spec.tools.enabled,
+        allowedTools: resolvedTools,
         allowedSendTargets: resolvedSendTargets,
         executionMode:
           spec.type === 'host_pipeline' ? 'host_pipeline' : 'container',
@@ -97,7 +102,7 @@ export function reconcilePipelineTasks(
           prompt: spec.system,
           model: spec.model,
           schedule_value: spec.cron,
-          allowedTools: spec.tools.enabled,
+          allowedTools: resolvedTools,
           allowedSendTargets: resolvedSendTargets,
           executionMode:
             spec.type === 'host_pipeline' ? 'host_pipeline' : 'container',
@@ -113,6 +118,34 @@ export function reconcilePipelineTasks(
     // Store version in a router_state key for comparison
     setTaskVersion(taskId, spec.version);
   }
+}
+
+// --- Tool profile resolution ---
+
+function resolveToolList(
+  tools: PipelineSpec['tools'],
+  profiles?: Record<string, string[]>,
+): string[] {
+  const resolved = new Set<string>();
+
+  // Add tools from referenced profiles
+  if (tools.profiles?.length && profiles) {
+    for (const profileName of tools.profiles) {
+      const profileTools = profiles[profileName];
+      if (profileTools) {
+        for (const tool of profileTools) resolved.add(tool);
+      } else {
+        logger.warn({ profileName }, 'Unknown tool profile referenced');
+      }
+    }
+  }
+
+  // Add explicitly enabled tools
+  for (const tool of tools.enabled) {
+    resolved.add(tool);
+  }
+
+  return Array.from(resolved);
 }
 
 // --- Version tracking via router_state ---

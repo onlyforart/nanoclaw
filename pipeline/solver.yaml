@@ -31,10 +31,10 @@ system: |-
   You CANNOT reply directly to the source channel.
 tools:
   default_enabled: false
+  profiles:
+    - pipeline_events
+    - read_only_ops
   enabled:
-    - consume_events
-    - ack_event
     - send_message
-    - publish_event
     - re_extract_observation
 send_targets: []

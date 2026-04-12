@@ -12,9 +12,9 @@ system: |-
   If delivery fails, report failure in the team channel using send_message.
 tools:
   default_enabled: false
+  profiles:
+    - pipeline_events
   enabled:
-    - consume_events
-    - ack_event
     - send_cross_channel_message
     - send_message
 send_targets:
