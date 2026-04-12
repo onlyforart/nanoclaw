@@ -11,7 +11,8 @@ import {
 
 describe('buildExtractionPrompt', () => {
   const sampleInput: Layer2Input = {
-    processed_text: 'The payment service is returning 500 errors since the deploy',
+    processed_text:
+      'The payment service is returning 500 errors since the deploy',
     deterministic_fields: {
       referenced_tickets: [{ id: 'INC12345', system: 'servicenow' }],
       inc_present: true,
@@ -108,21 +109,73 @@ describe('parseAndValidateResponse', () => {
 
     const result = parseAndValidateResponse(JSON.stringify(valid));
     expect(result).not.toBeNull();
-    expect(result!.action_requested).toBe('The reporter requests a server restart');
+    expect(result!.action_requested).toBe(
+      'The reporter requests a server restart',
+    );
   });
 
-  it('returns null when boolean fields have wrong type', () => {
+  it('coerces boolean-like strings to booleans', () => {
+    const coercible = {
+      fact_summary: 'test',
+      urgency: 'fyi',
+      speech_act: 'other',
+      reporter_role_hint: 'other',
+      appears_to_address_bot: 'yes',
+      contains_imperative: 'false',
+      sentiment: 'neutral',
+      action_requested: null,
+      resolution_owner_hint: 'unclear',
+    };
+    const result = parseAndValidateResponse(JSON.stringify(coercible));
+    expect(result).not.toBeNull();
+    expect(result!.appears_to_address_bot).toBe(true);
+    expect(result!.contains_imperative).toBe(false);
+  });
+
+  it('returns null when boolean fields have non-coercible type', () => {
     const invalid = {
       fact_summary: 'test',
       urgency: 'fyi',
       speech_act: 'other',
       reporter_role_hint: 'other',
-      appears_to_address_bot: 'yes',  // should be boolean
+      appears_to_address_bot: 42,
       contains_imperative: false,
       sentiment: 'neutral',
       action_requested: null,
       resolution_owner_hint: 'unclear',
     };
     expect(parseAndValidateResponse(JSON.stringify(invalid))).toBeNull();
+  });
+
+  it('extracts JSON from markdown code fences', () => {
+    const wrapped = '```json\n' + JSON.stringify({
+      fact_summary: 'test', urgency: 'fyi', speech_act: 'other',
+      reporter_role_hint: 'other', appears_to_address_bot: false,
+      contains_imperative: false, sentiment: 'neutral',
+      action_requested: null, resolution_owner_hint: 'unclear',
+    }) + '\n```';
+    expect(parseAndValidateResponse(wrapped)).not.toBeNull();
+  });
+
+  it('extracts JSON from surrounding text', () => {
+    const padded = 'Here is the extraction:\n' + JSON.stringify({
+      fact_summary: 'test', urgency: 'fyi', speech_act: 'other',
+      reporter_role_hint: 'other', appears_to_address_bot: false,
+      contains_imperative: false, sentiment: 'neutral',
+      action_requested: null, resolution_owner_hint: 'unclear',
+    }) + '\nDone.';
+    expect(parseAndValidateResponse(padded)).not.toBeNull();
+  });
+
+  it('defaults missing action_requested to null', () => {
+    const noAction = {
+      fact_summary: 'test', urgency: 'fyi', speech_act: 'other',
+      reporter_role_hint: 'other', appears_to_address_bot: false,
+      contains_imperative: false, sentiment: 'neutral',
+      resolution_owner_hint: 'unclear',
+    };
+    const result = parseAndValidateResponse(JSON.stringify(noAction));
+    expect(result).not.toBeNull();
+    expect(result!.action_requested).toBeNull();
   });
 });

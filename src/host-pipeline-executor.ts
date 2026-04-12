@@ -265,6 +265,11 @@ async function processObservation(
     toolSchema: LAYER2_TOOL_SCHEMA,
   });
 
+  logger.debug(
+    { obsId, model: deps.model, responseLength: llmResponse.response.length, response: llmResponse.response.slice(0, 500) },
+    'Layer 2 LLM response',
+  );
+
   result.inputTokens += llmResponse.inputTokens;
   result.outputTokens += llmResponse.outputTokens;
   if (llmResponse.costUSD != null) {

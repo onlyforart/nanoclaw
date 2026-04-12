@@ -98,15 +98,38 @@ Output ONLY the JSON object, no other text.`;
 }
 
 /**
- * Parse and validate a raw LLM response as Layer2Output.
- * Returns null if the response is invalid.
+ * Extract JSON from LLM response, handling common quirks:
+ * - Markdown code fences (```json ... ```)
+ * - Extra text before/after JSON
+ * - Nested JSON in tool_call format
  */
-export function parseAndValidateResponse(
-  raw: string,
-): Layer2Output | null {
+function extractJson(raw: string): string {
+  let text = raw.trim();
+
+  // Strip markdown code fences
+  const fenceMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
+  if (fenceMatch) text = fenceMatch[1].trim();
+
+  // Find first { and last } to extract JSON object
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start !== -1 && end > start) {
+    text = text.slice(start, end + 1);
+  }
+
+  return text;
+}
+
+/**
+ * Parse and validate a raw LLM response as Layer2Output.
+ * Forgiving: extracts JSON from fences/wrappers, coerces types where safe,
+ * defaults missing optional fields. Returns null only on unrecoverable failures.
+ */
+export function parseAndValidateResponse(raw: string): Layer2Output | null {
+  const jsonText = extractJson(raw);
   let parsed: Record<string, unknown>;
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(jsonText);
   } catch {
     return null;
   }
@@ -115,23 +138,39 @@ export function parseAndValidateResponse(
     return null;
   }
 
-  // Check all required fields are present
-  for (const field of REQUIRED_FIELDS) {
-    if (!(field in parsed)) return null;
+  // Coerce boolean-like strings to booleans
+  for (const field of BOOLEAN_FIELDS) {
+    if (typeof parsed[field] === 'string') {
+      const lower = (parsed[field] as string).toLowerCase();
+      if (lower === 'true' || lower === 'yes') parsed[field] = true;
+      else if (lower === 'false' || lower === 'no') parsed[field] = false;
+    }
   }
 
-  // Validate boolean fields
+  // Default missing optional fields
+  if (!('action_requested' in parsed)) parsed.action_requested = null;
+
+  // Check required fields are present
+  const STRING_FIELDS = [
+    'fact_summary',
+    'urgency',
+    'speech_act',
+    'reporter_role_hint',
+    'sentiment',
+    'resolution_owner_hint',
+  ] as const;
+  for (const field of STRING_FIELDS) {
+    if (typeof parsed[field] !== 'string') return null;
+  }
   for (const field of BOOLEAN_FIELDS) {
     if (typeof parsed[field] !== 'boolean') return null;
   }
 
-  // Validate string fields (non-nullable)
-  for (const field of ['fact_summary', 'urgency', 'speech_act', 'reporter_role_hint', 'sentiment', 'resolution_owner_hint'] as const) {
-    if (typeof parsed[field] !== 'string') return null;
-  }
-
   // action_requested: string or null
-  if (parsed.action_requested !== null && typeof parsed.action_requested !== 'string') {
+  if (
+    parsed.action_requested !== null &&
+    typeof parsed.action_requested !== 'string'
+  ) {
     return null;
   }
 
@@ -146,20 +185,69 @@ export const LAYER2_TOOL_SCHEMA = {
   type: 'function' as const,
   function: {
     name: 'extract_observation',
-    description: 'Extract structured observation fields from the pre-processed message',
+    description:
+      'Extract structured observation fields from the pre-processed message',
     parameters: {
       type: 'object',
       required: REQUIRED_FIELDS as unknown as string[],
       properties: {
-        fact_summary: { type: 'string', description: 'Third-person factual summary, ≤200 chars' },
-        urgency: { type: 'string', enum: ['fyi', 'question', 'issue', 'incident', 'other'] },
-        speech_act: { type: 'string', enum: ['fresh_report', 'status_update', 'still_broken', 'fix_announcement', 'self_resolution', 'diagnosis', 'downstream_notification', 'change_attribution_question', 'architectural_request', 'data_request', 'banter', 'other'] },
-        reporter_role_hint: { type: 'string', enum: ['original_reporter', 'forwarder', 'diagnostician', 'responder', 'fix_committer', 'access_broker', 'other'] },
+        fact_summary: {
+          type: 'string',
+          description: 'Third-person factual summary, ≤200 chars',
+        },
+        urgency: {
+          type: 'string',
+          enum: ['fyi', 'question', 'issue', 'incident', 'other'],
+        },
+        speech_act: {
+          type: 'string',
+          enum: [
+            'fresh_report',
+            'status_update',
+            'still_broken',
+            'fix_announcement',
+            'self_resolution',
+            'diagnosis',
+            'downstream_notification',
+            'change_attribution_question',
+            'architectural_request',
+            'data_request',
+            'banter',
+            'other',
+          ],
+        },
+        reporter_role_hint: {
+          type: 'string',
+          enum: [
+            'original_reporter',
+            'forwarder',
+            'diagnostician',
+            'responder',
+            'fix_committer',
+            'access_broker',
+            'other',
+          ],
+        },
         appears_to_address_bot: { type: 'boolean' },
         contains_imperative: { type: 'boolean' },
-        sentiment: { type: 'string', enum: ['neutral', 'frustrated', 'urgent', 'confused', 'other'] },
-        action_requested: { type: ['string', 'null'], description: 'Third-person description or null' },
-        resolution_owner_hint: { type: 'string', enum: ['this_team', 'other_internal_team', 'external_vendor', 'customer', 'unclear'] },
+        sentiment: {
+          type: 'string',
+          enum: ['neutral', 'frustrated', 'urgent', 'confused', 'other'],
+        },
+        action_requested: {
+          type: ['string', 'null'],
+          description: 'Third-person description or null',
+        },
+        resolution_owner_hint: {
+          type: 'string',
+          enum: [
+            'this_team',
+            'other_internal_team',
+            'external_vendor',
+            'customer',
+            'unclear',
+          ],
+        },
       },
     },
   },
