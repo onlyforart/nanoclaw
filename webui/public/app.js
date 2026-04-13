@@ -1065,12 +1065,13 @@ const AppTaskDetail = {
               <div class="text-purple-600 dark:text-purple-400 text-sm font-mono">{{ task.subscribedEventTypes.join(', ') }}</div>
             </div>
             <!-- Event-only: fallback poll instead of cron -->
-            <div v-if="task?.scheduleType === 'event'" class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <div v-if="task?.scheduleType === 'event' && task?.fallbackPollMs" class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
               <div>
-                <label class="block text-sm font-medium mb-1">Fallback Poll (ms)</label>
-                <input v-model.number="form.fallbackPollMs" type="number" placeholder="Optional — e.g. 3600000 for hourly"
-                  class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
-                <p class="mt-1 text-xs text-gray-400">Safety net poll interval. Leave empty for purely event-driven.</p>
+                <label class="block text-sm font-medium mb-1">Fallback Poll</label>
+                <div class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 text-sm">
+                  {{ Math.round(task.fallbackPollMs / 1000) }}s ({{ Math.round(task.fallbackPollMs / 60000) }}min)
+                  <span class="text-xs text-gray-400 ml-2">Set by pipeline spec</span>
+                </div>
               </div>
             </div>
             <!-- Cron/interval/once schedule -->

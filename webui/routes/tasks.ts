@@ -31,6 +31,7 @@ interface TaskResponse {
   allowedSendTargets: string[] | null;
   executionMode: string;
   subscribedEventTypes: string[] | null;
+  fallbackPollMs: number | null;
   nextRun: string | null;
   lastRun: string | null;
   lastResult: string | null;
@@ -64,6 +65,7 @@ function formatTask(row: TaskRow): TaskResponse {
     allowedSendTargets: row.allowed_send_targets ? JSON.parse(row.allowed_send_targets) : null,
     executionMode: row.execution_mode || 'container',
     subscribedEventTypes: row.subscribed_event_types ? JSON.parse(row.subscribed_event_types) : null,
+    fallbackPollMs: row.fallback_poll_ms,
     nextRun: row.next_run,
     lastRun: row.last_run,
     lastResult: row.last_result,
