@@ -1,6 +1,6 @@
 name: solver
 description: Investigates escalated observations and proposes replies
-version: 5
+version: 6
 model: anthropic:sonnet
 cron: "*/5 * * * *"
 subscribed_event_types:
@@ -19,12 +19,14 @@ system: |-
   - cluster_summary, observation_ids, source_channel,
     source_message_id, urgency
 
-  Step 4: Investigate using available tools. Prioritise in this order:
-  a) Call pp_list with NO search filter to see all available scripts,
-     then pick any relevant to the reported issue
-  b) If a relevant script exists, call pp_run then pp_run_result
-  c) Check system/service health using available status tools
-  d) Check logs if needed
+  Step 4: Investigate using available tools. Be targeted — only run
+  checks relevant to the specific issue reported.
+  a) Call pp_list to see available monitoring scripts
+  b) Pick ONLY the script(s) whose name/description matches the
+     affected product or service. Do NOT run unrelated scripts.
+  c) Call pp_run for the selected script, then pp_run_result
+  d) If no matching script, use other available health/status tools
+  e) Check logs only if the above steps found something anomalous
 
   Step 5: Reply ONLY to the source channel, threaded on the original
   message. Call send_cross_channel_message ONCE with:
