@@ -1023,7 +1023,12 @@ const AppTaskDetail = {
         <!-- Settings Tab -->
         <div v-if="activeTab === 'settings'">
           <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <div v-if="task?.subscribedEventTypes?.length" class="mb-4 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
+              <div class="text-sm font-medium mb-1">Trigger</div>
+              <div class="text-purple-600 dark:text-purple-400 text-sm">Event-driven</div>
+              <div class="text-xs text-gray-400 font-mono mt-1">{{ task.subscribedEventTypes.join(', ') }}</div>
+            </div>
+            <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
               <div>
                 <label class="block text-sm font-medium mb-1">Schedule Type</label>
                 <select v-model="form.scheduleType"
@@ -1690,6 +1695,8 @@ const AppEvents = {
       fetchEvents();
       fetchIntakeLogs();
     });
+    const interval = setInterval(() => { fetchEvents(); fetchIntakeLogs(); }, 10000);
+    onUnmounted(() => clearInterval(interval));
 
     return { events, intakeLogs, activeTab, tabs, statusFilter, showProcessed, expanded, fetchEvents, fetchIntakeLogs, toggleExpand, formatPayload, formatTime };
   },
@@ -1779,6 +1786,8 @@ const AppObservations = {
     };
 
     onMounted(fetch);
+    const interval = setInterval(fetch, 10000);
+    onUnmounted(() => clearInterval(interval));
     return { observations, sourceType, labelFilter, page, pageSize, fetch, window };
   },
 };
@@ -2017,9 +2026,9 @@ const app = createApp({
 
     const activeGroupFolder = computed(() => {
       if (route.value.view === 'group-detail') return route.value.folder;
-      // Pipeline tasks don't belong to a group in the sidebar
-      if (route.value.view === 'task-detail' && route.value.id?.startsWith('pipeline:')) return '';
-      return taskGroupFolder.value;
+      // Only highlight a group when viewing a non-pipeline task detail
+      if (route.value.view === 'task-detail' && !route.value.id?.startsWith('pipeline:')) return taskGroupFolder.value;
+      return '';
     });
 
     // Close sidebar on navigation (mobile)

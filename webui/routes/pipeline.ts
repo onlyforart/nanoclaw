@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { parse as parseYaml } from 'yaml';
 
 import {
   getPipelineTasks,
@@ -26,12 +27,11 @@ interface PipelineOverview {
 function loadYamlSpecs(): Record<string, { profiles?: string[]; enabled?: string[] }> {
   const result: Record<string, { profiles?: string[]; enabled?: string[] }> = {};
   try {
-    const { parse } = require('yaml');
     const dir = path.join(process.cwd(), 'pipeline');
     if (!fs.existsSync(dir)) return result;
     for (const file of fs.readdirSync(dir).filter((f: string) => f.endsWith('.yaml'))) {
       try {
-        const spec = parse(fs.readFileSync(path.join(dir, file), 'utf-8'));
+        const spec = parseYaml(fs.readFileSync(path.join(dir, file), 'utf-8'));
         if (spec?.name) {
           result[`pipeline:${spec.name}`] = {
             profiles: spec.tools?.profiles || [],
