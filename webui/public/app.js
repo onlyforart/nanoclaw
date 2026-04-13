@@ -19,6 +19,23 @@ async function api(path, opts = {}) {
   return res.json();
 }
 
+// ── Channel Name Resolver ─────────────────────────────────
+
+let _channelNameMap = null;
+async function loadChannelNames() {
+  if (_channelNameMap) return _channelNameMap;
+  try {
+    const groups = await api('/groups');
+    _channelNameMap = {};
+    for (const g of groups) _channelNameMap[g.jid] = g.name;
+  } catch { _channelNameMap = {}; }
+  return _channelNameMap;
+}
+function channelName(jid) {
+  if (!jid) return '';
+  return (_channelNameMap && _channelNameMap[jid]) ? `#${_channelNameMap[jid]}` : jid;
+}
+
 // ── Toast State ────────────────────────────────────────────
 
 const toasts = Vue.reactive([]);
@@ -1671,7 +1688,7 @@ const AppEvents = {
                 class="border-b border-gray-100 dark:border-gray-700/50 hover:bg-gray-50 dark:hover:bg-gray-750 cursor-pointer">
                 <td class="px-4 py-3 text-gray-500">{{ e.id }}</td>
                 <td class="px-4 py-3 font-mono text-xs">{{ e.type }}</td>
-                <td class="px-4 py-3">{{ e.source_group }}</td>
+                <td class="px-4 py-3">{{ channelName(e.source_group) || e.source_group }}</td>
                 <td class="px-4 py-3"><status-badge :status="e.status" /></td>
                 <td class="px-4 py-3 text-gray-500 text-xs">{{ formatTime(e.created_at) }}</td>
                 <td class="px-4 py-3 text-gray-500 text-xs">{{ e.claimed_by || '-' }}</td>
@@ -1713,7 +1730,7 @@ const AppEvents = {
               <tr v-for="l in intakeLogs" :key="l.id"
                 class="border-b border-gray-100 dark:border-gray-700/50">
                 <td class="px-4 py-3 text-gray-500">{{ l.id }}</td>
-                <td class="px-4 py-3">{{ l.source_group }}</td>
+                <td class="px-4 py-3">{{ channelName(l.source_group) || l.source_group }}</td>
                 <td class="px-4 py-3 font-mono text-xs">{{ l.source_task_id || '-' }}</td>
                 <td class="px-4 py-3">{{ l.reason }}</td>
                 <td class="px-4 py-3 text-gray-500 text-xs">{{ formatTime(l.submitted_at) }}</td>
@@ -1783,7 +1800,7 @@ const AppEvents = {
     const interval = setInterval(() => { fetchEvents(); fetchIntakeLogs(); }, 10000);
     onUnmounted(() => clearInterval(interval));
 
-    return { events, intakeLogs, activeTab, tabs, statusFilter, showProcessed, expanded, fetchEvents, fetchIntakeLogs, toggleExpand, formatPayload, formatTime };
+    return { events, intakeLogs, activeTab, tabs, statusFilter, showProcessed, expanded, fetchEvents, fetchIntakeLogs, toggleExpand, formatPayload, formatTime, channelName };
   },
 };
 
@@ -1831,7 +1848,7 @@ const AppObservations = {
               @click="window.location.hash = '#/observations/' + o.id"
               class="border-b border-gray-100 dark:border-gray-700/50 hover:bg-gray-50 dark:hover:bg-gray-750 cursor-pointer">
               <td class="px-4 py-3 text-gray-500">{{ o.id }}</td>
-              <td class="px-4 py-3 font-mono text-xs">{{ o.source_chat_jid || o.source_type }}</td>
+              <td class="px-4 py-3 text-xs">{{ channelName(o.source_chat_jid) || o.source_type }}</td>
               <td class="px-4 py-3">
                 <span :class="o.source_type === 'passive_channel' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200' : 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200'"
                   class="px-2 py-0.5 rounded-full text-xs font-medium">{{ o.source_type === 'passive_channel' ? 'passive' : 'intake' }}</span>
@@ -1888,7 +1905,7 @@ const AppObservations = {
     onMounted(fetch);
     const interval = setInterval(fetch, 10000);
     onUnmounted(() => clearInterval(interval));
-    return { observations, sourceType, labelFilter, page, pageSize, fetch, exportEvalSet, window };
+    return { observations, sourceType, labelFilter, page, pageSize, fetch, exportEvalSet, channelName, window };
   },
 };
 
@@ -1911,7 +1928,7 @@ const AppObservationDetail = {
           <h2 class="text-sm font-semibold mb-2 text-gray-500 uppercase">Raw Message</h2>
           <div class="text-sm whitespace-pre-wrap font-mono bg-gray-50 dark:bg-gray-900 rounded-lg p-3 max-h-96 overflow-y-auto">{{ obs.raw_text }}</div>
           <div class="mt-3 text-xs text-gray-500 space-y-1">
-            <div>Source: <span class="font-mono">{{ obs.source_chat_jid || obs.source_type }}</span></div>
+            <div>Source: <span>{{ channelName(obs.source_chat_jid) || obs.source_type }}</span></div>
             <div>Created: {{ new Date(obs.created_at).toLocaleString() }}</div>
             <div v-if="obs.source_task_id">Task: <span class="font-mono">{{ obs.source_task_id }}</span></div>
             <div v-if="obs.intake_reason">Reason: {{ obs.intake_reason }}</div>
@@ -2059,7 +2076,7 @@ const AppObservationDetail = {
     };
 
     onMounted(fetchObs);
-    return { obs, loading, saving, form, saveLabel, navigate, formatJson };
+    return { obs, loading, saving, form, saveLabel, navigate, formatJson, channelName };
   },
 };
 
@@ -2170,6 +2187,8 @@ app.component('app-observations', AppObservations);
 app.component('app-observation-detail', AppObservationDetail);
 app.component('tab-bar', TabBar);
 app.component('status-badge', StatusBadge);
+
+loadChannelNames(); // pre-fetch channel names for JID resolution
 
 // Mount
 app.mount('#app');
