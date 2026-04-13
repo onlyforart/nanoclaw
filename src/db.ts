@@ -1693,3 +1693,65 @@ function migrateJsonState(): void {
     }
   }
 }
+
+// --- Observation cleanup ---
+
+/**
+ * Tier 1: Delete observations that were NOT escalated (noise).
+ * Keeps observations that were escalated (have a candidate.escalation event
+ * referencing them) or that have a human label.
+ */
+export function cleanupNoiseObservations(maxAgeMs: number): number {
+  const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
+  const result = db
+    .prepare(
+      `DELETE FROM observed_messages
+       WHERE created_at < ?
+         AND id NOT IN (
+           SELECT DISTINCT json_each.value
+           FROM events, json_each(json_extract(events.payload, '$.observation_ids'))
+           WHERE events.type LIKE 'candidate.%'
+         )
+         AND id NOT IN (
+           SELECT observation_id FROM observation_labels
+         )`,
+    )
+    .run(cutoff);
+  return result.changes;
+}
+
+/**
+ * Tier 2: Delete all old observations + their events.
+ * Keeps labelled observations indefinitely.
+ */
+export function cleanupOldObservations(maxAgeMs: number): number {
+  const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
+
+  // Delete events whose observation_ids reference only old, unlabelled observations
+  db.prepare(
+    `DELETE FROM events
+     WHERE type LIKE 'observation.%'
+       AND created_at < ?
+       AND id NOT IN (
+         SELECT e.id FROM events e, json_each(json_extract(e.payload, '$.observation_id')) obs_id
+         WHERE obs_id.value IN (SELECT observation_id FROM observation_labels)
+       )`,
+  ).run(cutoff);
+
+  // Delete candidate.track events older than cutoff
+  db.prepare(
+    `DELETE FROM events WHERE type = 'candidate.track' AND created_at < ?`,
+  ).run(cutoff);
+
+  // Delete old unlabelled observations
+  const result = db
+    .prepare(
+      `DELETE FROM observed_messages
+       WHERE created_at < ?
+         AND id NOT IN (
+           SELECT observation_id FROM observation_labels
+         )`,
+    )
+    .run(cutoff);
+  return result.changes;
+}

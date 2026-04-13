@@ -16,6 +16,8 @@ import {
   readChatMessages,
   setRouterState,
   updateIntakeLogProcessed,
+  cleanupNoiseObservations,
+  cleanupOldObservations,
   updateObservationSanitised,
 } from './db.js';
 import { logger } from './logger.js';
@@ -40,6 +42,10 @@ export interface PipelineDeps {
   sanitiserVersion: string;
   sourceChannels: string[];
   schema?: SanitiserSchema;
+  /** Tier 1: delete non-escalated, unlabelled observations older than this (ms). Default: 6h */
+  noiseRetentionMs?: number;
+  /** Tier 2: delete all unlabelled observations + events older than this (ms). Default: 7d */
+  fullRetentionMs?: number;
 }
 
 export interface PipelineResult {
@@ -214,6 +220,19 @@ export async function executeHostPipeline(
     ackEvent(event.id, 'done', `observation_id=${obsId}`);
     updateIntakeLogProcessed(event.id, obsId);
     result.intakeProcessed++;
+  }
+
+  // --- Periodic observation cleanup ---
+  const NOISE_RETENTION_MS = deps.noiseRetentionMs ?? 6 * 60 * 60 * 1000; // 6h
+  const FULL_RETENTION_MS = deps.fullRetentionMs ?? 7 * 24 * 60 * 60 * 1000; // 7d
+
+  const noiseDeleted = cleanupNoiseObservations(NOISE_RETENTION_MS);
+  const oldDeleted = cleanupOldObservations(FULL_RETENTION_MS);
+  if (noiseDeleted > 0 || oldDeleted > 0) {
+    logger.info(
+      { noiseDeleted, oldDeleted },
+      'Observation cleanup completed',
+    );
   }
 
   return result;
