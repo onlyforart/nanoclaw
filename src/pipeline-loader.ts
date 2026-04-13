@@ -118,7 +118,9 @@ export function reconcilePipelineTasks(
       const specTargets = JSON.stringify(resolvedSendTargets);
       if (existingTargets !== specTargets) {
         changes.allowedSendTargets = resolvedSendTargets;
-        changeLog.push(`allowedSendTargets: ${existingTargets} → ${specTargets}`);
+        changeLog.push(
+          `allowedSendTargets: ${existingTargets} → ${specTargets}`,
+        );
       }
 
       // Schedule type: spec-owned. Host pipeline tasks keep cron (they poll + react).

@@ -16,12 +16,7 @@ import {
   _resetIpcWatcherForTests,
   _resetIpcWatcherGuardForTests,
 } from './ipc.js';
-import {
-  _initTestDatabase,
-  consumeEvents,
-  createTask,
-  publishEvent,
-} from './db.js';
+import { _initTestDatabase, createTask } from './db.js';
 
 const MAIN_GROUP: RegisteredGroup = {
   name: 'Main',
@@ -516,26 +511,18 @@ describe('cross_channel_message IPC', () => {
 
   // --- pipeline auto-routing ---
 
-  it('auto-routes pipeline reply to source channel thread regardless of model target', async () => {
-    // Set up consumed event context for the solver
-    publishEvent(
-      'candidate.escalation',
-      'slack_main',
-      'pipeline:monitor',
-      JSON.stringify({
-        source_channel: 'slack:CSUPPORT',
-        source_message_id: 'ts-999.111',
-        cluster_summary: 'Widget not loading',
-      }),
-    );
-    consumeEvents(['candidate.escalation'], 'pipeline:solver', 1);
-
-    // Model sends to its OWN channel (wrong target) — infrastructure should auto-route
+  it('auto-routes pipeline reply to source channel thread using pipelineContext', async () => {
+    // Container attaches pipelineContext from consumed events — no DB query needed
     writeMessage('slack_monitoring-channel', {
       type: 'cross_channel_message',
       targetChatJid: 'slack:CDEV',
       text: 'Investigation complete',
       sourceTaskId: 'pipeline:solver',
+      pipelineContext: JSON.stringify({
+        source_channel: 'slack:CSUPPORT',
+        source_message_id: 'ts-999.111',
+        cluster_summary: 'Widget not loading',
+      }),
     });
 
     await runOnce();
@@ -555,38 +542,27 @@ describe('cross_channel_message IPC', () => {
   });
 
   it('sends only once when pipeline model targets the source channel', async () => {
-    publishEvent(
-      'candidate.escalation',
-      'slack_main',
-      'pipeline:monitor',
-      JSON.stringify({
-        source_channel: 'slack:CSUPPORT',
-        source_message_id: 'ts-123.456',
-        cluster_summary: 'System down',
-      }),
-    );
-    consumeEvents(['candidate.escalation'], 'pipeline:solver', 1);
-
-    // Model correctly targets the source channel
     writeMessage('slack_monitoring-channel', {
       type: 'cross_channel_message',
       targetChatJid: 'slack:CSUPPORT',
       text: 'All clear',
       sourceTaskId: 'pipeline:solver',
+      pipelineContext: JSON.stringify({
+        source_channel: 'slack:CSUPPORT',
+        source_message_id: 'ts-123.456',
+        cluster_summary: 'System down',
+      }),
     });
 
     await runOnce();
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage).toHaveBeenCalledWith(
-      'slack:CSUPPORT',
-      'All clear',
-      { threadTs: 'ts-123.456' },
-    );
+    expect(sendMessage).toHaveBeenCalledWith('slack:CSUPPORT', 'All clear', {
+      threadTs: 'ts-123.456',
+    });
   });
 
-  it('falls through to normal handling when pipeline has no consumed event context', async () => {
-    // No consumed events for this task
+  it('falls through to normal handling when pipeline has no pipelineContext', async () => {
     writeMessage('slack_monitoring-channel', {
       type: 'cross_channel_message',
       targetChatJid: 'slack:CSUPPORT',
@@ -622,22 +598,17 @@ describe('cross_channel_message IPC', () => {
   });
 
   it('deduplicates repeated pipeline sends to same source channel', async () => {
-    publishEvent(
-      'candidate.escalation',
-      'slack_main',
-      'pipeline:monitor',
-      JSON.stringify({
-        source_channel: 'slack:CSUPPORT',
-        source_message_id: 'ts-dedup',
-      }),
-    );
-    consumeEvents(['candidate.escalation'], 'pipeline:solver', 1);
+    const ctx = JSON.stringify({
+      source_channel: 'slack:CSUPPORT',
+      source_message_id: 'ts-dedup',
+    });
 
     writeMessage('slack_monitoring-channel', {
       type: 'cross_channel_message',
       targetChatJid: 'slack:CSUPPORT',
       text: 'First attempt',
       sourceTaskId: 'pipeline:solver',
+      pipelineContext: ctx,
     });
 
     await runOnce();
@@ -649,6 +620,7 @@ describe('cross_channel_message IPC', () => {
       targetChatJid: 'slack:CSUPPORT',
       text: 'Retry attempt',
       sourceTaskId: 'pipeline:solver',
+      pipelineContext: ctx,
     });
 
     await runOnce();

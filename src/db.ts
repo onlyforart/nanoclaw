@@ -1351,8 +1351,9 @@ export function consumeEvents(
 }
 
 /**
- * Get the payload of the most recently consumed event for a given claimedBy.
- * Used to auto-inject context (e.g. source_message_id) into pipeline IPC calls.
+ * Get the payload of the most recently consumed event for a given claimedBy,
+ * limited to events claimed within the last 10 minutes. This ensures stale
+ * events from previous task runs are excluded.
  */
 export function getLastConsumedEventPayload(
   claimedBy: string,
@@ -1361,6 +1362,7 @@ export function getLastConsumedEventPayload(
     .prepare(
       `SELECT payload FROM events
        WHERE claimed_by = ? AND status IN ('claimed', 'done')
+         AND claimed_at > datetime('now', '-10 minutes')
        ORDER BY claimed_at DESC LIMIT 1`,
     )
     .get(claimedBy) as { payload: string } | undefined;

@@ -23,6 +23,9 @@ const isScheduledTask = process.env.NANOCLAW_IS_SCHEDULED_TASK === '1';
 const taskId = process.env.NANOCLAW_TASK_ID || undefined;
 const isOllama = process.env.NANOCLAW_IS_OLLAMA === '1';
 
+// Pipeline context cached from consume_events — attached to outbound IPC calls
+let pipelineContext: string | undefined;
+
 // Model description varies: Ollama models should not see Claude aliases
 const modelDescription = isOllama
   ? 'Model to use (e.g., "ollama:modelname" or "ollama-remote:modelname"). Omit to use the group default.'
@@ -168,6 +171,7 @@ server.tool(
       sourceGroup: groupFolder,
       sourceTaskId: taskId,
       threadTs: args.thread_ts || undefined,
+      pipelineContext: pipelineContext || undefined,
       timestamp: new Date().toISOString(),
     };
 
@@ -604,6 +608,25 @@ server.tool(
     }
 
     const events = (result as any).events || [];
+
+    // Cache pipeline context from consumed events for auto-routing
+    if (events.length > 0 && taskId?.startsWith('pipeline:')) {
+      const lastEvent = events[events.length - 1];
+      try {
+        const raw = (lastEvent.payload as string)
+          .replace(/===(?:END-)?OBSERVATION-[a-f0-9]+===\n?/g, '')
+          .trim();
+        const parsed = JSON.parse(raw);
+        pipelineContext = JSON.stringify({
+          source_channel: parsed.source_channel,
+          source_message_id: parsed.source_message_id,
+          cluster_summary: parsed.cluster_summary || parsed.summary,
+        });
+      } catch {
+        /* ignore parse failures */
+      }
+    }
+
     return {
       content: [{ type: 'text' as const, text: JSON.stringify({ events_claimed: events.length, events }, null, 2) }],
     };

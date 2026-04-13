@@ -12,7 +12,6 @@ import {
   createTask,
   deleteTask,
   getCachedReextraction,
-  getLastConsumedEventPayload,
   getObservationById,
   getTaskById,
   insertIntakeLog,
@@ -150,15 +149,18 @@ async function handlePipelineCrossChannel(
   registeredGroups: Record<string, RegisteredGroup>,
   deps: IpcDeps,
 ): Promise<IpcResult | null> {
-  const eventPayload = getLastConsumedEventPayload(sourceTaskId);
-  if (!eventPayload) return null;
-
-  let ctx: Record<string, unknown>;
-  try {
-    ctx = JSON.parse(eventPayload);
-  } catch {
-    return null;
+  // Use pipeline context attached by the container (from consumed events)
+  let ctx: Record<string, unknown> | undefined;
+  const rawCtx = data.pipelineContext as string | undefined;
+  if (rawCtx) {
+    try {
+      ctx = JSON.parse(rawCtx);
+    } catch {
+      /* ignore */
+    }
   }
+  if (!ctx) return null;
+
   const sourceChannel = ctx.source_channel as string | undefined;
   const sourceMessageId = ctx.source_message_id as string | undefined;
 
@@ -197,7 +199,9 @@ async function handlePipelineCrossChannel(
     const target = registeredGroups[data.targetChatJid as string];
     if (target) {
       const secondaryKey = `${sourceTaskId}:${data.targetChatJid}:${today}`;
-      if (!isCrossChannelDuplicate(data.targetChatJid as string, secondaryKey)) {
+      if (
+        !isCrossChannelDuplicate(data.targetChatJid as string, secondaryKey)
+      ) {
         const sourceName =
           registeredGroups[sourceChannel]?.name || sourceChannel;
         const summary = (ctx.cluster_summary as string) || '(escalation)';
@@ -311,19 +315,15 @@ export function startIpcWatcher(deps: IpcDeps): void {
 
                   // Pipeline auto-routing: send to source channel thread
                   if (sourceTaskId?.startsWith('pipeline:')) {
-                    const pipelineResult =
-                      await handlePipelineCrossChannel(
-                        data,
-                        sourceTaskId,
-                        registeredGroups,
-                        deps,
-                      );
+                    const pipelineResult = await handlePipelineCrossChannel(
+                      data,
+                      sourceTaskId,
+                      registeredGroups,
+                      deps,
+                    );
                     if (pipelineResult) {
                       crossChannelResult = pipelineResult;
-                      writeIpcResult(
-                        `${filePath}.result`,
-                        crossChannelResult,
-                      );
+                      writeIpcResult(`${filePath}.result`, crossChannelResult);
                       continue;
                     }
                     // No pipeline context — fall through to normal handling
@@ -352,27 +352,10 @@ export function startIpcWatcher(deps: IpcDeps): void {
                       continue;
                     }
                   }
-                  // Auto-enrich from pipeline context when fields are missing
-                  let idempotencyKey = data.idempotencyKey as
+                  const idempotencyKey = data.idempotencyKey as
                     | string
                     | undefined;
-                  let threadTs = data.threadTs as string | undefined;
-                  if (sourceTaskId?.startsWith('pipeline:')) {
-                    const eventPayload =
-                      getLastConsumedEventPayload(sourceTaskId);
-                    if (eventPayload) {
-                      try {
-                        const parsed = JSON.parse(eventPayload);
-                        if (!threadTs && parsed.source_message_id)
-                          threadTs = parsed.source_message_id;
-                      } catch {
-                        /* ignore parse errors */
-                      }
-                    }
-                    if (!idempotencyKey) {
-                      idempotencyKey = `${sourceTaskId}:${data.targetChatJid}:${new Date().toISOString().slice(0, 10)}`;
-                    }
-                  }
+                  const threadTs = data.threadTs as string | undefined;
 
                   // Idempotency check
                   if (
