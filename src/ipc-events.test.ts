@@ -104,6 +104,72 @@ describe('publish_event IPC', () => {
     );
     expect(result.success).toBe(false);
   });
+
+  it('auto-enriches candidate.* payloads with source fields from observations', async () => {
+    const obsId = insertObservedMessage({
+      source_chat_jid: 'slack:CSUPPORT',
+      source_message_id: 'ts-123.456',
+      source_type: 'passive_channel',
+      raw_text: 'widget broken',
+    });
+
+    const payload = JSON.stringify({
+      cluster_summary: 'widget issue',
+      observation_ids: [obsId],
+      source_channel: 'slack:CSUPPORT',
+    });
+
+    const result = await processTaskIpc(
+      {
+        type: 'publish_event',
+        eventType: 'candidate.escalation',
+        payload,
+      },
+      'slack_main',
+      true,
+      deps,
+    );
+
+    expect(result.success).toBe(true);
+    const events = getRecentEvents(undefined, 10);
+    const escalation = events.find((e) => e.type === 'candidate.escalation');
+    expect(escalation).toBeDefined();
+    const stored = JSON.parse(escalation!.payload);
+    expect(stored.source_message_id).toBe('ts-123.456');
+    expect(stored.source_channel).toBe('slack:CSUPPORT');
+  });
+
+  it('does not overwrite existing source fields in candidate.* payloads', async () => {
+    const obsId = insertObservedMessage({
+      source_chat_jid: 'slack:CSUPPORT',
+      source_message_id: 'ts-original',
+      source_type: 'passive_channel',
+      raw_text: 'test',
+    });
+
+    const payload = JSON.stringify({
+      observation_ids: [obsId],
+      source_channel: 'slack:COTHER',
+      source_message_id: 'ts-explicit',
+    });
+
+    await processTaskIpc(
+      {
+        type: 'publish_event',
+        eventType: 'candidate.escalation',
+        payload,
+      },
+      'slack_main',
+      true,
+      deps,
+    );
+
+    const events = getRecentEvents(undefined, 10);
+    const escalation = events.find((e) => e.type === 'candidate.escalation');
+    const stored = JSON.parse(escalation!.payload);
+    expect(stored.source_channel).toBe('slack:COTHER');
+    expect(stored.source_message_id).toBe('ts-explicit');
+  });
 });
 
 // --- consume_events IPC ---

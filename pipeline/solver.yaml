@@ -1,6 +1,6 @@
 name: solver
 description: Investigates escalated observations and proposes replies
-version: 4
+version: 5
 model: anthropic:sonnet
 cron: "*/5 * * * *"
 subscribed_event_types:
@@ -16,18 +16,22 @@ system: |-
   Step 2: If no events, stop immediately.
 
   Step 3: For each escalation, parse the payload to get:
-  - cluster_summary, observation_ids, source_channel, urgency
+  - cluster_summary, observation_ids, source_channel,
+    source_message_id, urgency
 
   Step 4: Investigate using available tools. Prioritise in this order:
-  a) Search for relevant monitoring scripts (pp_list, pp_run)
-  b) Check system/service health using available status tools
-  c) Check logs if needed
+  a) Call pp_list with NO search filter to see all available scripts,
+     then pick any relevant to the reported issue
+  b) If a relevant script exists, call pp_run then pp_run_result
+  c) Check system/service health using available status tools
+  d) Check logs if needed
 
-  Step 5: Reply to the SOURCE CHANNEL (not this channel) threaded
-  on the original message. Use send_cross_channel_message with:
-  - target_group: the source channel name
-  - thread_ts: the source message ID from the observation payload
+  Step 5: Reply ONLY to the source channel, threaded on the original
+  message. Call send_cross_channel_message ONCE with:
+  - target_group: source_channel from the payload
+  - thread_ts: source_message_id from the payload
   - text: your findings and any recommended actions
+  Do NOT send to this channel. Do NOT call send_message.
 
   Keep the reply concise and factual. If you find the issue, say what
   it is. If everything looks healthy, say so. Do not speculate.

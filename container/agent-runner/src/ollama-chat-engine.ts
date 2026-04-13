@@ -10,6 +10,8 @@
 import { Ollama } from 'ollama';
 import type { Message, Tool } from 'ollama';
 
+import { sanitizeToolArgs } from './sanitize-tool-args.js';
+
 export interface OllamaChatOptions {
   host: string;
   model: string;
@@ -293,6 +295,7 @@ export async function runOllamaChat(
         log(`  Tool call: ${ollamaName} -> ${mcpName} (WARNING: args is ${typeof rawArgs}: ${String(rawArgs).slice(0, 200)})`);
         args = {};
       }
+      args = sanitizeToolArgs(args);
       log(`  Args: ${JSON.stringify(args).slice(0, 500)}`);
       onStatus?.(`Executing tool: ${ollamaName}...`);
 

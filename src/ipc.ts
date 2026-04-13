@@ -698,11 +698,7 @@ function handleUpdateGroup(
   const groupUpdates: Partial<
     Pick<
       RegisteredGroup,
-      | 'model'
-      | 'temperature'
-      | 'maxToolRounds'
-      | 'timeoutMs'
-      | 'threadingMode'
+      'model' | 'temperature' | 'maxToolRounds' | 'timeoutMs' | 'threadingMode'
     >
   > = {};
   if (data.model !== undefined) groupUpdates.model = data.model || undefined;
@@ -737,11 +733,32 @@ function handlePublishEvent(
   const dedupeKey = (data.dedupeKey as string) || null;
   const ttlSeconds = (data.ttlSeconds as number) ?? null;
 
+  // Auto-enrich escalation payloads with source fields from observations
+  let enrichedPayload = payload;
+  if (eventType.startsWith('candidate.')) {
+    try {
+      const payloadObj = JSON.parse(payload);
+      const obsIds = payloadObj.observation_ids as number[] | undefined;
+      if (obsIds?.length && (!payloadObj.source_message_id || !payloadObj.source_channel)) {
+        const obs = getObservationById(obsIds[0]);
+        if (obs) {
+          if (!payloadObj.source_channel && obs.source_chat_jid)
+            payloadObj.source_channel = obs.source_chat_jid;
+          if (!payloadObj.source_message_id && obs.source_message_id)
+            payloadObj.source_message_id = obs.source_message_id;
+          enrichedPayload = JSON.stringify(payloadObj);
+        }
+      }
+    } catch {
+      /* parse failure — publish as-is */
+    }
+  }
+
   const result = publishEvent(
     eventType,
     sourceGroup,
     sourceTaskId,
-    payload,
+    enrichedPayload,
     dedupeKey,
     ttlSeconds,
   );
@@ -751,7 +768,7 @@ function handlePublishEvent(
     // Auto-acknowledge escalations in the source channel
     if (eventType === 'candidate.escalation' && deps?.sendMessage) {
       try {
-        const payloadObj = JSON.parse(payload);
+        const payloadObj = JSON.parse(enrichedPayload);
         const sourceChannel = payloadObj.source_channel;
         const sourceMessageId = payloadObj.source_message_id;
         if (sourceChannel) {

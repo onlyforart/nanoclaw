@@ -1,6 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
 
+import { sanitizeToolArgs } from './sanitize-tool-args.js';
+
 const REPEAT_THRESHOLD = 3;
 const DEFAULT_CONTEXT_WINDOW = 150_000;
 const COMPACTION_RATIO = 0.75;
@@ -330,7 +332,7 @@ export async function runAnthropicApiChat(
         injectedSkills.add(mapping.serverName);
       }
 
-      const args = (toolUse.input as Record<string, unknown>) ?? {};
+      const args = sanitizeToolArgs((toolUse.input as Record<string, unknown>) ?? {});
       let result: string;
       let isError = false;
 
