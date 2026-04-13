@@ -38,6 +38,7 @@ import {
   getAllTasks,
   getMessagesSince,
   getNewMessages,
+  getPassiveGroups,
   getRegisteredGroup,
   getRouterState,
   initDatabase,
@@ -752,6 +753,28 @@ async function main(): Promise<void> {
   // Write initial snapshots for all groups so containers have fresh data
   refreshAllGroupSnapshots();
   refreshAllTaskSnapshots();
+
+  // Backfill missed messages for passive channels (Slack doesn't replay events)
+  const passiveGroups = getPassiveGroups();
+  if (passiveGroups.length > 0) {
+    const cursors: Record<string, string> = {};
+    for (const g of passiveGroups) {
+      const cursor = getRouterState(`sanitiser_cursor:${g.jid}`);
+      if (cursor) cursors[g.jid] = cursor;
+    }
+    if (Object.keys(cursors).length > 0) {
+      for (const ch of channels) {
+        if (ch.backfillPassiveChannels) {
+          ch.backfillPassiveChannels(
+            passiveGroups.map((g) => g.jid),
+            cursors,
+          ).catch((err) =>
+            logger.warn({ err }, 'Passive channel backfill failed'),
+          );
+        }
+      }
+    }
+  }
 
   // Periodically reload group settings from DB so changes made by the web UI
   // (a separate process that writes directly to SQLite) are picked up without

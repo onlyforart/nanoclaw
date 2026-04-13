@@ -186,6 +186,11 @@ export interface Channel {
   setTyping?(jid: string, isTyping: boolean): Promise<void>;
   // Optional: sync group/chat names from the platform.
   syncGroups?(force: boolean): Promise<void>;
+  // Optional: backfill missed messages for passive channels after reconnect.
+  backfillPassiveChannels?(
+    passiveJids: string[],
+    cursors: Record<string, string>,
+  ): Promise<void>;
 }
 
 // Callback type that channels use to deliver inbound messages

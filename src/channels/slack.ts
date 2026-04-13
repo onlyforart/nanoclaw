@@ -153,6 +153,60 @@ export class SlackChannel implements Channel {
     await this.syncChannelMetadata();
   }
 
+  async backfillPassiveChannels(
+    passiveJids: string[],
+    cursors: Record<string, string>,
+  ): Promise<void> {
+    for (const jid of passiveJids) {
+      const channelId = jid.replace(/^slack:/, '');
+      const oldest = cursors[jid];
+      if (!oldest) continue;
+
+      try {
+        const oldestTs = String(new Date(oldest).getTime() / 1000);
+        const resp = await this.app.client.conversations.history({
+          channel: channelId,
+          oldest: oldestTs,
+          limit: 100,
+          inclusive: false,
+        });
+
+        let backfilled = 0;
+        for (const msg of resp.messages ?? []) {
+          if (!msg.text || !msg.ts) continue;
+          if (msg.bot_id || msg.user === this.botUserId) continue;
+
+          const timestamp = new Date(
+            parseFloat(msg.ts) * 1000,
+          ).toISOString();
+          this.opts.onMessage(jid, {
+            id: msg.ts,
+            chat_jid: jid,
+            sender: msg.user || '',
+            sender_name: msg.user || 'unknown',
+            content: msg.text,
+            timestamp,
+            is_from_me: false,
+            is_bot_message: false,
+          });
+          backfilled++;
+        }
+
+        if (backfilled > 0) {
+          logger.info(
+            { jid, backfilled },
+            'Backfilled passive channel history',
+          );
+        }
+      } catch (err) {
+        logger.warn(
+          { jid, err },
+          'Failed to backfill passive channel history',
+        );
+      }
+    }
+  }
+
   async sendMessage(
     jid: string,
     text: string,
