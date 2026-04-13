@@ -78,8 +78,8 @@ export function reconcilePipelineTasks(
         group_folder: teamGroupFolder,
         chat_jid: teamChatJid,
         prompt: spec.system,
-        schedule_type: spec.subscribed_event_types?.length ? 'event' : 'cron',
-        schedule_value: spec.subscribed_event_types?.length ? '' : spec.cron,
+        schedule_type: spec.subscribed_event_types?.length && spec.type !== 'host_pipeline' ? 'event' : 'cron',
+        schedule_value: spec.subscribed_event_types?.length && spec.type !== 'host_pipeline' ? '' : spec.cron,
         context_mode: 'isolated',
         model: spec.model,
         allowedTools: resolvedTools,
@@ -107,12 +107,18 @@ export function reconcilePipelineTasks(
         changeLog.push(`allowedTools: ${existingTools} → ${specTools}`);
       }
 
-      // Schedule type: spec-owned (event vs cron)
-      const specScheduleType = spec.subscribed_event_types?.length ? 'event' : 'cron';
+      // Schedule type: spec-owned. Host pipeline tasks keep cron (they poll + react).
+      // Container consumer tasks are purely event-driven.
+      const specScheduleType =
+        spec.subscribed_event_types?.length && spec.type !== 'host_pipeline'
+          ? 'event'
+          : 'cron';
       if (existing.schedule_type !== specScheduleType) {
         changes.schedule_type = specScheduleType;
         if (specScheduleType === 'event') changes.schedule_value = '';
-        changeLog.push(`schedule_type: ${existing.schedule_type} → ${specScheduleType}`);
+        changeLog.push(
+          `schedule_type: ${existing.schedule_type} → ${specScheduleType}`,
+        );
       }
 
       // Execution mode: spec-owned
