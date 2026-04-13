@@ -40,6 +40,9 @@ import { RegisteredGroup, ScheduledTask } from './types.js';
 export function computeNextRun(task: ScheduledTask): string | null {
   if (task.schedule_type === 'once') return null;
 
+  // Event-driven tasks: only fire when bumped by bumpConsumerTaskNextRun
+  if (task.subscribedEventTypes?.length) return null;
+
   const now = Date.now();
 
   if (task.schedule_type === 'cron') {
