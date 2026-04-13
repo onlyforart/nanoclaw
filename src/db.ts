@@ -1351,21 +1351,16 @@ export function consumeEvents(
 }
 
 /**
- * Get the payload of the most recently consumed event for a given claimedBy,
- * limited to events claimed within the last 10 minutes. This ensures stale
- * events from previous task runs are excluded.
+ * Get an event's payload by its ID.
+ * Used for pipeline auto-routing: the container passes the consumed event ID,
+ * and the host looks up the specific event to extract source context.
  */
-export function getLastConsumedEventPayload(
-  claimedBy: string,
+export function getEventPayloadById(
+  eventId: number,
 ): string | undefined {
   const row = db
-    .prepare(
-      `SELECT payload FROM events
-       WHERE claimed_by = ? AND status IN ('claimed', 'done')
-         AND claimed_at > datetime('now', '-10 minutes')
-       ORDER BY claimed_at DESC LIMIT 1`,
-    )
-    .get(claimedBy) as { payload: string } | undefined;
+    .prepare('SELECT payload FROM events WHERE id = ?')
+    .get(eventId) as { payload: string } | undefined;
   return row?.payload;
 }
 

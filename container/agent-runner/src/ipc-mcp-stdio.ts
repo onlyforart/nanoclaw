@@ -23,8 +23,8 @@ const isScheduledTask = process.env.NANOCLAW_IS_SCHEDULED_TASK === '1';
 const taskId = process.env.NANOCLAW_TASK_ID || undefined;
 const isOllama = process.env.NANOCLAW_IS_OLLAMA === '1';
 
-// Pipeline context cached from consume_events — attached to outbound IPC calls
-let pipelineContext: string | undefined;
+// Last consumed event ID — attached to outbound IPC calls for context lookup
+let lastConsumedEventId: number | undefined;
 
 // Model description varies: Ollama models should not see Claude aliases
 const modelDescription = isOllama
@@ -171,7 +171,7 @@ server.tool(
       sourceGroup: groupFolder,
       sourceTaskId: taskId,
       threadTs: args.thread_ts || undefined,
-      pipelineContext: pipelineContext || undefined,
+      contextEventId: lastConsumedEventId,
       timestamp: new Date().toISOString(),
     };
 
@@ -609,22 +609,9 @@ server.tool(
 
     const events = (result as any).events || [];
 
-    // Cache pipeline context from consumed events for auto-routing
+    // Cache last consumed event ID for pipeline auto-routing
     if (events.length > 0 && taskId?.startsWith('pipeline:')) {
-      const lastEvent = events[events.length - 1];
-      try {
-        const raw = (lastEvent.payload as string)
-          .replace(/===(?:END-)?OBSERVATION-[a-f0-9]+===\n?/g, '')
-          .trim();
-        const parsed = JSON.parse(raw);
-        pipelineContext = JSON.stringify({
-          source_channel: parsed.source_channel,
-          source_message_id: parsed.source_message_id,
-          cluster_summary: parsed.cluster_summary || parsed.summary,
-        });
-      } catch {
-        /* ignore parse failures */
-      }
+      lastConsumedEventId = events[events.length - 1].id;
     }
 
     return {

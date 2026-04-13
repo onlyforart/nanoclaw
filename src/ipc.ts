@@ -12,6 +12,7 @@ import {
   createTask,
   deleteTask,
   getCachedReextraction,
+  getEventPayloadById,
   getObservationById,
   getTaskById,
   insertIntakeLog,
@@ -149,17 +150,19 @@ async function handlePipelineCrossChannel(
   registeredGroups: Record<string, RegisteredGroup>,
   deps: IpcDeps,
 ): Promise<IpcResult | null> {
-  // Use pipeline context attached by the container (from consumed events)
-  let ctx: Record<string, unknown> | undefined;
-  const rawCtx = data.pipelineContext as string | undefined;
-  if (rawCtx) {
-    try {
-      ctx = JSON.parse(rawCtx);
-    } catch {
-      /* ignore */
-    }
+  // Look up the specific consumed event by ID (passed from the container)
+  const contextEventId = data.contextEventId as number | undefined;
+  if (!contextEventId) return null;
+
+  const eventPayload = getEventPayloadById(contextEventId);
+  if (!eventPayload) return null;
+
+  let ctx: Record<string, unknown>;
+  try {
+    ctx = JSON.parse(eventPayload);
+  } catch {
+    return null;
   }
-  if (!ctx) return null;
 
   const sourceChannel = ctx.source_channel as string | undefined;
   const sourceMessageId = ctx.source_message_id as string | undefined;
