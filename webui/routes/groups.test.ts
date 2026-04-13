@@ -24,7 +24,8 @@ beforeEach(() => {
       max_tool_rounds INTEGER DEFAULT NULL, timeout_ms INTEGER DEFAULT NULL,
       show_thinking INTEGER DEFAULT NULL,
       mode TEXT NOT NULL DEFAULT 'active',
-      threading_mode TEXT NOT NULL DEFAULT 'temporal'
+      threading_mode TEXT NOT NULL DEFAULT 'temporal',
+      pipeline_replies_blocked INTEGER DEFAULT 0
     );
   `);
   db.prepare(`INSERT INTO registered_groups (jid, name, folder, trigger_pattern, added_at, requires_trigger, is_main) VALUES (?, ?, ?, ?, ?, 1, 1)`).run(

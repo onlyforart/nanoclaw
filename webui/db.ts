@@ -31,6 +31,7 @@ export interface GroupRow {
   show_thinking: number | null;
   mode: string;
   threading_mode: string;
+  pipeline_replies_blocked: number;
 }
 
 export interface TaskRow {
@@ -74,7 +75,7 @@ export function getAllGroups(): GroupRow[] {
     .prepare(
       `SELECT jid, name, folder, trigger_pattern, is_main, requires_trigger,
               model, temperature, max_tool_rounds, timeout_ms, show_thinking,
-              mode, threading_mode
+              mode, threading_mode, pipeline_replies_blocked
        FROM registered_groups ORDER BY name`,
     )
     .all() as GroupRow[];
@@ -85,7 +86,7 @@ export function getGroupByFolder(folder: string): GroupRow | undefined {
     .prepare(
       `SELECT jid, name, folder, trigger_pattern, is_main, requires_trigger,
               model, temperature, max_tool_rounds, timeout_ms, show_thinking,
-              mode, threading_mode
+              mode, threading_mode, pipeline_replies_blocked
        FROM registered_groups WHERE folder = ?`,
     )
     .get(folder) as GroupRow | undefined;
@@ -93,7 +94,7 @@ export function getGroupByFolder(folder: string): GroupRow | undefined {
 
 export function updateGroup(
   folder: string,
-  updates: { model?: string; temperature?: number | null; max_tool_rounds?: number; timeout_ms?: number; show_thinking?: number | null; mode?: string; threading_mode?: string },
+  updates: { model?: string; temperature?: number | null; max_tool_rounds?: number; timeout_ms?: number; show_thinking?: number | null; mode?: string; threading_mode?: string; pipeline_replies_blocked?: number },
 ): boolean {
   const setClauses: string[] = [];
   const values: unknown[] = [];
@@ -125,6 +126,10 @@ export function updateGroup(
   if (updates.threading_mode !== undefined) {
     setClauses.push('threading_mode = ?');
     values.push(updates.threading_mode);
+  }
+  if (updates.pipeline_replies_blocked !== undefined) {
+    setClauses.push('pipeline_replies_blocked = ?');
+    values.push(updates.pipeline_replies_blocked);
   }
 
   if (setClauses.length === 0) return false;
@@ -338,7 +343,7 @@ export function getPassiveChannels(): GroupRow[] {
     .prepare(
       `SELECT jid, name, folder, trigger_pattern, is_main, requires_trigger,
               model, temperature, max_tool_rounds, timeout_ms, show_thinking,
-              mode, threading_mode
+              mode, threading_mode, pipeline_replies_blocked
        FROM registered_groups WHERE mode = 'passive' ORDER BY name`,
     )
     .all() as GroupRow[];

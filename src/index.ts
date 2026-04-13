@@ -674,7 +674,12 @@ async function main(): Promise<void> {
       // Sender allowlist drop mode: discard messages from denied senders before storing
       // Passive channels are exempt — the pipeline needs to see all messages
       const groupForAllowlist = registeredGroups[chatJid];
-      if (!msg.is_from_me && !msg.is_bot_message && groupForAllowlist && groupForAllowlist.mode !== 'passive') {
+      if (
+        !msg.is_from_me &&
+        !msg.is_bot_message &&
+        groupForAllowlist &&
+        groupForAllowlist.mode !== 'passive'
+      ) {
         const cfg = loadSenderAllowlist();
         if (
           shouldDropMessage(chatJid, cfg) &&

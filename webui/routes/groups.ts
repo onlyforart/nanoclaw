@@ -18,6 +18,7 @@ interface GroupResponse {
   trigger: string;
   mode: string;
   threadingMode: string;
+  pipelineRepliesBlocked: boolean;
 }
 
 function formatGroup(row: GroupRow): GroupResponse {
@@ -35,6 +36,7 @@ function formatGroup(row: GroupRow): GroupResponse {
     trigger: row.trigger_pattern,
     mode: row.mode || 'active',
     threadingMode: row.threading_mode || 'temporal',
+    pipelineRepliesBlocked: row.pipeline_replies_blocked === 1,
   };
 }
 
@@ -51,11 +53,11 @@ export function handleGetGroup(folder: string): GroupResponse | null {
 
 export function handlePatchGroup(
   folder: string,
-  body: { model?: string; temperature?: number; maxToolRounds?: number; timeoutMs?: number; showThinking?: boolean; mode?: string; threadingMode?: string },
+  body: { model?: string; temperature?: number; maxToolRounds?: number; timeoutMs?: number; showThinking?: boolean; mode?: string; threadingMode?: string; pipelineRepliesBlocked?: boolean },
 ): GroupResponse | null {
   if (!isValidGroupFolder(folder)) return null;
 
-  const updates: { model?: string; temperature?: number | null; max_tool_rounds?: number; timeout_ms?: number; show_thinking?: number | null; mode?: string; threading_mode?: string } = {};
+  const updates: { model?: string; temperature?: number | null; max_tool_rounds?: number; timeout_ms?: number; show_thinking?: number | null; mode?: string; threading_mode?: string; pipeline_replies_blocked?: number } = {};
   if (body.model !== undefined) updates.model = body.model;
   if (body.temperature !== undefined) updates.temperature = body.temperature != null && String(body.temperature) !== '' ? Number(body.temperature) : null;
   if (body.maxToolRounds !== undefined) updates.max_tool_rounds = body.maxToolRounds;
@@ -63,6 +65,7 @@ export function handlePatchGroup(
   if (body.showThinking !== undefined) updates.show_thinking = body.showThinking ? 1 : null;
   if (body.mode !== undefined) updates.mode = body.mode;
   if (body.threadingMode !== undefined) updates.threading_mode = body.threadingMode;
+  if (body.pipelineRepliesBlocked !== undefined) updates.pipeline_replies_blocked = body.pipelineRepliesBlocked ? 1 : 0;
 
   updateGroup(folder, updates);
 

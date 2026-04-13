@@ -209,6 +209,14 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  try {
+    database.exec(
+      `ALTER TABLE registered_groups ADD COLUMN pipeline_replies_blocked INTEGER DEFAULT 0`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
   // Add per-task configurable limits (Ollama direct mode)
   try {
     database.exec(
@@ -312,6 +320,15 @@ function createSchema(database: Database.Database): void {
   } catch {
     /* columns already exist */
   }
+
+  // --- Cross-channel delivery dedup (persisted across restarts) ---
+
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS cross_channel_deliveries (
+      key TEXT PRIMARY KEY,
+      delivered_at TEXT NOT NULL
+    );
+  `);
 
   // --- Observation pipeline tables ---
 
@@ -954,6 +971,7 @@ export function getRegisteredGroup(
         show_thinking: number | null;
         mode: string | null;
         threading_mode: string | null;
+        pipeline_replies_blocked: number | null;
       }
     | undefined;
   if (!row) return undefined;
@@ -987,6 +1005,7 @@ export function getRegisteredGroup(
     mode: (row.mode as RegisteredGroup['mode']) || undefined,
     threadingMode:
       (row.threading_mode as RegisteredGroup['threadingMode']) || undefined,
+    pipelineRepliesBlocked: row.pipeline_replies_blocked === 1,
   };
 }
 
@@ -1033,6 +1052,7 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
     show_thinking: number | null;
     mode: string | null;
     threading_mode: string | null;
+    pipeline_replies_blocked: number | null;
   }>;
   const result: Record<string, RegisteredGroup> = {};
   for (const row of rows) {
@@ -1062,6 +1082,7 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
       mode: (row.mode as RegisteredGroup['mode']) || undefined,
       threadingMode:
         (row.threading_mode as RegisteredGroup['threadingMode']) || undefined,
+      pipelineRepliesBlocked: row.pipeline_replies_blocked === 1,
     };
   }
   return result;
@@ -1079,12 +1100,17 @@ export function updateRegisteredGroup(
       | 'showThinking'
       | 'mode'
       | 'threadingMode'
+      | 'pipelineRepliesBlocked'
     >
   >,
 ): void {
   const fields: string[] = [];
   const values: unknown[] = [];
 
+  if (updates.pipelineRepliesBlocked !== undefined) {
+    fields.push('pipeline_replies_blocked = ?');
+    values.push(updates.pipelineRepliesBlocked ? 1 : 0);
+  }
   if (updates.model !== undefined) {
     fields.push('model = ?');
     values.push(updates.model || null);
@@ -1360,6 +1386,25 @@ export function getEventPayloadById(eventId: number): string | undefined {
     .prepare('SELECT payload FROM events WHERE id = ?')
     .get(eventId) as { payload: string } | undefined;
   return row?.payload;
+}
+
+// --- Cross-channel delivery dedup ---
+
+export function isCrossChannelDelivered(key: string): boolean {
+  const row = db
+    .prepare('SELECT 1 FROM cross_channel_deliveries WHERE key = ?')
+    .get(key);
+  return !!row;
+}
+
+export function recordCrossChannelDeliveryDB(key: string): void {
+  db.prepare(
+    `INSERT OR IGNORE INTO cross_channel_deliveries (key, delivered_at) VALUES (?, ?)`,
+  ).run(key, new Date().toISOString());
+}
+
+export function _clearCrossChannelDeliveries(): void {
+  db.prepare('DELETE FROM cross_channel_deliveries').run();
 }
 
 export function ackEvent(

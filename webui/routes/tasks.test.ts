@@ -39,7 +39,8 @@ beforeEach(() => {
       model TEXT, temperature REAL, max_tool_rounds INTEGER, timeout_ms INTEGER,
       show_thinking INTEGER DEFAULT 0,
       mode TEXT NOT NULL DEFAULT 'active',
-      threading_mode TEXT NOT NULL DEFAULT 'temporal'
+      threading_mode TEXT NOT NULL DEFAULT 'temporal',
+      pipeline_replies_blocked INTEGER DEFAULT 0
     );
   `);
 

@@ -568,6 +568,13 @@ const AppGroupDetail = {
                 </select>
               </div>
             </div>
+            <div class="mb-4">
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" v-model="form.pipelineRepliesBlocked" class="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                <span class="text-sm font-medium">Block pipeline replies</span>
+              </label>
+              <span class="text-xs text-gray-500 dark:text-gray-400 ml-6">Pipeline runs but replies are not delivered to this channel (for testing)</span>
+            </div>
             <button @click="saveSettings" :disabled="saving"
               class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors">
               {{ saving ? 'Saving...' : 'Save Settings' }}
@@ -788,7 +795,7 @@ const AppGroupDetail = {
     const chartContainerWidth = ref(800);
     let resizeObserver = null;
 
-    const form = Vue.reactive({ model: '', temperature: null, maxToolRounds: null, timeoutMs: null, showThinking: false, mode: 'active', threadingMode: 'temporal' });
+    const form = Vue.reactive({ model: '', temperature: null, maxToolRounds: null, timeoutMs: null, showThinking: false, mode: 'active', threadingMode: 'temporal', pipelineRepliesBlocked: false });
     const showNewTask = ref(false);
     const newTask = Vue.reactive({
       prompt: '', scheduleType: 'cron', scheduleValue: '', contextMode: 'isolated',
@@ -827,6 +834,7 @@ const AppGroupDetail = {
         form.showThinking = g.showThinking ?? false;
         form.mode = g.mode || 'active';
         form.threadingMode = g.threadingMode || 'temporal';
+        form.pipelineRepliesBlocked = g.pipelineRepliesBlocked ?? false;
         claude.value = p.claude;
         ollama.value = p.ollama || '';
         tasks.value = t;
@@ -862,6 +870,7 @@ const AppGroupDetail = {
         body.showThinking = form.showThinking;
         body.mode = form.mode;
         body.threadingMode = form.threadingMode;
+        body.pipelineRepliesBlocked = form.pipelineRepliesBlocked;
         await api(`/groups/${props.folder}`, { method: 'PATCH', body });
         showToast('Settings saved');
       } catch (e) { showToast(e.message, 'error'); }

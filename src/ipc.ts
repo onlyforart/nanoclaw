@@ -12,9 +12,12 @@ import {
   createTask,
   deleteTask,
   getCachedReextraction,
+  _clearCrossChannelDeliveries,
   getEventPayloadById,
   getObservationById,
   getTaskById,
+  isCrossChannelDelivered,
+  recordCrossChannelDeliveryDB,
   insertIntakeLog,
   publishEvent,
   readChatMessages,
@@ -116,29 +119,6 @@ export function hasRecentIpcDelivery(
   return valid.some((e) => e.textHash === targetHash);
 }
 
-// --- Cross-channel idempotency tracking ---
-const IDEMPOTENCY_TTL_MS = 60 * 60 * 1000; // 1 hour
-// key: `${targetJid}:${idempotencyKey}` → timestamp
-const crossChannelIdempotency = new Map<string, number>();
-
-function isCrossChannelDuplicate(
-  targetJid: string,
-  idempotencyKey: string,
-): boolean {
-  const key = `${targetJid}:${idempotencyKey}`;
-  const ts = crossChannelIdempotency.get(key);
-  if (ts && Date.now() - ts < IDEMPOTENCY_TTL_MS) return true;
-  return false;
-}
-
-function recordCrossChannelDelivery(
-  targetJid: string,
-  idempotencyKey: string,
-): void {
-  const key = `${targetJid}:${idempotencyKey}`;
-  crossChannelIdempotency.set(key, Date.now());
-}
-
 /**
  * Auto-route cross-channel sends from pipeline tasks.
  * Primary: always to source channel thread. Secondary: model's target with context header.
@@ -173,12 +153,19 @@ async function handlePipelineCrossChannel(
 
   const sourceChannel = ctx.source_channel as string | undefined;
   const sourceMessageId = ctx.source_message_id as string | undefined;
+  if (!sourceChannel) return null;
 
-  if (!sourceChannel || !registeredGroups[sourceChannel]) return null;
+  const sourceGroup = registeredGroups[sourceChannel];
+  if (!sourceGroup) return null;
 
-  // Primary: send to source channel thread
+  // Primary: send to source channel thread (unless replies are blocked)
   const primaryKey = `${sourceTaskId}:${sourceChannel}:evt${contextEventId}`;
-  if (!isCrossChannelDuplicate(sourceChannel, primaryKey)) {
+  if (sourceGroup.pipelineRepliesBlocked) {
+    logger.info(
+      { sourceChannel, sourceTaskId, contextEventId },
+      'Pipeline reply blocked (channel has pipeline_replies_blocked)',
+    );
+  } else if (!isCrossChannelDelivered(primaryKey)) {
     const result = await sendWithRetry(
       (jid, text) =>
         deps.sendMessage(
@@ -190,7 +177,7 @@ async function handlePipelineCrossChannel(
       data.text as string,
     );
     if (result.success) {
-      recordCrossChannelDelivery(sourceChannel, primaryKey);
+      recordCrossChannelDeliveryDB(primaryKey);
       logger.info(
         {
           targetChatJid: sourceChannel,
@@ -207,9 +194,7 @@ async function handlePipelineCrossChannel(
     const target = registeredGroups[data.targetChatJid as string];
     if (target) {
       const secondaryKey = `${sourceTaskId}:${data.targetChatJid}:evt${contextEventId}`;
-      if (
-        !isCrossChannelDuplicate(data.targetChatJid as string, secondaryKey)
-      ) {
+      if (!isCrossChannelDelivered(secondaryKey)) {
         const sourceName =
           registeredGroups[sourceChannel]?.name || sourceChannel;
         const summary = (ctx.cluster_summary as string) || '(escalation)';
@@ -219,7 +204,7 @@ async function handlePipelineCrossChannel(
           data.targetChatJid as string,
           header + (data.text as string),
         );
-        recordCrossChannelDelivery(data.targetChatJid as string, secondaryKey);
+        recordCrossChannelDeliveryDB(secondaryKey);
       }
     }
   }
@@ -231,7 +216,7 @@ async function handlePipelineCrossChannel(
 export function _resetIpcWatcherForTests(): void {
   ipcWatcherRunning = false;
   recentDeliveries.clear();
-  crossChannelIdempotency.clear();
+  _clearCrossChannelDeliveries();
 }
 
 /** Reset only the singleton guard so startIpcWatcher can run again — test-only. */
@@ -365,11 +350,11 @@ export function startIpcWatcher(deps: IpcDeps): void {
                     | undefined;
                   const threadTs = data.threadTs as string | undefined;
 
-                  // Idempotency check
-                  if (
-                    idempotencyKey &&
-                    isCrossChannelDuplicate(data.targetChatJid, idempotencyKey)
-                  ) {
+                  // Idempotency check (persisted to DB)
+                  const dedupKey = idempotencyKey
+                    ? `${data.targetChatJid}:${idempotencyKey}`
+                    : undefined;
+                  if (dedupKey && isCrossChannelDelivered(dedupKey)) {
                     logger.info(
                       {
                         targetChatJid: data.targetChatJid,
@@ -399,11 +384,8 @@ export function startIpcWatcher(deps: IpcDeps): void {
                     writeIpcResult(`${filePath}.result`, crossChannelResult);
                     continue;
                   }
-                  if (idempotencyKey) {
-                    recordCrossChannelDelivery(
-                      data.targetChatJid,
-                      idempotencyKey,
-                    );
+                  if (dedupKey) {
+                    recordCrossChannelDeliveryDB(dedupKey);
                   }
                   crossChannelResult = { success: true };
                   logger.info(
@@ -881,7 +863,9 @@ function handlePublishEvent(
         const payloadObj = JSON.parse(enrichedPayload);
         const sourceChannel = payloadObj.source_channel;
         const sourceMessageId = payloadObj.source_message_id;
-        if (sourceChannel) {
+        const groups = deps.registeredGroups();
+        const blocked = groups[sourceChannel]?.pipelineRepliesBlocked;
+        if (sourceChannel && !blocked) {
           deps
             .sendMessage(
               sourceChannel,

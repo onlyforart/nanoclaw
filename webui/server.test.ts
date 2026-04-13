@@ -85,7 +85,8 @@ beforeEach(async () => {
       max_tool_rounds INTEGER DEFAULT NULL, timeout_ms INTEGER DEFAULT NULL,
       show_thinking INTEGER DEFAULT NULL,
       mode TEXT NOT NULL DEFAULT 'active',
-      threading_mode TEXT NOT NULL DEFAULT 'temporal'
+      threading_mode TEXT NOT NULL DEFAULT 'temporal',
+      pipeline_replies_blocked INTEGER DEFAULT 0
     );
     CREATE TABLE scheduled_tasks (
       id TEXT PRIMARY KEY, group_folder TEXT NOT NULL, chat_jid TEXT NOT NULL,

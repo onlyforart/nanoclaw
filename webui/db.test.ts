@@ -49,7 +49,8 @@ beforeEach(() => {
       timeout_ms INTEGER DEFAULT NULL,
       show_thinking INTEGER DEFAULT NULL,
       mode TEXT NOT NULL DEFAULT 'active',
-      threading_mode TEXT NOT NULL DEFAULT 'temporal'
+      threading_mode TEXT NOT NULL DEFAULT 'temporal',
+      pipeline_replies_blocked INTEGER DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS scheduled_tasks (

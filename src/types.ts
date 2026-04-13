@@ -47,6 +47,7 @@ export interface RegisteredGroup {
   showThinking?: boolean; // Send thinking/reasoning to channel. Ollama only. Default: false.
   mode?: 'active' | 'passive' | 'control'; // Default: 'active'
   threadingMode?: 'temporal' | 'thread_aware'; // Default: 'temporal'
+  pipelineRepliesBlocked?: boolean; // Block pipeline replies to this channel (for testing). Default: false.
 }
 
 export interface NewMessage {
