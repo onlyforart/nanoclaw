@@ -156,7 +156,8 @@ async function handlePipelineCrossChannel(
   if (!contextEventId) {
     return {
       success: false,
-      error: 'Pipeline task must consume events before sending. Call consume_events first.',
+      error:
+        'Pipeline task must consume events before sending. Call consume_events first.',
     };
   }
 
