@@ -139,6 +139,82 @@ function recordCrossChannelDelivery(
   crossChannelIdempotency.set(key, Date.now());
 }
 
+/**
+ * Auto-route cross-channel sends from pipeline tasks.
+ * Primary: always to source channel thread. Secondary: model's target with context header.
+ * Returns null if no pipeline context (caller should fall through to normal handling).
+ */
+async function handlePipelineCrossChannel(
+  data: IpcData,
+  sourceTaskId: string,
+  registeredGroups: Record<string, RegisteredGroup>,
+  deps: IpcDeps,
+): Promise<IpcResult | null> {
+  const eventPayload = getLastConsumedEventPayload(sourceTaskId);
+  if (!eventPayload) return null;
+
+  let ctx: Record<string, unknown>;
+  try {
+    ctx = JSON.parse(eventPayload);
+  } catch {
+    return null;
+  }
+  const sourceChannel = ctx.source_channel as string | undefined;
+  const sourceMessageId = ctx.source_message_id as string | undefined;
+
+  if (!sourceChannel || !registeredGroups[sourceChannel]) return null;
+
+  const today = new Date().toISOString().slice(0, 10);
+
+  // Primary: send to source channel thread
+  const primaryKey = `${sourceTaskId}:${sourceChannel}:${today}`;
+  if (!isCrossChannelDuplicate(sourceChannel, primaryKey)) {
+    const result = await sendWithRetry(
+      (jid, text) =>
+        deps.sendMessage(
+          jid,
+          text,
+          sourceMessageId ? { threadTs: sourceMessageId } : undefined,
+        ),
+      sourceChannel,
+      data.text as string,
+    );
+    if (result.success) {
+      recordCrossChannelDelivery(sourceChannel, primaryKey);
+      logger.info(
+        {
+          targetChatJid: sourceChannel,
+          sourceTaskId,
+          threadTs: sourceMessageId,
+        },
+        'Pipeline reply auto-routed to source channel thread',
+      );
+    }
+  }
+
+  // Secondary: if model targeted a different channel, send context copy
+  if (data.targetChatJid !== sourceChannel) {
+    const target = registeredGroups[data.targetChatJid as string];
+    if (target) {
+      const secondaryKey = `${sourceTaskId}:${data.targetChatJid}:${today}`;
+      if (!isCrossChannelDuplicate(data.targetChatJid as string, secondaryKey)) {
+        const sourceName =
+          registeredGroups[sourceChannel]?.name || sourceChannel;
+        const summary = (ctx.cluster_summary as string) || '(escalation)';
+        const header = `_Investigated report in #${sourceName}_\n> ${summary}\n\n`;
+        await sendWithRetry(
+          (jid, text) => deps.sendMessage(jid, text),
+          data.targetChatJid as string,
+          header + (data.text as string),
+        );
+        recordCrossChannelDelivery(data.targetChatJid as string, secondaryKey);
+      }
+    }
+  }
+
+  return { success: true };
+}
+
 /** Reset singleton guard and delivery tracking — test-only. */
 export function _resetIpcWatcherForTests(): void {
   ipcWatcherRunning = false;
@@ -231,8 +307,29 @@ export function startIpcWatcher(deps: IpcDeps): void {
                 // Cross-channel: any group can send to any registered group
                 const targetGroup = registeredGroups[data.targetChatJid];
                 if (targetGroup) {
-                  // Enforce allowed_send_targets when sourceTaskId is present
                   const sourceTaskId = data.sourceTaskId as string | undefined;
+
+                  // Pipeline auto-routing: send to source channel thread
+                  if (sourceTaskId?.startsWith('pipeline:')) {
+                    const pipelineResult =
+                      await handlePipelineCrossChannel(
+                        data,
+                        sourceTaskId,
+                        registeredGroups,
+                        deps,
+                      );
+                    if (pipelineResult) {
+                      crossChannelResult = pipelineResult;
+                      writeIpcResult(
+                        `${filePath}.result`,
+                        crossChannelResult,
+                      );
+                      continue;
+                    }
+                    // No pipeline context — fall through to normal handling
+                  }
+
+                  // Enforce allowed_send_targets when sourceTaskId is present
                   if (sourceTaskId) {
                     const task = getTaskById(sourceTaskId);
                     if (

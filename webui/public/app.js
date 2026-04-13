@@ -1174,11 +1174,18 @@ const AppTaskDetail = {
                 <textarea v-model="form.allowedTools" rows="3" placeholder='JSON array, e.g. ["consume_events","publish_event"]'
                   class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition font-mono"></textarea>
               </div>
-              <div>
+              <div v-if="taskId.startsWith('pipeline:')">
+                <label class="block text-sm font-medium mb-1">Allowed Send Targets</label>
+                <div class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 text-sm min-h-[4rem]">
+                  <div v-if="task?.allowedSendTargets?.length" class="text-xs text-gray-400 mb-1">Resolved from passive groups. Updates automatically on restart.</div>
+                  <div v-else class="text-gray-400 text-xs">No send target restrictions</div>
+                  <span v-if="task?.allowedSendTargets" v-for="t in task.allowedSendTargets" :key="t"
+                    class="inline-block px-1.5 py-0.5 mr-1 mb-0.5 rounded bg-emerald-100 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-200 font-mono text-[11px]">{{ t }}</span>
+                </div>
+              </div>
+              <div v-else>
                 <label class="block text-sm font-medium mb-1">Allowed Send Targets</label>
                 <textarea v-model="form.allowedSendTargets" rows="3" placeholder='JSON array, e.g. ["slack:CPASSIVE"]'
-                  :disabled="taskId.startsWith('pipeline:')"
-                  :class="taskId.startsWith('pipeline:') ? 'bg-gray-50 dark:bg-gray-900 cursor-not-allowed' : ''"
                   class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition font-mono"></textarea>
               </div>
             </div>

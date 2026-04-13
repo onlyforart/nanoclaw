@@ -514,10 +514,10 @@ describe('cross_channel_message IPC', () => {
     expect(result.error).toContain('permanent failure');
   });
 
-  // --- pipeline context auto-threading ---
+  // --- pipeline auto-routing ---
 
-  it('auto-injects thread_ts from consumed event when sourceTaskId is a pipeline task', async () => {
-    // Publish and consume an event so the solver has context
+  it('auto-routes pipeline reply to source channel thread regardless of model target', async () => {
+    // Set up consumed event context for the solver
     publishEvent(
       'candidate.escalation',
       'slack_main',
@@ -525,59 +525,118 @@ describe('cross_channel_message IPC', () => {
       JSON.stringify({
         source_channel: 'slack:CSUPPORT',
         source_message_id: 'ts-999.111',
-        observation_ids: [1],
+        cluster_summary: 'Widget not loading',
       }),
     );
     consumeEvents(['candidate.escalation'], 'pipeline:solver', 1);
 
-    // Solver sends cross-channel message WITHOUT thread_ts
+    // Model sends to its OWN channel (wrong target) — infrastructure should auto-route
     writeMessage('slack_monitoring-channel', {
       type: 'cross_channel_message',
-      targetChatJid: 'slack:CSUPPORT',
+      targetChatJid: 'slack:CDEV',
       text: 'Investigation complete',
       sourceTaskId: 'pipeline:solver',
     });
 
     await runOnce();
 
+    // Primary: sent to source channel, threaded
     expect(sendMessage).toHaveBeenCalledWith(
       'slack:CSUPPORT',
       'Investigation complete',
       { threadTs: 'ts-999.111' },
     );
+    // Secondary: also sent to model's target with context header
+    expect(sendMessage).toHaveBeenCalledWith(
+      'slack:CDEV',
+      expect.stringContaining('Investigated report in #support-channel'),
+    );
+    expect(sendMessage).toHaveBeenCalledTimes(2);
   });
 
-  it('does not override explicit thread_ts from pipeline task', async () => {
+  it('sends only once when pipeline model targets the source channel', async () => {
     publishEvent(
       'candidate.escalation',
       'slack_main',
       'pipeline:monitor',
-      JSON.stringify({ source_message_id: 'ts-auto' }),
+      JSON.stringify({
+        source_channel: 'slack:CSUPPORT',
+        source_message_id: 'ts-123.456',
+        cluster_summary: 'System down',
+      }),
     );
     consumeEvents(['candidate.escalation'], 'pipeline:solver', 1);
 
+    // Model correctly targets the source channel
     writeMessage('slack_monitoring-channel', {
       type: 'cross_channel_message',
       targetChatJid: 'slack:CSUPPORT',
-      text: 'Explicit thread',
+      text: 'All clear',
       sourceTaskId: 'pipeline:solver',
-      threadTs: 'ts-explicit',
+    });
+
+    await runOnce();
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      'slack:CSUPPORT',
+      'All clear',
+      { threadTs: 'ts-123.456' },
+    );
+  });
+
+  it('falls through to normal handling when pipeline has no consumed event context', async () => {
+    // No consumed events for this task
+    writeMessage('slack_monitoring-channel', {
+      type: 'cross_channel_message',
+      targetChatJid: 'slack:CSUPPORT',
+      text: 'No context',
+      sourceTaskId: 'pipeline:solver',
+    });
+
+    await runOnce();
+
+    // Normal send — no auto-routing
+    expect(sendMessage).toHaveBeenCalledWith(
+      'slack:CSUPPORT',
+      'No context',
+      undefined,
+    );
+  });
+
+  it('does not auto-route for non-pipeline tasks', async () => {
+    writeMessage('slack_monitoring-channel', {
+      type: 'cross_channel_message',
+      targetChatJid: 'slack:CSUPPORT',
+      text: 'Regular send',
     });
 
     await runOnce();
 
     expect(sendMessage).toHaveBeenCalledWith(
       'slack:CSUPPORT',
-      'Explicit thread',
-      { threadTs: 'ts-explicit' },
+      'Regular send',
+      undefined,
     );
+    expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  it('auto-generates idempotency key for pipeline sends', async () => {
+  it('deduplicates repeated pipeline sends to same source channel', async () => {
+    publishEvent(
+      'candidate.escalation',
+      'slack_main',
+      'pipeline:monitor',
+      JSON.stringify({
+        source_channel: 'slack:CSUPPORT',
+        source_message_id: 'ts-dedup',
+      }),
+    );
+    consumeEvents(['candidate.escalation'], 'pipeline:solver', 1);
+
     writeMessage('slack_monitoring-channel', {
       type: 'cross_channel_message',
       targetChatJid: 'slack:CSUPPORT',
-      text: 'First send',
+      text: 'First attempt',
       sourceTaskId: 'pipeline:solver',
     });
 
@@ -585,16 +644,16 @@ describe('cross_channel_message IPC', () => {
 
     _resetIpcWatcherGuardForTests();
 
-    // Second send from same pipeline task to same target on same day → deduplicated
     writeMessage('slack_monitoring-channel', {
       type: 'cross_channel_message',
       targetChatJid: 'slack:CSUPPORT',
-      text: 'Duplicate send',
+      text: 'Retry attempt',
       sourceTaskId: 'pipeline:solver',
     });
 
     await runOnce();
 
+    // Only sent once — second was deduplicated
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 });

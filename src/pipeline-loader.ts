@@ -101,7 +101,7 @@ export function reconcilePipelineTasks(
     } else {
       // Compare spec-derived values against DB — only update fields that
       // actually changed in the spec. DB always wins for operational
-      // settings (model, prompt, schedule, send targets).
+      // settings (model, prompt, schedule).
       const changes: Record<string, unknown> = {};
       const changeLog: string[] = [];
 
@@ -111,6 +111,14 @@ export function reconcilePipelineTasks(
       if (existingTools !== specTools) {
         changes.allowedTools = resolvedTools;
         changeLog.push(`allowedTools: ${existingTools} → ${specTools}`);
+      }
+
+      // Send targets: re-resolved from {source_channel} templates + passive groups
+      const existingTargets = JSON.stringify(existing.allowedSendTargets ?? []);
+      const specTargets = JSON.stringify(resolvedSendTargets);
+      if (existingTargets !== specTargets) {
+        changes.allowedSendTargets = resolvedSendTargets;
+        changeLog.push(`allowedSendTargets: ${existingTargets} → ${specTargets}`);
       }
 
       // Schedule type: spec-owned. Host pipeline tasks keep cron (they poll + react).
