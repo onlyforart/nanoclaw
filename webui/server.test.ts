@@ -97,7 +97,8 @@ beforeEach(async () => {
       use_agent_sdk INTEGER DEFAULT 0,
       allowed_tools TEXT, allowed_send_targets TEXT,
       execution_mode TEXT NOT NULL DEFAULT 'container',
-      subscribed_event_types TEXT
+      subscribed_event_types TEXT,
+      fallback_poll_ms INTEGER DEFAULT NULL
     );
     CREATE TABLE task_run_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL,

@@ -1023,10 +1023,20 @@ const AppTaskDetail = {
         <!-- Settings Tab -->
         <div v-if="activeTab === 'settings'">
           <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
-            <div v-if="task?.subscribedEventTypes?.length" class="mb-4 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
-              <div class="text-sm font-medium mb-1">Trigger</div>
-              <div class="text-purple-600 dark:text-purple-400 text-sm">Event-driven</div>
-              <div class="text-xs text-gray-400 font-mono mt-1">{{ task.subscribedEventTypes.join(', ') }}</div>
+            <div v-if="task?.scheduleType === 'event' || task?.subscribedEventTypes?.length" class="mb-4">
+              <div class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 mb-2">
+                <div class="text-sm font-medium mb-1">Trigger</div>
+                <div class="text-purple-600 dark:text-purple-400 text-sm">Event-driven</div>
+                <div v-if="task?.subscribedEventTypes?.length" class="text-xs text-gray-400 font-mono mt-1">{{ task.subscribedEventTypes.join(', ') }}</div>
+              </div>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label class="block text-sm font-medium mb-1">Fallback Poll (ms)</label>
+                  <input v-model.number="form.fallbackPollMs" type="number" placeholder="Optional — e.g. 3600000 for hourly"
+                    class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
+                  <p class="mt-1 text-xs text-gray-400">Safety net poll interval. Leave empty for purely event-driven.</p>
+                </div>
+              </div>
             </div>
             <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
               <div>
@@ -1229,7 +1239,7 @@ const AppTaskDetail = {
     const form = Vue.reactive({
       scheduleType: '', scheduleValue: '', contextMode: 'isolated', model: '', temperature: null, timezone: '',
       maxToolRounds: null, timeoutMs: null, useAgentSdk: false, status: 'active',
-      executionMode: 'container', subscribedEventTypes: '', allowedTools: '', allowedSendTargets: '',
+      executionMode: 'container', subscribedEventTypes: '', allowedTools: '', allowedSendTargets: '', fallbackPollMs: null,
     });
 
     const modelPlaceholder = computed(() => {
@@ -1275,6 +1285,7 @@ const AppTaskDetail = {
         form.useAgentSdk = !!t.useAgentSdk;
         form.executionMode = t.executionMode || 'container';
         form.subscribedEventTypes = t.subscribedEventTypes ? t.subscribedEventTypes.join(', ') : '';
+        form.fallbackPollMs = t.fallbackPollMs || null;
         form.allowedTools = t.allowedTools ? JSON.stringify(t.allowedTools) : '';
         form.allowedSendTargets = t.allowedSendTargets ? JSON.stringify(t.allowedSendTargets) : '';
         form.status = t.status;
@@ -1303,6 +1314,7 @@ const AppTaskDetail = {
         body.useAgentSdk = form.useAgentSdk;
         body.executionMode = form.executionMode;
         body.subscribedEventTypes = form.subscribedEventTypes ? form.subscribedEventTypes.split(',').map(s => s.trim()).filter(Boolean) : null;
+        if (form.fallbackPollMs != null) body.fallbackPollMs = form.fallbackPollMs;
         // Pipeline tasks: tools are spec-derived, don't send from UI
         if (!props.taskId.startsWith('pipeline:')) {
           try { body.allowedTools = form.allowedTools ? JSON.parse(form.allowedTools) : null; } catch { body.allowedTools = undefined; }

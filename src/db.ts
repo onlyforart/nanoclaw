@@ -263,6 +263,13 @@ function createSchema(database: Database.Database): void {
   } catch {
     /* column already exists */
   }
+  try {
+    database.exec(
+      `ALTER TABLE scheduled_tasks ADD COLUMN fallback_poll_ms INTEGER DEFAULT NULL`,
+    );
+  } catch {
+    /* column already exists */
+  }
 
   // Add channel and is_group columns if they don't exist (migration for existing DBs)
   try {
@@ -654,8 +661,8 @@ export function createTask(
 ): void {
   db.prepare(
     `
-    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, model, temperature, timezone, max_tool_rounds, timeout_ms, use_agent_sdk, allowed_tools, allowed_send_targets, execution_mode, subscribed_event_types, next_run, status, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, model, temperature, timezone, max_tool_rounds, timeout_ms, use_agent_sdk, allowed_tools, allowed_send_targets, execution_mode, subscribed_event_types, fallback_poll_ms, next_run, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `,
   ).run(
     task.id,
@@ -677,13 +684,14 @@ export function createTask(
     task.subscribedEventTypes
       ? JSON.stringify(task.subscribedEventTypes)
       : null,
+    task.fallbackPollMs ?? null,
     task.next_run,
     task.status,
     task.created_at,
   );
 }
 
-const TASK_SELECT = `SELECT id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, model, temperature, timezone, max_tool_rounds AS maxToolRounds, timeout_ms AS timeoutMs, use_agent_sdk AS useAgentSdk, allowed_tools, allowed_send_targets, execution_mode AS executionMode, subscribed_event_types, next_run, last_run, last_result, status, created_at FROM scheduled_tasks`;
+const TASK_SELECT = `SELECT id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, model, temperature, timezone, max_tool_rounds AS maxToolRounds, timeout_ms AS timeoutMs, use_agent_sdk AS useAgentSdk, allowed_tools, allowed_send_targets, execution_mode AS executionMode, subscribed_event_types, fallback_poll_ms AS fallbackPollMs, next_run, last_run, last_result, status, created_at FROM scheduled_tasks`;
 
 function parseTaskRow(row: any): ScheduledTask {
   return {
@@ -738,6 +746,7 @@ export function updateTask(
       | 'allowedSendTargets'
       | 'executionMode'
       | 'subscribedEventTypes'
+      | 'fallbackPollMs'
     >
   >,
 ): void {
@@ -814,6 +823,10 @@ export function updateTask(
         : null,
     );
   }
+  if (updates.fallbackPollMs !== undefined) {
+    fields.push('fallback_poll_ms = ?');
+    values.push(updates.fallbackPollMs ?? null);
+  }
 
   if (fields.length === 0) return;
 
@@ -848,7 +861,8 @@ export function updateTaskAfterRun(
   db.prepare(
     `
     UPDATE scheduled_tasks
-    SET next_run = ?, last_run = ?, last_result = ?, status = CASE WHEN ? IS NULL THEN 'completed' ELSE status END
+    SET next_run = ?, last_run = ?, last_result = ?,
+        status = CASE WHEN ? IS NULL AND schedule_type != 'event' THEN 'completed' ELSE status END
     WHERE id = ?
   `,
   ).run(nextRun, now, lastResult, nextRun, id);

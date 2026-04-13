@@ -74,7 +74,8 @@ beforeEach(() => {
       allowed_tools TEXT,
       allowed_send_targets TEXT,
       execution_mode TEXT NOT NULL DEFAULT 'container',
-      subscribed_event_types TEXT
+      subscribed_event_types TEXT,
+      fallback_poll_ms INTEGER DEFAULT NULL
     );
 
     CREATE TABLE IF NOT EXISTS task_run_logs (

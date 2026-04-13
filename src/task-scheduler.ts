@@ -15,6 +15,7 @@ import {
   getAllTasks,
   getDueTasks,
   getPassiveGroups,
+  getRecentEvents,
   getTaskById,
   logTaskRun,
   updateTask,
@@ -40,8 +41,13 @@ import { RegisteredGroup, ScheduledTask } from './types.js';
 export function computeNextRun(task: ScheduledTask): string | null {
   if (task.schedule_type === 'once') return null;
 
-  // Event-driven tasks: only fire when bumped by bumpConsumerTaskNextRun
-  if (task.subscribedEventTypes?.length) return null;
+  // Event-driven tasks: optional fallback poll, otherwise null (purely event-driven)
+  if (task.schedule_type === 'event') {
+    if (task.fallbackPollMs) {
+      return new Date(Date.now() + task.fallbackPollMs).toISOString();
+    }
+    return null;
+  }
 
   const now = Date.now();
 
@@ -119,6 +125,24 @@ async function runTask(
   if (task.executionMode === 'host_pipeline') {
     await runHostPipeline(task, startTime);
     return;
+  }
+
+  // Event-driven tasks: pre-flight check — skip container if no pending events
+  if (task.schedule_type === 'event' && task.subscribedEventTypes?.length) {
+    const pending = getRecentEvents(task.subscribedEventTypes, 1, false);
+    if (pending.length === 0) {
+      const nextRun = computeNextRun(task);
+      updateTaskAfterRun(task.id, nextRun, 'No pending events');
+      logTaskRun({
+        task_id: task.id,
+        run_at: new Date().toISOString(),
+        duration_ms: Date.now() - startTime,
+        status: 'success',
+        result: 'No pending events (pre-flight)',
+        error: null,
+      });
+      return;
+    }
   }
 
   logger.info(

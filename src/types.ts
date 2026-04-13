@@ -65,8 +65,9 @@ export interface ScheduledTask {
   group_folder: string;
   chat_jid: string;
   prompt: string;
-  schedule_type: 'cron' | 'interval' | 'once';
+  schedule_type: 'cron' | 'interval' | 'once' | 'event';
   schedule_value: string;
+  fallbackPollMs?: number | null;
   context_mode: 'group' | 'isolated';
   model?: string | null;
   temperature?: number | null;
@@ -172,7 +173,11 @@ export interface PipelineIntakeLogRow {
 export interface Channel {
   name: string;
   connect(): Promise<void>;
-  sendMessage(jid: string, text: string, options?: { threadTs?: string }): Promise<void>;
+  sendMessage(
+    jid: string,
+    text: string,
+    options?: { threadTs?: string },
+  ): Promise<void>;
   isConnected(): boolean;
   ownsJid(jid: string): boolean;
   disconnect(): Promise<void>;

@@ -78,8 +78,8 @@ export function reconcilePipelineTasks(
         group_folder: teamGroupFolder,
         chat_jid: teamChatJid,
         prompt: spec.system,
-        schedule_type: 'cron',
-        schedule_value: spec.cron,
+        schedule_type: spec.subscribed_event_types?.length ? 'event' : 'cron',
+        schedule_value: spec.subscribed_event_types?.length ? '' : spec.cron,
         context_mode: 'isolated',
         model: spec.model,
         allowedTools: resolvedTools,
@@ -87,8 +87,6 @@ export function reconcilePipelineTasks(
         executionMode:
           spec.type === 'host_pipeline' ? 'host_pipeline' : 'container',
         subscribedEventTypes: spec.subscribed_event_types ?? null,
-        // Consumer tasks (with subscribed_event_types) wait for events to bump them.
-        // Producer tasks (sanitiser) run on their cron schedule immediately.
         next_run: spec.subscribed_event_types?.length ? null : now,
         status: 'active',
         created_at: now,
@@ -109,19 +107,34 @@ export function reconcilePipelineTasks(
         changeLog.push(`allowedTools: ${existingTools} → ${specTools}`);
       }
 
+      // Schedule type: spec-owned (event vs cron)
+      const specScheduleType = spec.subscribed_event_types?.length ? 'event' : 'cron';
+      if (existing.schedule_type !== specScheduleType) {
+        changes.schedule_type = specScheduleType;
+        if (specScheduleType === 'event') changes.schedule_value = '';
+        changeLog.push(`schedule_type: ${existing.schedule_type} → ${specScheduleType}`);
+      }
+
       // Execution mode: spec-owned
-      const specExecMode = spec.type === 'host_pipeline' ? 'host_pipeline' : 'container';
+      const specExecMode =
+        spec.type === 'host_pipeline' ? 'host_pipeline' : 'container';
       if ((existing.executionMode || 'container') !== specExecMode) {
         changes.executionMode = specExecMode;
-        changeLog.push(`executionMode: ${existing.executionMode} → ${specExecMode}`);
+        changeLog.push(
+          `executionMode: ${existing.executionMode} → ${specExecMode}`,
+        );
       }
 
       // Subscribed event types: spec-owned
-      const existingEvents = JSON.stringify(existing.subscribedEventTypes ?? null);
+      const existingEvents = JSON.stringify(
+        existing.subscribedEventTypes ?? null,
+      );
       const specEvents = JSON.stringify(spec.subscribed_event_types ?? null);
       if (existingEvents !== specEvents) {
         changes.subscribedEventTypes = spec.subscribed_event_types ?? null;
-        changeLog.push(`subscribedEventTypes: ${existingEvents} → ${specEvents}`);
+        changeLog.push(
+          `subscribedEventTypes: ${existingEvents} → ${specEvents}`,
+        );
       }
 
       if (Object.keys(changes).length > 0) {

@@ -109,7 +109,7 @@ export function handleCreateTask(
   if (!body.prompt?.trim()) return { error: 'prompt is required' };
   if (!body.scheduleType) return { error: 'scheduleType is required' };
   if (!body.scheduleValue) return { error: 'scheduleValue is required' };
-  if (!['cron', 'interval', 'once'].includes(body.scheduleType)) {
+  if (!['cron', 'interval', 'once', 'event'].includes(body.scheduleType)) {
     return { error: 'scheduleType must be cron, interval, or once' };
   }
 
@@ -173,6 +173,9 @@ function computeNextRun(
     const date = new Date(scheduleValue);
     if (isNaN(date.getTime())) throw new Error(`Invalid timestamp: ${scheduleValue}`);
     return date.toISOString();
+  }
+  if (scheduleType === 'event') {
+    return null; // event-driven tasks are bumped by events
   }
   return null;
 }

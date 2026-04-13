@@ -51,6 +51,7 @@ export interface TaskRow {
   allowed_send_targets: string | null;
   execution_mode: string;
   subscribed_event_types: string | null;
+  fallback_poll_ms: number | null;
   next_run: string | null;
   last_run: string | null;
   last_result: string | null;
@@ -174,7 +175,7 @@ export function getTasksByGroup(groupFolder: string): TaskRow[] {
     .prepare(
       `SELECT id, group_folder, chat_jid, prompt, schedule_type, schedule_value,
               context_mode, model, temperature, timezone, max_tool_rounds, timeout_ms, use_agent_sdk,
-              allowed_tools, allowed_send_targets, execution_mode, subscribed_event_types,
+              allowed_tools, allowed_send_targets, execution_mode, subscribed_event_types, fallback_poll_ms,
               next_run, last_run, last_result, status, created_at
        FROM scheduled_tasks WHERE group_folder = ? AND id NOT LIKE 'pipeline:%' ORDER BY next_run`,
     )
@@ -186,7 +187,7 @@ export function getTaskById(id: string): TaskRow | undefined {
     .prepare(
       `SELECT id, group_folder, chat_jid, prompt, schedule_type, schedule_value,
               context_mode, model, temperature, timezone, max_tool_rounds, timeout_ms, use_agent_sdk,
-              allowed_tools, allowed_send_targets, execution_mode, subscribed_event_types,
+              allowed_tools, allowed_send_targets, execution_mode, subscribed_event_types, fallback_poll_ms,
               next_run, last_run, last_result, status, created_at
        FROM scheduled_tasks WHERE id = ?`,
     )
@@ -210,6 +211,7 @@ export function updateTask(
     allowed_send_targets?: string | null;
     execution_mode?: string;
     subscribed_event_types?: string | null;
+    fallback_poll_ms?: number | null;
     status?: string;
     next_run?: string;
   },
@@ -218,7 +220,7 @@ export function updateTask(
     'prompt', 'schedule_type', 'schedule_value', 'context_mode',
     'model', 'temperature', 'timezone', 'max_tool_rounds',
     'timeout_ms', 'use_agent_sdk', 'status', 'next_run',
-    'allowed_tools', 'allowed_send_targets', 'execution_mode', 'subscribed_event_types',
+    'allowed_tools', 'allowed_send_targets', 'execution_mode', 'subscribed_event_types', 'fallback_poll_ms',
   ]);
 
   const setClauses: string[] = [];
@@ -299,7 +301,7 @@ export function getPipelineTasks(): TaskRow[] {
     .prepare(
       `SELECT id, group_folder, chat_jid, prompt, schedule_type, schedule_value,
               context_mode, model, temperature, timezone, max_tool_rounds, timeout_ms, use_agent_sdk,
-              allowed_tools, allowed_send_targets, execution_mode, subscribed_event_types,
+              allowed_tools, allowed_send_targets, execution_mode, subscribed_event_types, fallback_poll_ms,
               next_run, last_run, last_result, status, created_at
        FROM scheduled_tasks WHERE id LIKE 'pipeline:%' ORDER BY id`,
     )

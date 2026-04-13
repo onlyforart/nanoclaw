@@ -256,4 +256,92 @@ describe('task scheduler', () => {
     const events = getRecentEvents(['observation.passive'], 10, true);
     expect(events.length).toBeGreaterThanOrEqual(1);
   });
+
+  it('computeNextRun returns null for event-type tasks without fallback', () => {
+    const task = {
+      id: 'event-test',
+      group_folder: 'test',
+      chat_jid: 'test@g.us',
+      prompt: 'test',
+      schedule_type: 'event' as const,
+      schedule_value: '',
+      context_mode: 'isolated' as const,
+      next_run: null,
+      last_run: null,
+      last_result: null,
+      status: 'active' as const,
+      created_at: '2026-01-01T00:00:00.000Z',
+    };
+    expect(computeNextRun(task)).toBeNull();
+  });
+
+  it('computeNextRun returns fallback time for event-type tasks with fallbackPollMs', () => {
+    const task = {
+      id: 'event-fallback-test',
+      group_folder: 'test',
+      chat_jid: 'test@g.us',
+      prompt: 'test',
+      schedule_type: 'event' as const,
+      schedule_value: '',
+      context_mode: 'isolated' as const,
+      fallbackPollMs: 3600000, // 1 hour
+      next_run: null,
+      last_run: null,
+      last_result: null,
+      status: 'active' as const,
+      created_at: '2026-01-01T00:00:00.000Z',
+    };
+    const nextRun = computeNextRun(task);
+    expect(nextRun).not.toBeNull();
+    // Should be approximately 1 hour from now
+    const delta = new Date(nextRun!).getTime() - Date.now();
+    expect(delta).toBeGreaterThan(3500000);
+    expect(delta).toBeLessThanOrEqual(3600000);
+  });
+
+  it('event-type task stays active after run with null nextRun', async () => {
+    createTask({
+      id: 'event-active-test',
+      group_folder: 'slack_main',
+      chat_jid: 'slack:CMAIN',
+      prompt: 'monitor prompt',
+      schedule_type: 'event',
+      schedule_value: '',
+      context_mode: 'isolated',
+      subscribedEventTypes: ['observation.*'],
+      next_run: new Date(Date.now() - 60_000).toISOString(),
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    const enqueueTask = vi.fn(
+      (_groupJid: string, _taskId: string, fn: () => Promise<void>) => {
+        void fn();
+      },
+    );
+
+    startSchedulerLoop({
+      registeredGroups: () => ({
+        'slack:CMAIN': {
+          name: 'Main',
+          folder: 'slack_main',
+          trigger: 'always',
+          added_at: '2024-01-01T00:00:00.000Z',
+          isMain: true,
+        },
+      }),
+      getSessions: () => ({}),
+      queue: { enqueueTask } as any,
+      onProcess: () => {},
+      sendMessage: async () => {},
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Task should stay active, not completed
+    const task = getTaskById('event-active-test');
+    expect(task!.status).toBe('active');
+    // next_run should be null (no fallback)
+    expect(task!.next_run).toBeNull();
+  });
 });
