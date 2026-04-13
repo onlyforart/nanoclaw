@@ -175,7 +175,13 @@ server.tool(
       timestamp: new Date().toISOString(),
     };
 
-    writeIpcFile(MESSAGES_DIR, data);
+    const result = await writeIpcFileAndWaitForResult(MESSAGES_DIR, data);
+    if (!result.success) {
+      return {
+        content: [{ type: 'text' as const, text: `Error: ${result.error}` }],
+        isError: true,
+      };
+    }
 
     return {
       content: [

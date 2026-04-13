@@ -20,6 +20,7 @@ export interface PipelineSpec {
   };
   send_targets: string[];
   subscribed_event_types?: string[];
+  fallback_poll_ms?: number;
   source_channels?: string[];
 }
 
@@ -93,6 +94,7 @@ export function reconcilePipelineTasks(
         executionMode:
           spec.type === 'host_pipeline' ? 'host_pipeline' : 'container',
         subscribedEventTypes: spec.subscribed_event_types ?? null,
+        fallbackPollMs: spec.fallback_poll_ms ?? null,
         next_run: spec.subscribed_event_types?.length ? null : now,
         status: 'active',
         created_at: now,
@@ -156,6 +158,15 @@ export function reconcilePipelineTasks(
         changes.subscribedEventTypes = spec.subscribed_event_types ?? null;
         changeLog.push(
           `subscribedEventTypes: ${existingEvents} → ${specEvents}`,
+        );
+      }
+
+      // Fallback poll: spec-owned
+      const specFallback = spec.fallback_poll_ms ?? null;
+      if ((existing.fallbackPollMs ?? null) !== specFallback) {
+        changes.fallbackPollMs = specFallback;
+        changeLog.push(
+          `fallbackPollMs: ${existing.fallbackPollMs} → ${specFallback}`,
         );
       }
 

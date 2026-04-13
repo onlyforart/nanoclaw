@@ -313,6 +313,20 @@ async function runTask(
     cost_usd: lastUsage?.costUSD ?? null,
   });
 
+  // Track consecutive failures to surface persistent issues
+  if (error) {
+    const count = (consecutiveFailures.get(task.id) ?? 0) + 1;
+    consecutiveFailures.set(task.id, count);
+    if (count >= 3) {
+      logger.warn(
+        { taskId: task.id, consecutiveFailures: count, error },
+        'Task failing repeatedly — check container logs',
+      );
+    }
+  } else {
+    consecutiveFailures.delete(task.id);
+  }
+
   const nextRun = computeNextRun(task);
   const resultSummary = error
     ? `Error: ${error}`
@@ -406,6 +420,7 @@ async function runHostPipeline(
 }
 
 let schedulerRunning = false;
+const consecutiveFailures = new Map<string, number>();
 
 export function startSchedulerLoop(deps: SchedulerDependencies): void {
   if (schedulerRunning) {

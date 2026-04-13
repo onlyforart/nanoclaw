@@ -968,13 +968,14 @@ export async function runContainerAgent(
       logger.debug({ logFile, verbose: isVerbose }, 'Container log written');
 
       if (code !== 0) {
+        const errorSummary =
+          (stdout || stderr).split('\n').find((l) => l.trim()) ?? '';
         logger.error(
           {
             group: group.name,
             code,
             duration,
-            stderr,
-            stdout,
+            errorSummary: errorSummary.slice(0, 200),
             logFile,
           },
           'Container exited with error',
@@ -983,7 +984,7 @@ export async function runContainerAgent(
         resolve({
           status: 'error',
           result: null,
-          error: `Container exited with code ${code}: ${stderr.slice(-200)}`,
+          error: `Container exited with code ${code}: ${errorSummary.slice(0, 200) || stderr.slice(-200)}`,
         });
         return;
       }

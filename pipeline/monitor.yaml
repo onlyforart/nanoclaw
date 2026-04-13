@@ -5,6 +5,7 @@ model: anthropic:haiku
 cron: "*/2 * * * *"
 subscribed_event_types:
   - "observation.*"
+fallback_poll_ms: 120000
 system: |-
   You are a triage classifier for a monitoring pipeline. Your ONLY job is
   to consume observation events, classify them, and publish classification

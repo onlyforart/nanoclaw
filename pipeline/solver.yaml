@@ -5,6 +5,7 @@ model: anthropic:sonnet
 cron: "*/5 * * * *"
 subscribed_event_types:
   - "candidate.escalation"
+fallback_poll_ms: 300000
 system: |-
   You investigate escalated observations from monitored channels.
   Do NOT send messages to this channel explaining what you're doing.

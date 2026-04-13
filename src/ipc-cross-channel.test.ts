@@ -576,7 +576,7 @@ describe('cross_channel_message IPC', () => {
     });
   });
 
-  it('falls through to normal handling when pipeline has no contextEventId', async () => {
+  it('returns error when pipeline task sends without consuming first', async () => {
     writeMessage('slack_monitoring-channel', {
       type: 'cross_channel_message',
       targetChatJid: 'slack:CSUPPORT',
@@ -586,12 +586,23 @@ describe('cross_channel_message IPC', () => {
 
     await runOnce();
 
-    // Normal send — no auto-routing
-    expect(sendMessage).toHaveBeenCalledWith(
-      'slack:CSUPPORT',
-      'No context',
-      undefined,
+    // Pipeline send without contextEventId is rejected — model must consume first
+    expect(sendMessage).not.toHaveBeenCalled();
+    const messagesDir = path.join(
+      tmpDir,
+      'ipc',
+      'slack_monitoring-channel',
+      'messages',
     );
+    const resultFiles = fs
+      .readdirSync(messagesDir)
+      .filter((f) => f.endsWith('.result'));
+    expect(resultFiles).toHaveLength(1);
+    const result = JSON.parse(
+      fs.readFileSync(path.join(messagesDir, resultFiles[0]), 'utf-8'),
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('consume events before sending');
   });
 
   it('does not auto-route for non-pipeline tasks', async () => {

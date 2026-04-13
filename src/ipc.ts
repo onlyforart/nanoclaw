@@ -117,7 +117,7 @@ export function hasRecentIpcDelivery(
 }
 
 // --- Cross-channel idempotency tracking ---
-const IDEMPOTENCY_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const IDEMPOTENCY_TTL_MS = 60 * 60 * 1000; // 1 hour
 // key: `${targetJid}:${idempotencyKey}` → timestamp
 const crossChannelIdempotency = new Map<string, number>();
 
@@ -153,7 +153,12 @@ async function handlePipelineCrossChannel(
   // Look up the specific consumed event by ID (passed from the container)
   const rawEventId = data.contextEventId as string | number | undefined;
   const contextEventId = rawEventId != null ? Number(rawEventId) : undefined;
-  if (!contextEventId) return null;
+  if (!contextEventId) {
+    return {
+      success: false,
+      error: 'Pipeline task must consume events before sending. Call consume_events first.',
+    };
+  }
 
   const eventPayload = getEventPayloadById(contextEventId);
   if (!eventPayload) return null;
@@ -170,10 +175,8 @@ async function handlePipelineCrossChannel(
 
   if (!sourceChannel || !registeredGroups[sourceChannel]) return null;
 
-  const today = new Date().toISOString().slice(0, 10);
-
   // Primary: send to source channel thread
-  const primaryKey = `${sourceTaskId}:${sourceChannel}:${today}`;
+  const primaryKey = `${sourceTaskId}:${sourceChannel}:evt${contextEventId}`;
   if (!isCrossChannelDuplicate(sourceChannel, primaryKey)) {
     const result = await sendWithRetry(
       (jid, text) =>
@@ -202,7 +205,7 @@ async function handlePipelineCrossChannel(
   if (data.targetChatJid !== sourceChannel) {
     const target = registeredGroups[data.targetChatJid as string];
     if (target) {
-      const secondaryKey = `${sourceTaskId}:${data.targetChatJid}:${today}`;
+      const secondaryKey = `${sourceTaskId}:${data.targetChatJid}:evt${contextEventId}`;
       if (
         !isCrossChannelDuplicate(data.targetChatJid as string, secondaryKey)
       ) {

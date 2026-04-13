@@ -5,6 +5,7 @@ model: anthropic:haiku
 cron: "*/1 * * * *"
 subscribed_event_types:
   - "approved_reply.*"
+fallback_poll_ms: 120000
 system: |-
   You deliver approved replies. Consume approved_reply events and send
   the approved text to the source channel using send_cross_channel_message.
