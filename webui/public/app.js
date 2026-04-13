@@ -598,7 +598,7 @@ const AppGroupDetail = {
           <!-- Token Usage Chart -->
           <div v-if="tokenUsage.length" class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 mb-4">
             <h3 class="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-3">Daily Token Usage</h3>
-            <div class="overflow-x-auto">
+            <div ref="chartContainerRef">
               <svg :width="chartWidth" height="160" class="block">
                 <!-- Y axis labels (tokens, left) -->
                 <text v-for="(label, i) in chartYLabels" :key="'y'+i"
@@ -611,7 +611,7 @@ const AppGroupDetail = {
                   :y2="20 + i * (120 / (chartYLabels.length - 1))"
                   stroke="currentColor" class="text-gray-200 dark:text-gray-700" stroke-width="0.5" />
                 <!-- Bars -->
-                <g v-for="(d, i) in tokenUsage" :key="d.date">
+                <g v-for="(d, i) in visibleTokenUsage" :key="d.date">
                   <!-- Cached (bottom) -->
                   <rect v-if="d.cached > 0"
                     :x="58 + i * 28" :y="140 - chartBarHeight(d.uncached + d.cached)"
@@ -627,12 +627,12 @@ const AppGroupDetail = {
                   </rect>
                   <!-- Date label -->
                   <text :x="68 + i * 28" y="154" text-anchor="middle" class="fill-gray-400" style="font-size:9px"
-                    v-if="tokenUsage.length <= 15 || i % Math.ceil(tokenUsage.length / 15) === 0">{{ d.date.slice(5) }}</text>
+                    v-if="visibleTokenUsage.length <= 15 || i % Math.ceil(visibleTokenUsage.length / 15) === 0">{{ d.date.slice(5) }}</text>
                 </g>
                 <!-- Cost line overlay -->
                 <template v-if="hasCostData">
                   <polyline v-for="(seg, si) in costLineSegments" :key="'cl'+si" :points="seg" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-linejoin="round" />
-                  <template v-for="(d, i) in tokenUsage" :key="'c'+i">
+                  <template v-for="(d, i) in visibleTokenUsage" :key="'c'+i">
                     <circle v-if="d.cost != null"
                       :cx="68 + i * 28" :cy="costY(d.cost)"
                       r="2.5" fill="#f59e0b">
@@ -784,6 +784,9 @@ const AppGroupDetail = {
     const activeTab = ref(props.initialTab || 'tasks');
     const tokenUsage = ref([]);
     let taskInterval = null;
+    const chartContainerRef = ref(null);
+    const chartContainerWidth = ref(800);
+    let resizeObserver = null;
 
     const form = Vue.reactive({ model: '', temperature: null, maxToolRounds: null, timeoutMs: null, showThinking: false, mode: 'active', threadingMode: 'temporal' });
     const showNewTask = ref(false);
@@ -833,7 +836,20 @@ const AppGroupDetail = {
       taskInterval = setInterval(() => { fetchTasks(); fetchTokenUsage(); }, 10000);
     });
 
-    onUnmounted(() => { if (taskInterval) clearInterval(taskInterval); });
+    onUnmounted(() => {
+      if (taskInterval) clearInterval(taskInterval);
+      if (resizeObserver) resizeObserver.disconnect();
+    });
+
+    watch(chartContainerRef, (el) => {
+      if (resizeObserver) resizeObserver.disconnect();
+      if (el) {
+        resizeObserver = new ResizeObserver(entries => {
+          chartContainerWidth.value = entries[0].contentRect.width;
+        });
+        resizeObserver.observe(el);
+      }
+    });
 
     const saveSettings = async () => {
       saving.value = true;
@@ -906,9 +922,20 @@ const AppGroupDetail = {
 
     const navigate = (path) => { window.location.hash = path; };
 
+    const maxVisibleBars = computed(() => {
+      const available = chartContainerWidth.value - 60 - 48;
+      return Math.max(Math.floor(available / 28), 1);
+    });
+
+    const visibleTokenUsage = computed(() => {
+      const data = tokenUsage.value;
+      if (data.length <= maxVisibleBars.value) return data;
+      return data.slice(-maxVisibleBars.value);
+    });
+
     const chartMax = computed(() => {
       let max = 0;
-      for (const d of tokenUsage.value) {
+      for (const d of visibleTokenUsage.value) {
         const total = d.uncached + d.cached;
         if (total > max) max = total;
       }
@@ -941,11 +968,11 @@ const AppGroupDetail = {
       return s;
     };
 
-    const hasCostData = computed(() => tokenUsage.value.some(d => d.cost != null && d.cost > 0));
+    const hasCostData = computed(() => visibleTokenUsage.value.some(d => d.cost != null && d.cost > 0));
 
     const costMax = computed(() => {
       let max = 0;
-      for (const d of tokenUsage.value) {
+      for (const d of visibleTokenUsage.value) {
         if (d.cost != null && d.cost > max) max = d.cost;
       }
       return max || 1;
@@ -959,8 +986,8 @@ const AppGroupDetail = {
     const costLineSegments = computed(() => {
       const segments = [];
       let current = [];
-      for (let i = 0; i < tokenUsage.value.length; i++) {
-        const d = tokenUsage.value[i];
+      for (let i = 0; i < visibleTokenUsage.value.length; i++) {
+        const d = visibleTokenUsage.value[i];
         if (d.cost != null) {
           current.push(`${68 + i * 28},${costY(d.cost)}`);
         } else if (current.length > 0) {
@@ -980,11 +1007,11 @@ const AppGroupDetail = {
     });
 
     const chartWidth = computed(() => {
-      const base = Math.max(tokenUsage.value.length * 28 + 60, 200);
+      const base = Math.max(visibleTokenUsage.value.length * 28 + 60, 200);
       return hasCostData.value ? base + 48 : base;
     });
 
-    return { group, tasks, claude, ollama, loading, saving, activeTab, form, tabs, showNewTask, newTask, newTaskScheduleError, newTaskScheduleHint, selectTab, createNewTask, saveSettings, savePrompts, navigate, tokenUsage, chartMax, chartBarHeight, chartYLabels, formatTokens, formatCost, barTooltip, hasCostData, costMax, costY, costLineSegments, costYLabels, chartWidth };
+    return { group, tasks, claude, ollama, loading, saving, activeTab, form, tabs, showNewTask, newTask, newTaskScheduleError, newTaskScheduleHint, selectTab, createNewTask, saveSettings, savePrompts, navigate, tokenUsage, visibleTokenUsage, chartMax, chartBarHeight, chartYLabels, formatTokens, formatCost, barTooltip, hasCostData, costMax, costY, costLineSegments, costYLabels, chartWidth, chartContainerRef };
   },
 };
 
@@ -1432,20 +1459,20 @@ const AppPipeline = {
       <div>
         <h2 class="text-sm font-semibold text-gray-500 uppercase mb-3">Token Usage (last 30 days)</h2>
         <div v-if="chartDays.length" class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 mb-4">
-          <div class="overflow-x-auto">
-            <svg :width="Math.max(chartDays.length * 36 + 70, 300)" height="160" class="block">
+          <div ref="pipelineChartRef">
+            <svg :width="pipelineSvgWidth" height="160" class="block">
               <!-- Y axis labels -->
               <text v-for="(label, i) in chartYLabels" :key="'y'+i"
                 :x="48" :y="20 + i * (120 / (chartYLabels.length - 1))"
                 text-anchor="end" class="fill-gray-400" style="font-size:10px">{{ label }}</text>
               <!-- Grid lines -->
               <line v-for="(label, i) in chartYLabels" :key="'g'+i"
-                :x1="54" :x2="Math.max(chartDays.length * 36 + 70, 300) - 4"
+                :x1="54" :x2="pipelineSvgWidth - 4"
                 :y1="20 + i * (120 / (chartYLabels.length - 1))"
                 :y2="20 + i * (120 / (chartYLabels.length - 1))"
                 stroke="currentColor" class="text-gray-200 dark:text-gray-700" stroke-width="0.5" />
               <!-- Stacked bars per day -->
-              <g v-for="(day, di) in chartDays" :key="day.date">
+              <g v-for="(day, di) in visibleChartDays" :key="day.date">
                 <rect v-for="(seg, si) in day.segments" :key="si"
                   :x="58 + di * 36" :y="140 - seg.y - seg.h" :width="28" :height="Math.max(seg.h, seg.tokens > 0 ? 1 : 0)"
                   :class="seg.color" rx="1">
@@ -1453,7 +1480,7 @@ const AppPipeline = {
                 </rect>
                 <!-- Date label -->
                 <text :x="72 + di * 36" y="154" text-anchor="middle" class="fill-gray-400" style="font-size:9px"
-                  v-if="chartDays.length <= 15 || di % Math.ceil(chartDays.length / 15) === 0">{{ day.date.slice(5) }}</text>
+                  v-if="visibleChartDays.length <= 15 || di % Math.ceil(visibleChartDays.length / 15) === 0">{{ day.date.slice(5) }}</text>
               </g>
             </svg>
           </div>
@@ -1495,6 +1522,9 @@ const AppPipeline = {
   `,
   setup() {
     const data = ref({ tasks: [], sourceChannels: [], tokenUsage: [], teamGroup: null });
+    const pipelineChartRef = ref(null);
+    const pipelineChartWidth = ref(800);
+    let resizeObs = null;
 
     const TASK_COLORS = {
       'pipeline:sanitiser': 'fill-violet-500',
@@ -1546,15 +1576,38 @@ const AppPipeline = {
       return [String(max), String(Math.round(max / 2)), '0'];
     });
 
+    const maxVisiblePipelineBars = computed(() => {
+      const available = pipelineChartWidth.value - 70;
+      return Math.max(Math.floor(available / 36), 1);
+    });
+
+    const visibleChartDays = computed(() => {
+      const days = chartDays.value;
+      if (days.length <= maxVisiblePipelineBars.value) return days;
+      return days.slice(-maxVisiblePipelineBars.value);
+    });
+
+    const pipelineSvgWidth = computed(() => Math.max(visibleChartDays.value.length * 36 + 70, 300));
+
     const fetch = async () => {
       try { data.value = await api('/pipeline'); } catch {}
     };
 
     onMounted(fetch);
     const interval = setInterval(fetch, 15000);
-    onUnmounted(() => clearInterval(interval));
+    onUnmounted(() => { clearInterval(interval); if (resizeObs) resizeObs.disconnect(); });
 
-    return { data, chartDays, chartYLabels, chartMax, window };
+    watch(pipelineChartRef, (el) => {
+      if (resizeObs) resizeObs.disconnect();
+      if (el) {
+        resizeObs = new ResizeObserver(entries => {
+          pipelineChartWidth.value = entries[0].contentRect.width;
+        });
+        resizeObs.observe(el);
+      }
+    });
+
+    return { data, chartDays, visibleChartDays, chartYLabels, chartMax, pipelineChartRef, pipelineSvgWidth, window };
   },
 };
 
