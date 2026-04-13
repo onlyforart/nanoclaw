@@ -2,9 +2,26 @@
 
 ## Status
 
-Design — not yet implemented. This document captures the architecture, threat model, and implementation plan for a system that lets one group monitor messages in another channel as observations (not instructions), classify and act on them via decoupled tasks, and reply back through a human-gated path.
+**Implemented and deployed.** All five phases (A–E) are complete. The pipeline is processing messages from passive Slack channels through the sanitiser → monitor → solver chain.
 
 **Corpus status:** Phase B (corpus collection and analysis) is largely complete. Five Slack channels analysed (~7500 messages); findings and schema implications documented in `../slack-analysis/`. The corpus informs the schema and field-split decisions below.
+
+### Post-delivery changes
+
+The following changes were made during initial deployment and testing, after the original design was implemented:
+
+- **`schedule_type: 'event'`** — new schedule type for purely event-driven tasks. Consumer pipeline tasks (monitor, solver, responder) no longer have cron schedules. They fire only when `bumpConsumerTaskNextRun` sets `next_run`. Optional `fallback_poll_ms` column provides a safety-net poll interval. Host-pipeline tasks (sanitiser) keep their cron schedule and can also be bumped by events (dual trigger).
+- **Pre-flight check** — event-driven tasks check for pending events on the host side before spawning a container. If no events match `subscribed_event_types`, the task is skipped at zero cost (no container, no LLM call).
+- **`updateTaskAfterRun` fix** — event tasks stay `active` with null `next_run` after a run, instead of being marked `completed`.
+- **Tool profile resolution** — named tool profiles defined in gitignored config (`pipeline_events`, `read_only_ops`, etc.) are referenced by name in YAML specs and resolved at reconciliation time. The DB stores the expanded tool list; the UI shows profile names.
+- **Reconciler field ownership** — the YAML reconciler only updates spec-derived fields (tools, execution_mode, subscribed_event_types, schedule_type). Operational settings (model, prompt, schedule value, send targets) are owned by the DB and never overridden by spec changes.
+- **Forgiving JSON parser** — Layer 2 response parsing handles markdown code fences, surrounding text, boolean-like strings, and missing optional fields. Covers common Ollama output quirks.
+- **Ollama model resolution** — host-side LLM client resolves short model names (e.g. `gemma4`) against the installed model list via `/api/tags`, matching the container agent-runner's resolution logic.
+- **Threaded replies** — `send_cross_channel_message` supports `thread_ts` parameter. The solver replies threaded on the original message in the source channel.
+- **Auto-acknowledgement** — when the monitor publishes `candidate.escalation`, the host sends "Looking into this — investigation in progress" threaded on the original message in the source channel.
+- **`allowed_tools` container enforcement** — the container agent-runner intersects its tool list with the task's `allowedTools`. External MCP servers with no matching tools are skipped entirely.
+- **Pipeline web UI page** — dedicated page showing pipeline tasks, source channels, token usage chart, and tool profiles. Pipeline tasks are excluded from group task lists. Sidebar highlights correctly when viewing pipeline task details.
+- **Glob patterns in `consumeEvents`** — event type patterns like `observation.*` are converted to SQL LIKE patterns (`observation.%`). Fixes the monitor consuming `observation.passive` events when subscribing to `observation.*`.
 
 ## Goals
 
@@ -15,7 +32,7 @@ Design — not yet implemented. This document captures the architecture, threat 
 
 ## Non-goals
 
-- Sub-second event delivery latency. Consumers run on cron and that is acceptable.
+- Sub-second event delivery latency. Consumers are event-driven (`schedule_type: 'event'`) and fire within seconds of events being published via `bumpConsumerTaskNextRun`. This is acceptable.
 - A general-purpose pub/sub broker. The mechanism is internal to NanoClaw and tuned to its existing patterns.
 - Real-time bidirectional conversation with humans in the source channel. Replies go through a human-approval gate; this is not a chatbot.
 
@@ -725,9 +742,9 @@ A small loader reads `pipeline/*.yaml` and reconciles against `scheduled_tasks` 
 
 ## Implementation sequencing
 
-### Phase A — Unblocked infrastructure
+### Phase A — Unblocked infrastructure ✓
 
-None of this depends on the corpus. Ships behind no feature flag because none of it has user-visible behaviour until a task uses it. Likely 2-3 PRs given scope.
+Delivered in 5 PRs. All additive — no existing behaviour changed.
 
 1. `events` table + `publish_event` / `consume_events` / `ack_event` MCP tools
 2. `mode` column on `registered_groups` + dispatch-loop short-circuit for passive mode
@@ -739,7 +756,7 @@ None of this depends on the corpus. Ships behind no feature flag because none of
 8. Web UI surfaces for the new columns and the events log
 9. `submit_to_pipeline` MCP tool + `pipeline_intake_log` table + `intake.raw` event type
 
-### Phase B — Corpus collection (parallel with A) — largely complete
+### Phase B — Corpus collection (parallel with A) — largely complete ✓
 
 Five Slack channels analysed (~7500 messages). Findings and schema implications in `../slack-analysis/`.
 
@@ -750,7 +767,9 @@ Five Slack channels analysed (~7500 messages). Findings and schema implications 
 5. ~~Continue accumulation, periodic categorisation passes~~
 6. Schema design, eval set construction, model/prompt selection — **in progress**
 
-### Phase C — In parallel with B (no dependency on real corpus content)
+### Phase C — Eval harness + field catalog + labelling UI ✓
+
+Delivered in 3 PRs. Eval harness and field catalog code committed to nanoclaw; domain-specific content (eval sets, taxonomy, field catalog YAML, sanitiser config) gitignored and symlinked from a private repo.
 
 1. Labelling interface in the web UI
 2. Eval harness skeleton (loads (input, expected) pairs, runs sanitiser, scores) — must test Layer 1 and Layer 2 independently
@@ -758,7 +777,9 @@ Five Slack channels analysed (~7500 messages). Findings and schema implications 
 4. Initial taxonomy / categorisation rubric draft
 5. Field catalog skeleton
 
-### Phase D — Sanitiser pipeline (three-layer A+C architecture)
+### Phase D — Sanitiser pipeline (three-layer A+C architecture) ✓
+
+Delivered in 5 PRs. Host-side pipeline executor wired into task scheduler.
 
 1. **Layer 1: deterministic pre-processor** — metadata extraction, ticket regex, code block detection, @mention detection, channel-join filtering, PII redaction, truncation. Unit-tested.
 2. **Layer 2: LLM semantic extractor** — constrained JSON extraction of fact_summary, urgency, speech_act, reporter_role_hint, appears_to_address_bot, contains_imperative, sentiment, action_requested, resolution_owner_hint. Eval-harness-tested.
@@ -766,7 +787,9 @@ Five Slack channels analysed (~7500 messages). Findings and schema implications 
 4. `re_extract_observation` MCP tool + field catalog
 5. Sanitiser task wired to source channels
 
-### Phase E — Production wiring
+### Phase E — Production wiring ✓
+
+Reaction bridge wired into host. Monitor/solver/responder pipeline YAML specs committed. Solver prompt and tools configured via DB (domain-specific content, not committed).
 
 1. **Monitor task with bimodal clustering and classification logic.** The monitor is responsible for correlating individual observations into incidents/issues. Corpus analysis shows clustering cannot rely on `thread_ts` alone — most channels have threading rates ≤2%, and even high-threading channels have problem reports in the main timeline. The monitor must implement two clustering modes, applied per channel (selected via `threading_mode` field on `registered_groups`, auto-updated by the monitor):
    - **Thread-aware mode** (high-threading channels, >5% threading rate): cluster on `thread_ts` as primary signal, with temporal/participant fallback for main-timeline messages.

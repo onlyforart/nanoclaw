@@ -82,6 +82,67 @@ These features are unique to this fork:
 - **Show thinking** — per-group `showThinking` toggle (Ollama only) that relays reasoning/thinking output from reasoning models to the channel as quoted text
 - **Token usage tracking** — every task run logs `input_tokens`, `output_tokens`, and `cost_usd` (Claude only) to `task_run_logs`. Both Claude SDK and Ollama paths report token counts. Claude input totals include cache read and creation tokens.
 - **MCP call timeout inheritance** — individual MCP tool calls inherit the task/container `timeoutMs` instead of the MCP SDK's 60s default, preventing premature timeouts on long-running tools
+- **Observation pipeline** — cross-channel monitoring system. See below for details.
+
+## Observation Pipeline
+
+A decoupled pipeline that monitors passive Slack channels, extracts structured observations from human messages, classifies and escalates issues, and delivers threaded replies through a human-gated approval flow. Full design spec in [docs/OBSERVATION-PIPELINE.md](docs/OBSERVATION-PIPELINE.md).
+
+### Architecture
+
+```
+passive channels → sanitiser → observations → monitor → escalations → solver → proposed reply → [human approval] → responder → threaded reply
+```
+
+Four pipeline tasks run as `scheduled_tasks` under a configurable team group:
+
+| Task | Schedule | Purpose |
+|------|----------|---------|
+| **sanitiser** | `cron` (polls) + bumped by `intake.raw` events | Three-layer extraction: deterministic pre-processing → LLM semantic extraction → deterministic post-processing. Runs as `host_pipeline` — no container spawned. |
+| **monitor** | `event` (fires on `observation.*`) | Consumes observations, classifies by urgency/speech_act, publishes `candidate.escalation` or `candidate.track`. Pre-flight check skips container if no events. |
+| **solver** | `event` (fires on `candidate.escalation`) | Investigates escalations using domain tools (monitoring scripts, system health, logs). Replies threaded on the original message in the source channel. |
+| **responder** | `event` (fires on `approved_reply.*`) | Delivers human-approved replies to the source channel via `send_cross_channel_message` with idempotency. |
+
+### Event-driven scheduling
+
+Consumer tasks use `schedule_type: 'event'` — they have no cron schedule. They fire only when the upstream task publishes an event matching their `subscribed_event_types`. An optional `fallback_poll_ms` provides a safety-net poll interval (pre-flight check skips the container if no events are pending).
+
+### Tool profiles
+
+Named tool profiles are defined in the gitignored `pipeline/sanitiser-config.yaml` and referenced by name in `pipeline/*.yaml` specs. The reconciler resolves profiles to expanded tool lists at startup. The DB stores the expanded list; the web UI shows profile names.
+
+### Pipeline YAML reconciler
+
+Pipeline task specs in `pipeline/*.yaml` are reconciled against the DB on startup. The reconciler only updates spec-derived fields (tools, execution_mode, subscribed_event_types, schedule_type). Operational settings (model, prompt, schedule value, send targets) are owned by the DB — safe to edit via the web UI without risk of spec override.
+
+### Domain-specific content
+
+The following files are gitignored and symlinked from a private repo:
+
+- `pipeline/sanitiser-config.yaml` — team group, model choice, tool profiles, ticket patterns, PII patterns
+- `pipeline/sanitiser-schema.yaml` — sanitiser output schema (field types, caps, enum values)
+- `pipeline/field-catalog.yaml` — re-extraction field definitions
+- `eval/sets/` — adversarial eval cases
+- `eval/taxonomy.md` — labelling rubric
+
+### Key files
+
+| File | Purpose |
+|------|---------|
+| `src/host-pipeline-executor.ts` | Orchestrates Layer 1→2→3 for each message |
+| `src/sanitiser/layer1.ts` | Deterministic pre-processing (tickets, code blocks, PII, truncation) |
+| `src/sanitiser/layer2.ts` | LLM semantic extraction (constrained JSON output) |
+| `src/sanitiser/layer3.ts` | Post-processing (schema validation, field caps, quarantine) |
+| `src/sanitiser/llm-client.ts` | Host-side LLM client (Ollama + Anthropic via credential proxy) |
+| `src/sanitiser/nonce.ts` | Nonce wrapping for delivery-time injection defence |
+| `src/reaction-bridge.ts` | Reaction-to-event bridge for approval flow |
+| `src/pipeline-loader.ts` | YAML spec loader + DB reconciler |
+| `src/field-catalog.ts` | Re-extraction field catalog loader |
+| `eval/harness.ts` | Eval harness (loads cases, scores Layer 1/2) |
+| `eval/scoring.ts` | Per-field scoring (boolean, enum, string substring) |
+| `pipeline/*.yaml` | Declarative task specs (sanitiser, monitor, solver, responder) |
+| `docs/OBSERVATION-PIPELINE.md` | Full design spec |
+| `docs/OBSERVATION-PIPELINE-PHASE-*.md` | Per-phase implementation plans |
 
 ## Where Things Live
 
