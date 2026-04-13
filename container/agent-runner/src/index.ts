@@ -43,6 +43,7 @@ interface ContainerInput {
   chatJid: string;
   isMain: boolean;
   isScheduledTask?: boolean;
+  taskId?: string;
   assistantName?: string;
   model?: string;
   temperature?: number;
@@ -486,6 +487,7 @@ async function runQuery(
             NANOCLAW_CHAT_JID: containerInput.chatJid,
             NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+            ...(containerInput.taskId ? { NANOCLAW_TASK_ID: containerInput.taskId } : {}),
           },
         },
         ollama: {
@@ -688,6 +690,7 @@ async function runOllamaDirectMode(containerInput: ContainerInput): Promise<void
       NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
       NANOCLAW_IS_SCHEDULED_TASK: containerInput.isScheduledTask ? '1' : '0',
       NANOCLAW_IS_OLLAMA: isOllama ? '1' : '0',
+      ...(containerInput.taskId ? { NANOCLAW_TASK_ID: containerInput.taskId } : {}),
     },
   };
 
@@ -890,6 +893,7 @@ async function runAnthropicApiMode(containerInput: ContainerInput): Promise<void
       NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
       NANOCLAW_IS_SCHEDULED_TASK: containerInput.isScheduledTask ? '1' : '0',
       NANOCLAW_IS_OLLAMA: '0',
+      ...(containerInput.taskId ? { NANOCLAW_TASK_ID: containerInput.taskId } : {}),
     },
   };
 

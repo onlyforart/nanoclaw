@@ -16,7 +16,12 @@ import {
   _resetIpcWatcherForTests,
   _resetIpcWatcherGuardForTests,
 } from './ipc.js';
-import { _initTestDatabase, createTask } from './db.js';
+import {
+  _initTestDatabase,
+  consumeEvents,
+  createTask,
+  publishEvent,
+} from './db.js';
 
 const MAIN_GROUP: RegisteredGroup = {
   name: 'Main',
@@ -507,5 +512,89 @@ describe('cross_channel_message IPC', () => {
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain('permanent failure');
+  });
+
+  // --- pipeline context auto-threading ---
+
+  it('auto-injects thread_ts from consumed event when sourceTaskId is a pipeline task', async () => {
+    // Publish and consume an event so the solver has context
+    publishEvent(
+      'candidate.escalation',
+      'slack_main',
+      'pipeline:monitor',
+      JSON.stringify({
+        source_channel: 'slack:CSUPPORT',
+        source_message_id: 'ts-999.111',
+        observation_ids: [1],
+      }),
+    );
+    consumeEvents(['candidate.escalation'], 'pipeline:solver', 1);
+
+    // Solver sends cross-channel message WITHOUT thread_ts
+    writeMessage('slack_monitoring-channel', {
+      type: 'cross_channel_message',
+      targetChatJid: 'slack:CSUPPORT',
+      text: 'Investigation complete',
+      sourceTaskId: 'pipeline:solver',
+    });
+
+    await runOnce();
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      'slack:CSUPPORT',
+      'Investigation complete',
+      { threadTs: 'ts-999.111' },
+    );
+  });
+
+  it('does not override explicit thread_ts from pipeline task', async () => {
+    publishEvent(
+      'candidate.escalation',
+      'slack_main',
+      'pipeline:monitor',
+      JSON.stringify({ source_message_id: 'ts-auto' }),
+    );
+    consumeEvents(['candidate.escalation'], 'pipeline:solver', 1);
+
+    writeMessage('slack_monitoring-channel', {
+      type: 'cross_channel_message',
+      targetChatJid: 'slack:CSUPPORT',
+      text: 'Explicit thread',
+      sourceTaskId: 'pipeline:solver',
+      threadTs: 'ts-explicit',
+    });
+
+    await runOnce();
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      'slack:CSUPPORT',
+      'Explicit thread',
+      { threadTs: 'ts-explicit' },
+    );
+  });
+
+  it('auto-generates idempotency key for pipeline sends', async () => {
+    writeMessage('slack_monitoring-channel', {
+      type: 'cross_channel_message',
+      targetChatJid: 'slack:CSUPPORT',
+      text: 'First send',
+      sourceTaskId: 'pipeline:solver',
+    });
+
+    await runOnce();
+
+    _resetIpcWatcherGuardForTests();
+
+    // Second send from same pipeline task to same target on same day → deduplicated
+    writeMessage('slack_monitoring-channel', {
+      type: 'cross_channel_message',
+      targetChatJid: 'slack:CSUPPORT',
+      text: 'Duplicate send',
+      sourceTaskId: 'pipeline:solver',
+    });
+
+    await runOnce();
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 });

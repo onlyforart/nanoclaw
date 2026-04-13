@@ -232,6 +232,7 @@ async function runTask(
         chatJid: task.chat_jid,
         isMain,
         isScheduledTask: true,
+        taskId: task.id,
         assistantName: ASSISTANT_NAME,
         model: effectiveModel,
         temperature:

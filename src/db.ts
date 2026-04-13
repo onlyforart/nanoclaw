@@ -1350,6 +1350,23 @@ export function consumeEvents(
   return rows;
 }
 
+/**
+ * Get the payload of the most recently consumed event for a given claimedBy.
+ * Used to auto-inject context (e.g. source_message_id) into pipeline IPC calls.
+ */
+export function getLastConsumedEventPayload(
+  claimedBy: string,
+): string | undefined {
+  const row = db
+    .prepare(
+      `SELECT payload FROM events
+       WHERE claimed_by = ? AND status IN ('claimed', 'done')
+       ORDER BY claimed_at DESC LIMIT 1`,
+    )
+    .get(claimedBy) as { payload: string } | undefined;
+  return row?.payload;
+}
+
 export function ackEvent(
   eventId: number,
   status: 'done' | 'failed',

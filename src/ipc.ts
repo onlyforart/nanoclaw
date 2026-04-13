@@ -12,6 +12,7 @@ import {
   createTask,
   deleteTask,
   getCachedReextraction,
+  getLastConsumedEventPayload,
   getObservationById,
   getTaskById,
   insertIntakeLog,
@@ -254,10 +255,29 @@ export function startIpcWatcher(deps: IpcDeps): void {
                       continue;
                     }
                   }
-                  // Idempotency check
-                  const idempotencyKey = data.idempotencyKey as
+                  // Auto-enrich from pipeline context when fields are missing
+                  let idempotencyKey = data.idempotencyKey as
                     | string
                     | undefined;
+                  let threadTs = data.threadTs as string | undefined;
+                  if (sourceTaskId?.startsWith('pipeline:')) {
+                    const eventPayload =
+                      getLastConsumedEventPayload(sourceTaskId);
+                    if (eventPayload) {
+                      try {
+                        const parsed = JSON.parse(eventPayload);
+                        if (!threadTs && parsed.source_message_id)
+                          threadTs = parsed.source_message_id;
+                      } catch {
+                        /* ignore parse errors */
+                      }
+                    }
+                    if (!idempotencyKey) {
+                      idempotencyKey = `${sourceTaskId}:${data.targetChatJid}:${new Date().toISOString().slice(0, 10)}`;
+                    }
+                  }
+
+                  // Idempotency check
                   if (
                     idempotencyKey &&
                     isCrossChannelDuplicate(data.targetChatJid, idempotencyKey)
@@ -273,7 +293,6 @@ export function startIpcWatcher(deps: IpcDeps): void {
                     writeIpcResult(`${filePath}.result`, crossChannelResult);
                     continue;
                   }
-                  const threadTs = data.threadTs as string | undefined;
                   const retryResult = await sendWithRetry(
                     (jid, text) =>
                       deps.sendMessage(
@@ -739,7 +758,10 @@ function handlePublishEvent(
     try {
       const payloadObj = JSON.parse(payload);
       const obsIds = payloadObj.observation_ids as number[] | undefined;
-      if (obsIds?.length && (!payloadObj.source_message_id || !payloadObj.source_channel)) {
+      if (
+        obsIds?.length &&
+        (!payloadObj.source_message_id || !payloadObj.source_channel)
+      ) {
         const obs = getObservationById(obsIds[0]);
         if (obs) {
           if (!payloadObj.source_channel && obs.source_chat_jid)

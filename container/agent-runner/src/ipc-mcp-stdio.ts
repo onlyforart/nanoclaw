@@ -20,6 +20,7 @@ const chatJid = process.env.NANOCLAW_CHAT_JID!;
 const groupFolder = process.env.NANOCLAW_GROUP_FOLDER!;
 const isMain = process.env.NANOCLAW_IS_MAIN === '1';
 const isScheduledTask = process.env.NANOCLAW_IS_SCHEDULED_TASK === '1';
+const taskId = process.env.NANOCLAW_TASK_ID || undefined;
 const isOllama = process.env.NANOCLAW_IS_OLLAMA === '1';
 
 // Model description varies: Ollama models should not see Claude aliases
@@ -165,6 +166,7 @@ server.tool(
       targetChatJid: match.jid,
       text: args.text,
       sourceGroup: groupFolder,
+      sourceTaskId: taskId,
       threadTs: args.thread_ts || undefined,
       timestamp: new Date().toISOString(),
     };
@@ -563,7 +565,7 @@ server.tool(
       payload: args.payload,
       dedupeKey: args.dedupe_key || undefined,
       ttlSeconds: args.ttl_seconds || undefined,
-      sourceTaskId: args.source_task_id || undefined,
+      sourceTaskId: args.source_task_id || taskId || undefined,
       groupFolder,
       timestamp: new Date().toISOString(),
     });
