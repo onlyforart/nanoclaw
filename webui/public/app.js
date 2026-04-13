@@ -1023,22 +1023,22 @@ const AppTaskDetail = {
         <!-- Settings Tab -->
         <div v-if="activeTab === 'settings'">
           <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
-            <div v-if="task?.scheduleType === 'event' || task?.subscribedEventTypes?.length" class="mb-4">
-              <div class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 mb-2">
-                <div class="text-sm font-medium mb-1">Trigger</div>
-                <div class="text-purple-600 dark:text-purple-400 text-sm">Event-driven</div>
-                <div v-if="task?.subscribedEventTypes?.length" class="text-xs text-gray-400 font-mono mt-1">{{ task.subscribedEventTypes.join(', ') }}</div>
-              </div>
-              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label class="block text-sm font-medium mb-1">Fallback Poll (ms)</label>
-                  <input v-model.number="form.fallbackPollMs" type="number" placeholder="Optional — e.g. 3600000 for hourly"
-                    class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
-                  <p class="mt-1 text-xs text-gray-400">Safety net poll interval. Leave empty for purely event-driven.</p>
-                </div>
+            <!-- Event subscriptions (shown for any task with subscribed event types) -->
+            <div v-if="task?.subscribedEventTypes?.length" class="mb-4 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
+              <div class="text-sm font-medium mb-1">{{ task.scheduleType === 'event' ? 'Trigger' : 'Also triggered by' }}</div>
+              <div class="text-purple-600 dark:text-purple-400 text-sm font-mono">{{ task.subscribedEventTypes.join(', ') }}</div>
+            </div>
+            <!-- Event-only: fallback poll instead of cron -->
+            <div v-if="task?.scheduleType === 'event'" class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+              <div>
+                <label class="block text-sm font-medium mb-1">Fallback Poll (ms)</label>
+                <input v-model.number="form.fallbackPollMs" type="number" placeholder="Optional — e.g. 3600000 for hourly"
+                  class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition">
+                <p class="mt-1 text-xs text-gray-400">Safety net poll interval. Leave empty for purely event-driven.</p>
               </div>
             </div>
-            <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <!-- Cron/interval/once schedule -->
+            <div v-if="task?.scheduleType !== 'event'" class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
               <div>
                 <label class="block text-sm font-medium mb-1">Schedule Type</label>
                 <select v-model="form.scheduleType"
@@ -1409,11 +1409,14 @@ const AppPipeline = {
                   <span v-if="!t.profiles?.length && !t.extra_tools?.length" class="text-gray-400">-</span>
                 </td>
                 <td class="px-4 py-3 text-xs">
-                  <template v-if="t.subscribed_event_types">
+                  <template v-if="t.schedule_type === 'event'">
                     <span class="text-purple-600 dark:text-purple-400">event-driven</span>
-                    <div class="text-[10px] text-gray-400 font-mono mt-0.5">{{ JSON.parse(t.subscribed_event_types).join(', ') }}</div>
+                    <div v-if="t.subscribed_event_types" class="text-[10px] text-gray-400 font-mono mt-0.5">{{ JSON.parse(t.subscribed_event_types).join(', ') }}</div>
                   </template>
-                  <span v-else class="font-mono">{{ t.schedule_value }}</span>
+                  <template v-else>
+                    <span class="font-mono">{{ t.schedule_value }}</span>
+                    <div v-if="t.subscribed_event_types" class="text-[10px] text-purple-400 font-mono mt-0.5">+ {{ JSON.parse(t.subscribed_event_types).join(', ') }}</div>
+                  </template>
                 </td>
                 <td class="px-4 py-3"><status-badge :status="t.status" /></td>
                 <td class="px-4 py-3 text-gray-500 text-xs">{{ t.last_run ? new Date(t.last_run).toLocaleString() : '-' }}</td>
