@@ -1,6 +1,36 @@
 # Observation Pipeline — Post-Work
 
-Outstanding items discovered during initial deployment and testing. None are blockers for the current autonomous-solver mode.
+Outstanding items discovered during initial deployment and testing.
+
+## Unwired from original plan — do these first
+
+### A. Outbound retry not applied to cross-channel sends
+
+`src/outbound-retry.ts` (`sendWithRetry`) exists but is never called. The cross-channel IPC handler in `src/ipc.ts` calls `deps.sendMessage` directly. Transient Slack errors (429, 5xx) are not retried.
+
+**Fix:** Wrap the `deps.sendMessage` call in the cross-channel handler with `sendWithRetry`.
+
+### B. Nonce wrapping not applied at delivery time
+
+`src/sanitiser/nonce.ts` (`wrapWithNonce`) exists but is never called. The design spec says nonce wrapping should be applied in the `consume_events` IPC handler when delivering observation payloads to downstream tasks — preventing spoofed observation delimiters from reaching the monitor/solver.
+
+**Fix:** In the `consume_events` handler, wrap each event's payload with `wrapWithNonce` before returning to the container.
+
+### C. Export eval set from labelling UI
+
+The Phase C plan specified an "Export eval set" button on the observations page that queries labelled observations with `expected_json` and formats them as eval case JSON files. Not implemented.
+
+**Fix:** Add `exportEvalSet(filter?)` to `webui/db.ts`, an export route, and a button on the observations page.
+
+### D. Threading mode auto-update by monitor
+
+The design spec says the monitor should compute the threading rate from the last 7 days of observations per source channel. If the rate crosses the 5% threshold, the monitor publishes a `threading_mode_changed` event and updates `registered_groups` via IPC. Not implemented — `threading_mode` is currently set manually.
+
+**Fix:** Add threading rate computation to the monitor's post-classification step, with IPC call to `update_group` when the mode should change.
+
+---
+
+## Other items
 
 ## 1. Slack reaction handler for approval flow
 
