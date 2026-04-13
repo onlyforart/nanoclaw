@@ -63,17 +63,26 @@ export function validateSchema(
     switch (def.type) {
       case 'boolean':
         if (typeof value !== 'boolean') {
-          return { valid: false, reason: `Field ${field} must be boolean, got ${typeof value}` };
+          return {
+            valid: false,
+            reason: `Field ${field} must be boolean, got ${typeof value}`,
+          };
         }
         break;
       case 'string':
         if (typeof value !== 'string') {
-          return { valid: false, reason: `Field ${field} must be string, got ${typeof value}` };
+          return {
+            valid: false,
+            reason: `Field ${field} must be string, got ${typeof value}`,
+          };
         }
         break;
       case 'enum':
         if (typeof value !== 'string') {
-          return { valid: false, reason: `Field ${field} must be string (enum), got ${typeof value}` };
+          return {
+            valid: false,
+            reason: `Field ${field} must be string (enum), got ${typeof value}`,
+          };
         }
         break;
     }
@@ -148,7 +157,10 @@ export function postProcess(
   }
 
   // Validate against schema
-  const schemaResult = validateSchema(parsed as unknown as Record<string, unknown>, schema);
+  const schemaResult = validateSchema(
+    parsed as unknown as Record<string, unknown>,
+    schema,
+  );
   if (!schemaResult.valid) {
     return quarantine(schemaResult.reason || 'Schema validation failed');
   }
@@ -158,7 +170,10 @@ export function postProcess(
   for (const [field, def] of Object.entries(schema.fields)) {
     if (def.max_length) caps[field] = def.max_length;
   }
-  const capped = enforceFieldCaps(parsed as unknown as Record<string, unknown>, caps);
+  const capped = enforceFieldCaps(
+    parsed as unknown as Record<string, unknown>,
+    caps,
+  );
 
   // Validate enums (open — unknown values allowed but flagged)
   const enumDefs: Record<string, string[]> = {};

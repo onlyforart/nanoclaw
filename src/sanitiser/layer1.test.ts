@@ -22,36 +22,53 @@ const DEFAULT_TICKET_PATTERNS = [
 
 describe('extractTicketReferences', () => {
   it('extracts INC ticket references', () => {
-    const refs = extractTicketReferences('INC12345 is causing issues', DEFAULT_TICKET_PATTERNS);
+    const refs = extractTicketReferences(
+      'INC12345 is causing issues',
+      DEFAULT_TICKET_PATTERNS,
+    );
     expect(refs).toEqual([{ id: 'INC12345', system: 'servicenow' }]);
   });
 
   it('extracts multiple ticket types', () => {
-    const refs = extractTicketReferences('INC12345 related to CHG67890', DEFAULT_TICKET_PATTERNS);
+    const refs = extractTicketReferences(
+      'INC12345 related to CHG67890',
+      DEFAULT_TICKET_PATTERNS,
+    );
     expect(refs).toHaveLength(2);
     expect(refs[0].id).toBe('INC12345');
     expect(refs[1].id).toBe('CHG67890');
   });
 
   it('extracts RITM references', () => {
-    const refs = extractTicketReferences('RITM001234 pending approval', DEFAULT_TICKET_PATTERNS);
+    const refs = extractTicketReferences(
+      'RITM001234 pending approval',
+      DEFAULT_TICKET_PATTERNS,
+    );
     expect(refs).toEqual([{ id: 'RITM001234', system: 'servicenow' }]);
   });
 
   it('returns empty array when no tickets found', () => {
-    expect(extractTicketReferences('no tickets here', DEFAULT_TICKET_PATTERNS)).toEqual([]);
+    expect(
+      extractTicketReferences('no tickets here', DEFAULT_TICKET_PATTERNS),
+    ).toEqual([]);
   });
 
   it('deduplicates repeated ticket IDs', () => {
-    const refs = extractTicketReferences('INC123 mentioned INC123 again', DEFAULT_TICKET_PATTERNS);
+    const refs = extractTicketReferences(
+      'INC123 mentioned INC123 again',
+      DEFAULT_TICKET_PATTERNS,
+    );
     expect(refs).toHaveLength(1);
   });
 
   it('supports configurable JIRA patterns', () => {
-    const patterns = [...DEFAULT_TICKET_PATTERNS, { pattern: 'PROJ-\\d+', system: 'jira' }];
+    const patterns = [
+      ...DEFAULT_TICKET_PATTERNS,
+      { pattern: 'PROJ-\\d+', system: 'jira' },
+    ];
     const refs = extractTicketReferences('PROJ-456 and INC789', patterns);
     expect(refs).toHaveLength(2);
-    expect(refs.find(r => r.system === 'jira')!.id).toBe('PROJ-456');
+    expect(refs.find((r) => r.system === 'jira')!.id).toBe('PROJ-456');
   });
 });
 
@@ -91,15 +108,25 @@ describe('classifyCodeBlock', () => {
   });
 
   it('classifies stack traces', () => {
-    expect(classifyCodeBlock('Error: something failed\n  at Object.<anonymous> (/app/index.js:10:5)\n  at Module._compile')).toBe('stack_trace');
+    expect(
+      classifyCodeBlock(
+        'Error: something failed\n  at Object.<anonymous> (/app/index.js:10:5)\n  at Module._compile',
+      ),
+    ).toBe('stack_trace');
   });
 
   it('classifies log lines', () => {
-    expect(classifyCodeBlock('[2024-01-01T10:00:00Z] ERROR: connection refused\n[2024-01-01T10:00:01Z] WARN: retrying')).toBe('log');
+    expect(
+      classifyCodeBlock(
+        '[2024-01-01T10:00:00Z] ERROR: connection refused\n[2024-01-01T10:00:01Z] WARN: retrying',
+      ),
+    ).toBe('log');
   });
 
   it('classifies HTTP requests', () => {
-    expect(classifyCodeBlock('GET /api/v1/users HTTP/1.1\nHost: example.com')).toBe('http_request');
+    expect(
+      classifyCodeBlock('GET /api/v1/users HTTP/1.1\nHost: example.com'),
+    ).toBe('http_request');
   });
 
   it('returns other for unrecognised content', () => {
@@ -118,7 +145,10 @@ describe('extractLinks', () => {
   });
 
   it('flags internal URLs', () => {
-    const links = extractLinks('see https://dashboard.internal.company.com/grafana', [/\.internal\./]);
+    const links = extractLinks(
+      'see https://dashboard.internal.company.com/grafana',
+      [/\.internal\./],
+    );
     expect(links[0].is_internal).toBe(true);
   });
 
@@ -206,7 +236,8 @@ describe('truncateForLLM', () => {
 
 describe('preprocessMessage', () => {
   const baseInput: Layer1Input = {
-    raw_text: 'INC12345 is down, see https://grafana.internal.co/d/abc for details',
+    raw_text:
+      'INC12345 is down, see https://grafana.internal.co/d/abc for details',
     sender_id: 'U123',
     channel_id: 'C456',
     timestamp: '2024-06-01T10:00:00.000Z',
@@ -228,7 +259,11 @@ describe('preprocessMessage', () => {
   });
 
   it('filters channel join messages', () => {
-    const output = preprocessMessage({ ...baseInput, subtype: 'channel_join', raw_text: 'user joined' });
+    const output = preprocessMessage({
+      ...baseInput,
+      subtype: 'channel_join',
+      raw_text: 'user joined',
+    });
     expect(output.filtered).toBe(true);
     expect(output.filter_reason).toContain('channel_join');
   });
@@ -244,7 +279,10 @@ describe('preprocessMessage', () => {
   });
 
   it('produces processed_text with PII redacted', () => {
-    const input = { ...baseInput, raw_text: 'email alice@example.com about INC123' };
+    const input = {
+      ...baseInput,
+      raw_text: 'email alice@example.com about INC123',
+    };
     const output = preprocessMessage(input);
     expect(output.processed_text).toContain('[REDACTED_EMAIL]');
     expect(output.processed_text).toContain('INC123');

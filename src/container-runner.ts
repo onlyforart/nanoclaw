@@ -533,7 +533,9 @@ async function buildVolumeMounts(
           // Pipeline allow-list: filter stdio MCP tools too
           if (input?.allowedTools) {
             const allowed = new Set(input.allowedTools);
-            const filteredTools = (server.tools || []).filter((t: string) => allowed.has(t));
+            const filteredTools = (server.tools || []).filter((t: string) =>
+              allowed.has(t),
+            );
             if (filteredTools.length === 0) continue; // skip server entirely
           }
 

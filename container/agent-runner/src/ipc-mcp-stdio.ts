@@ -510,12 +510,13 @@ Use available_groups.json to find the JID for a group. The folder name must be c
 
 server.tool(
   'update_group',
-  'Update settings for a registered group. Main group only. Supports model, max_tool_rounds, and timeout_ms.',
+  'Update settings for a registered group. Main group only. Supports model, max_tool_rounds, timeout_ms, and threading_mode.',
   {
     jid: z.string().describe('The chat JID of the group to update'),
     model: z.string().optional().describe(modelDescription),
     max_tool_rounds: z.number().int().positive().optional().describe('Maximum tool-calling rounds per invocation. Omit to keep current value.'),
     timeout_ms: z.number().int().positive().optional().describe('Per-invocation timeout in milliseconds. Omit to keep current value.'),
+    threading_mode: z.enum(['temporal', 'thread_aware']).optional().describe('Threading mode: "temporal" (timestamp-based) or "thread_aware" (thread-specific context). Omit to keep current value.'),
   },
   async (args) => {
     if (!isMain) {
@@ -531,6 +532,7 @@ server.tool(
       model: args.model || undefined,
       maxToolRounds: args.max_tool_rounds,
       timeoutMs: args.timeout_ms,
+      threadingMode: args.threading_mode,
       timestamp: new Date().toISOString(),
     };
 

@@ -3,11 +3,7 @@
  * Translates channel reactions on proposed_reply messages into pipeline events.
  */
 
-import {
-  ackEvent,
-  getRecentEvents,
-  publishEvent,
-} from './db.js';
+import { ackEvent, getRecentEvents, publishEvent } from './db.js';
 import { logger } from './logger.js';
 import type { EventRow } from './types.js';
 
@@ -107,10 +103,7 @@ function publishApprovedReply(
 function publishRejection(event: EventRow): void {
   ackEvent(event.id, 'done', 'rejected by human');
 
-  logger.info(
-    { proposalEventId: event.id },
-    'Proposed reply rejected',
-  );
+  logger.info({ proposalEventId: event.id }, 'Proposed reply rejected');
 }
 
 function startEditFlow(event: EventRow, userId: string, chatJid: string): void {
@@ -179,7 +172,9 @@ export function completeEditFlow(
 ): void {
   // Find the original proposal to get source_channel and observation_ids
   const allEvents = getRecentEvents(['proposed_reply'], 50, true);
-  const proposal = allEvents.find((e) => e.id === editEvent.proposedReplyEventId);
+  const proposal = allEvents.find(
+    (e) => e.id === editEvent.proposedReplyEventId,
+  );
 
   if (!proposal) {
     logger.warn(

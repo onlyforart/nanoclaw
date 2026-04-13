@@ -1,6 +1,7 @@
 import {
   getObservations,
   getObservationById,
+  getExportableObservations,
   upsertLabel,
   type ObservationListRow,
   type ObservationDetailRow,
@@ -56,4 +57,26 @@ export function handlePatchLabel(
   });
 
   return { success: true };
+}
+
+export function handleExportEvalSet(): unknown[] {
+  const rows = getExportableObservations();
+  return rows.map((row) => {
+    let expectedLayer1: Record<string, unknown> = {};
+    let expectedLayer2: Record<string, unknown> = {};
+    try {
+      expectedLayer1 = JSON.parse(row.sanitised_json);
+    } catch {}
+    try {
+      expectedLayer2 = JSON.parse(row.expected_json);
+    } catch {}
+    return {
+      id: String(row.id),
+      description: row.raw_text.length > 80 ? row.raw_text.slice(0, 80) + '...' : row.raw_text,
+      tags: [row.source_type],
+      input: { raw_text: row.raw_text },
+      expected_layer1: expectedLayer1,
+      expected_layer2: expectedLayer2,
+    };
+  });
 }

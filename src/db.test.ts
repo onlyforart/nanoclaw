@@ -1401,6 +1401,8 @@ describe('reextraction cache', () => {
     cacheReextraction(obsId, 'affected_systems', '1', '["old"]');
     cacheReextraction(obsId, 'affected_systems', '1', '["new"]');
 
-    expect(getCachedReextraction(obsId, 'affected_systems', '1')).toBe('["new"]');
+    expect(getCachedReextraction(obsId, 'affected_systems', '1')).toBe(
+      '["new"]',
+    );
   });
 });

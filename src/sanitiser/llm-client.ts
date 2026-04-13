@@ -41,7 +41,9 @@ export async function callExtractionLLM(
   } else if (model.startsWith('anthropic:')) {
     return callAnthropic(request, options);
   } else {
-    throw new Error(`Unsupported model prefix: ${model}. Use ollama:name or anthropic:name`);
+    throw new Error(
+      `Unsupported model prefix: ${model}. Use ollama:name or anthropic:name`,
+    );
   }
 }
 
@@ -84,7 +86,8 @@ async function callOllama(
   request: LlmRequest,
   options?: LlmClientOptions,
 ): Promise<LlmResponse> {
-  const host = options?.ollamaHost || process.env.OLLAMA_HOST || 'http://localhost:11434';
+  const host =
+    options?.ollamaHost || process.env.OLLAMA_HOST || 'http://localhost:11434';
   const shortName = request.model.replace(/^ollama:/, '');
   const modelName = await resolveOllamaModel(shortName, host);
 
@@ -116,7 +119,10 @@ async function callOllama(
   }
 
   const data = (await res.json()) as {
-    message?: { content?: string; tool_calls?: Array<{ function: { arguments: Record<string, unknown> } }> };
+    message?: {
+      content?: string;
+      tool_calls?: Array<{ function: { arguments: Record<string, unknown> } }>;
+    };
     prompt_eval_count?: number;
     eval_count?: number;
   };
@@ -143,9 +149,13 @@ async function callAnthropic(
   request: LlmRequest,
   options?: LlmClientOptions,
 ): Promise<LlmResponse> {
-  const port = options?.credentialProxyPort || parseInt(process.env.CREDENTIAL_PROXY_PORT || '0', 10);
+  const port =
+    options?.credentialProxyPort ||
+    parseInt(process.env.CREDENTIAL_PROXY_PORT || '0', 10);
   if (!port) {
-    throw new Error('CREDENTIAL_PROXY_PORT not set — cannot call Anthropic API');
+    throw new Error(
+      'CREDENTIAL_PROXY_PORT not set — cannot call Anthropic API',
+    );
   }
 
   const modelName = request.model.replace(/^anthropic:/, '');
@@ -166,7 +176,9 @@ async function callAnthropic(
 
   // Use tool_use for structured output
   if (request.toolSchema) {
-    const schema = request.toolSchema as { function: { name: string; description: string; parameters: object } };
+    const schema = request.toolSchema as {
+      function: { name: string; description: string; parameters: object };
+    };
     body.tools = [
       {
         name: schema.function.name,
@@ -193,7 +205,11 @@ async function callAnthropic(
   }
 
   const data = (await res.json()) as {
-    content: Array<{ type: string; text?: string; input?: Record<string, unknown> }>;
+    content: Array<{
+      type: string;
+      text?: string;
+      input?: Record<string, unknown>;
+    }>;
     usage: {
       input_tokens: number;
       output_tokens: number;

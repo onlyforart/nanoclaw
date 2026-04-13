@@ -17,12 +17,9 @@ export interface FieldCatalog {
 
 let catalog: FieldCatalog | null = null;
 
-export function loadFieldCatalog(
-  catalogPath?: string,
-): FieldCatalog {
+export function loadFieldCatalog(catalogPath?: string): FieldCatalog {
   const filePath =
-    catalogPath ??
-    path.join(process.cwd(), 'pipeline', 'field-catalog.yaml');
+    catalogPath ?? path.join(process.cwd(), 'pipeline', 'field-catalog.yaml');
   const raw = fs.readFileSync(filePath, 'utf-8');
   catalog = parseYaml(raw) as FieldCatalog;
   return catalog;

@@ -1795,6 +1795,7 @@ const AppObservations = {
           </select>
         </div>
         <button @click="fetch" class="px-3 py-1.5 bg-gray-200 dark:bg-gray-700 rounded-lg text-sm hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors">Refresh</button>
+        <button @click="exportEvalSet" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors">Export Eval Set</button>
       </div>
       <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
         <table v-if="observations.length" class="w-full text-sm">
@@ -1853,10 +1854,24 @@ const AppObservations = {
       } catch {}
     };
 
+    const exportEvalSet = async () => {
+      try {
+        const cases = await api('/observations/export-eval-set');
+        const blob = new Blob([JSON.stringify(cases, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `eval-set-${new Date().toISOString().slice(0, 10)}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        showToast(`Exported ${cases.length} eval cases`);
+      } catch (e) { showToast(e.message, 'error'); }
+    };
+
     onMounted(fetch);
     const interval = setInterval(fetch, 10000);
     onUnmounted(() => clearInterval(interval));
-    return { observations, sourceType, labelFilter, page, pageSize, fetch, window };
+    return { observations, sourceType, labelFilter, page, pageSize, fetch, exportEvalSet, window };
   },
 };
 

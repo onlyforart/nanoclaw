@@ -14,7 +14,10 @@ import {
   updateObservationSanitised,
   getRouterState,
 } from './db.js';
-import { executeHostPipeline, type PipelineDeps } from './host-pipeline-executor.js';
+import {
+  executeHostPipeline,
+  type PipelineDeps,
+} from './host-pipeline-executor.js';
 
 // Mock LLM client — returns a valid Layer 2 response
 function mockLlmClient() {

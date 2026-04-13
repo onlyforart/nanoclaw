@@ -197,7 +197,11 @@ describe('cross_channel_message IPC', () => {
 
     await runOnce();
 
-    expect(sendMessage).toHaveBeenCalledWith('slack:CSUPPORT', 'From main', undefined);
+    expect(sendMessage).toHaveBeenCalledWith(
+      'slack:CSUPPORT',
+      'From main',
+      undefined,
+    );
   });
 
   it('cleans up the IPC file after processing', async () => {
@@ -325,7 +329,11 @@ describe('cross_channel_message IPC', () => {
 
     await runOnce();
 
-    expect(sendMessage).toHaveBeenCalledWith('slack:CSUPPORT', 'Unrestricted', undefined);
+    expect(sendMessage).toHaveBeenCalledWith(
+      'slack:CSUPPORT',
+      'Unrestricted',
+      undefined,
+    );
   });
 
   it('allows cross_channel_message when no sourceTaskId is present (backwards-compatible)', async () => {
@@ -337,7 +345,11 @@ describe('cross_channel_message IPC', () => {
 
     await runOnce();
 
-    expect(sendMessage).toHaveBeenCalledWith('slack:CSUPPORT', 'No task ID', undefined);
+    expect(sendMessage).toHaveBeenCalledWith(
+      'slack:CSUPPORT',
+      'No task ID',
+      undefined,
+    );
   });
 
   // --- idempotency ---
@@ -365,7 +377,11 @@ describe('cross_channel_message IPC', () => {
 
     // Should only have been called once (first send)
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage).toHaveBeenCalledWith('slack:CSUPPORT', 'First send', undefined);
+    expect(sendMessage).toHaveBeenCalledWith(
+      'slack:CSUPPORT',
+      'First send',
+      undefined,
+    );
   });
 
   it('allows different idempotency_keys for same target', async () => {
@@ -419,5 +435,77 @@ describe('cross_channel_message IPC', () => {
       fs.readFileSync(path.join(messagesDir, resultFiles[0]), 'utf-8'),
     );
     expect(result.success).toBe(true);
+  });
+
+  // --- outbound retry ---
+
+  it('retries cross_channel_message on transient send failure', async () => {
+    let calls = 0;
+    deps.sendMessage = vi.fn(async () => {
+      calls++;
+      if (calls < 2) throw new Error('transient 429');
+    });
+
+    writeMessage('slack_monitoring-channel', {
+      type: 'cross_channel_message',
+      targetChatJid: 'slack:CSUPPORT',
+      text: 'Retry me',
+    });
+
+    // sendWithRetry uses setTimeout for backoff — advance enough to cover retries
+    vi.useFakeTimers();
+    startIpcWatcher(deps);
+    await vi.advanceTimersByTimeAsync(5000);
+    vi.useRealTimers();
+
+    expect(deps.sendMessage).toHaveBeenCalledTimes(2);
+    const messagesDir = path.join(
+      tmpDir,
+      'ipc',
+      'slack_monitoring-channel',
+      'messages',
+    );
+    const resultFiles = fs
+      .readdirSync(messagesDir)
+      .filter((f) => f.endsWith('.result'));
+    expect(resultFiles).toHaveLength(1);
+    const result = JSON.parse(
+      fs.readFileSync(path.join(messagesDir, resultFiles[0]), 'utf-8'),
+    );
+    expect(result.success).toBe(true);
+  });
+
+  it('returns failure after all retries exhausted', async () => {
+    deps.sendMessage = vi.fn(async () => {
+      throw new Error('permanent failure');
+    });
+
+    writeMessage('slack_monitoring-channel', {
+      type: 'cross_channel_message',
+      targetChatJid: 'slack:CSUPPORT',
+      text: 'Will fail',
+    });
+
+    // sendWithRetry retries 3x with backoff (1s + 2s) — advance enough
+    vi.useFakeTimers();
+    startIpcWatcher(deps);
+    await vi.advanceTimersByTimeAsync(10000);
+    vi.useRealTimers();
+
+    const messagesDir = path.join(
+      tmpDir,
+      'ipc',
+      'slack_monitoring-channel',
+      'messages',
+    );
+    const resultFiles = fs
+      .readdirSync(messagesDir)
+      .filter((f) => f.endsWith('.result'));
+    expect(resultFiles).toHaveLength(1);
+    const result = JSON.parse(
+      fs.readFileSync(path.join(messagesDir, resultFiles[0]), 'utf-8'),
+    );
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('permanent failure');
   });
 });

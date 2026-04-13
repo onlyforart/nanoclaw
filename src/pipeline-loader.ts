@@ -78,8 +78,14 @@ export function reconcilePipelineTasks(
         group_folder: teamGroupFolder,
         chat_jid: teamChatJid,
         prompt: spec.system,
-        schedule_type: spec.subscribed_event_types?.length && spec.type !== 'host_pipeline' ? 'event' : 'cron',
-        schedule_value: spec.subscribed_event_types?.length && spec.type !== 'host_pipeline' ? '' : spec.cron,
+        schedule_type:
+          spec.subscribed_event_types?.length && spec.type !== 'host_pipeline'
+            ? 'event'
+            : 'cron',
+        schedule_value:
+          spec.subscribed_event_types?.length && spec.type !== 'host_pipeline'
+            ? ''
+            : spec.cron,
         context_mode: 'isolated',
         model: spec.model,
         allowedTools: resolvedTools,

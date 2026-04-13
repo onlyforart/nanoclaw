@@ -103,12 +103,19 @@ export function classifyCodeBlock(content: string): string {
   }
 
   // Stack trace
-  if (/^\s*(Error|TypeError|ReferenceError|SyntaxError|Exception|Traceback)/m.test(content) || /\s+at\s+\S+\s+\(/.test(content)) {
+  if (
+    /^\s*(Error|TypeError|ReferenceError|SyntaxError|Exception|Traceback)/m.test(
+      content,
+    ) ||
+    /\s+at\s+\S+\s+\(/.test(content)
+  ) {
     return 'stack_trace';
   }
 
   // HTTP request
-  if (/^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+\S+\s+HTTP\//m.test(content)) {
+  if (
+    /^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+\S+\s+HTTP\//m.test(content)
+  ) {
     return 'http_request';
   }
 
@@ -164,10 +171,7 @@ export function redactPII(text: string): string {
   );
 
   // Phone numbers (international format, various separators)
-  result = result.replace(
-    /\+?\d[\d\s\-()]{7,}\d/g,
-    '[REDACTED_PHONE]',
-  );
+  result = result.replace(/\+?\d[\d\s\-()]{7,}\d/g, '[REDACTED_PHONE]');
 
   return result;
 }
@@ -189,7 +193,8 @@ export function preprocessMessage(
   },
 ): Layer1Output {
   const ticketPatterns = config?.ticketPatterns ?? DEFAULT_TICKET_PATTERNS;
-  const internalPatterns = config?.internalUrlPatterns ?? DEFAULT_INTERNAL_PATTERNS;
+  const internalPatterns =
+    config?.internalUrlPatterns ?? DEFAULT_INTERNAL_PATTERNS;
   const botUserIds = config?.botUserIds ?? DEFAULT_BOT_USER_IDS;
   const maxTextLength = config?.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH;
 
@@ -215,7 +220,10 @@ export function preprocessMessage(
     };
   }
 
-  const referenced_tickets = extractTicketReferences(input.raw_text, ticketPatterns);
+  const referenced_tickets = extractTicketReferences(
+    input.raw_text,
+    ticketPatterns,
+  );
   const code_blocks = extractCodeBlocks(input.raw_text);
   const links = extractLinks(input.raw_text, internalPatterns);
   const mentions = extractMentions(input.raw_text, botUserIds);
@@ -226,7 +234,9 @@ export function preprocessMessage(
   // Replace code blocks with placeholders
   for (let i = 0; i < code_blocks.length; i++) {
     processedText = processedText.replace(
-      new RegExp('```(?:\\w*\\n?)?' + escapeRegex(code_blocks[i].content) + '\\s*```'),
+      new RegExp(
+        '```(?:\\w*\\n?)?' + escapeRegex(code_blocks[i].content) + '\\s*```',
+      ),
       `[CODE_BLOCK_${i + 1}:${code_blocks[i].kind}]`,
     );
   }

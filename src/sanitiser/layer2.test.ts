@@ -148,30 +148,50 @@ describe('parseAndValidateResponse', () => {
   });
 
   it('extracts JSON from markdown code fences', () => {
-    const wrapped = '```json\n' + JSON.stringify({
-      fact_summary: 'test', urgency: 'fyi', speech_act: 'other',
-      reporter_role_hint: 'other', appears_to_address_bot: false,
-      contains_imperative: false, sentiment: 'neutral',
-      action_requested: null, resolution_owner_hint: 'unclear',
-    }) + '\n```';
+    const wrapped =
+      '```json\n' +
+      JSON.stringify({
+        fact_summary: 'test',
+        urgency: 'fyi',
+        speech_act: 'other',
+        reporter_role_hint: 'other',
+        appears_to_address_bot: false,
+        contains_imperative: false,
+        sentiment: 'neutral',
+        action_requested: null,
+        resolution_owner_hint: 'unclear',
+      }) +
+      '\n```';
     expect(parseAndValidateResponse(wrapped)).not.toBeNull();
   });
 
   it('extracts JSON from surrounding text', () => {
-    const padded = 'Here is the extraction:\n' + JSON.stringify({
-      fact_summary: 'test', urgency: 'fyi', speech_act: 'other',
-      reporter_role_hint: 'other', appears_to_address_bot: false,
-      contains_imperative: false, sentiment: 'neutral',
-      action_requested: null, resolution_owner_hint: 'unclear',
-    }) + '\nDone.';
+    const padded =
+      'Here is the extraction:\n' +
+      JSON.stringify({
+        fact_summary: 'test',
+        urgency: 'fyi',
+        speech_act: 'other',
+        reporter_role_hint: 'other',
+        appears_to_address_bot: false,
+        contains_imperative: false,
+        sentiment: 'neutral',
+        action_requested: null,
+        resolution_owner_hint: 'unclear',
+      }) +
+      '\nDone.';
     expect(parseAndValidateResponse(padded)).not.toBeNull();
   });
 
   it('defaults missing action_requested to null', () => {
     const noAction = {
-      fact_summary: 'test', urgency: 'fyi', speech_act: 'other',
-      reporter_role_hint: 'other', appears_to_address_bot: false,
-      contains_imperative: false, sentiment: 'neutral',
+      fact_summary: 'test',
+      urgency: 'fyi',
+      speech_act: 'other',
+      reporter_role_hint: 'other',
+      appears_to_address_bot: false,
+      contains_imperative: false,
+      sentiment: 'neutral',
       resolution_owner_hint: 'unclear',
     };
     const result = parseAndValidateResponse(JSON.stringify(noAction));

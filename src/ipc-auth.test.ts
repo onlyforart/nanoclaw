@@ -771,6 +771,24 @@ describe('update_group with maxToolRounds and timeoutMs', () => {
     expect(group!.maxToolRounds).toBe(8);
     expect(group!.timeoutMs).toBe(90_000);
   });
+
+  it('updates threadingMode on a group', async () => {
+    const result = await processTaskIpc(
+      {
+        type: 'update_group',
+        jid: 'other@g.us',
+        threadingMode: 'thread_aware',
+      },
+      'whatsapp_main',
+      true,
+      deps,
+    );
+
+    expect(result.success).toBe(true);
+    const group = getRegisteredGroup('other@g.us');
+    expect(group).toBeDefined();
+    expect(group!.threadingMode).toBe('thread_aware');
+  });
 });
 
 // --- Requirement: agents must receive accurate feedback ---

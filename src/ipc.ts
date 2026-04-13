@@ -23,11 +23,17 @@ import {
 import { getFieldEntry, loadFieldCatalog } from './field-catalog.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
+import { sendWithRetry } from './outbound-retry.js';
 import { callExtractionLLM } from './sanitiser/llm-client.js';
+import { wrapWithNonce } from './sanitiser/nonce.js';
 import { IntakeSourceContext, RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
-  sendMessage: (jid: string, text: string, options?: { threadTs?: string }) => Promise<void>;
+  sendMessage: (
+    jid: string,
+    text: string,
+    options?: { threadTs?: string },
+  ) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   updateGroup: (
@@ -35,7 +41,11 @@ export interface IpcDeps {
     updates: Partial<
       Pick<
         RegisteredGroup,
-        'model' | 'temperature' | 'maxToolRounds' | 'timeoutMs'
+        | 'model'
+        | 'temperature'
+        | 'maxToolRounds'
+        | 'timeoutMs'
+        | 'threadingMode'
       >
     >,
   ) => void;
@@ -264,11 +274,24 @@ export function startIpcWatcher(deps: IpcDeps): void {
                     continue;
                   }
                   const threadTs = data.threadTs as string | undefined;
-                  await deps.sendMessage(
+                  const retryResult = await sendWithRetry(
+                    (jid, text) =>
+                      deps.sendMessage(
+                        jid,
+                        text,
+                        threadTs ? { threadTs } : undefined,
+                      ),
                     data.targetChatJid,
                     data.text,
-                    threadTs ? { threadTs } : undefined,
                   );
+                  if (!retryResult.success) {
+                    crossChannelResult = {
+                      success: false,
+                      error: retryResult.error,
+                    };
+                    writeIpcResult(`${filePath}.result`, crossChannelResult);
+                    continue;
+                  }
                   if (idempotencyKey) {
                     recordCrossChannelDelivery(
                       data.targetChatJid,
@@ -675,7 +698,11 @@ function handleUpdateGroup(
   const groupUpdates: Partial<
     Pick<
       RegisteredGroup,
-      'model' | 'temperature' | 'maxToolRounds' | 'timeoutMs'
+      | 'model'
+      | 'temperature'
+      | 'maxToolRounds'
+      | 'timeoutMs'
+      | 'threadingMode'
     >
   > = {};
   if (data.model !== undefined) groupUpdates.model = data.model || undefined;
@@ -684,6 +711,8 @@ function handleUpdateGroup(
   if (data.maxToolRounds !== undefined)
     groupUpdates.maxToolRounds = data.maxToolRounds;
   if (data.timeoutMs !== undefined) groupUpdates.timeoutMs = data.timeoutMs;
+  if (data.threadingMode !== undefined)
+    groupUpdates.threadingMode = data.threadingMode;
   deps.updateGroup(data.jid, groupUpdates);
   logger.info(
     { jid: data.jid, sourceGroup, updates: groupUpdates },
@@ -726,13 +755,17 @@ function handlePublishEvent(
         const sourceChannel = payloadObj.source_channel;
         const sourceMessageId = payloadObj.source_message_id;
         if (sourceChannel) {
-          deps.sendMessage(
-            sourceChannel,
-            'Looking into this — investigation in progress.',
-            sourceMessageId ? { threadTs: sourceMessageId } : undefined,
-          ).catch((err) => logger.warn({ err }, 'Auto-ack send failed'));
+          deps
+            .sendMessage(
+              sourceChannel,
+              'Looking into this — investigation in progress.',
+              sourceMessageId ? { threadTs: sourceMessageId } : undefined,
+            )
+            .catch((err) => logger.warn({ err }, 'Auto-ack send failed'));
         }
-      } catch { /* payload parse failure — skip auto-ack */ }
+      } catch {
+        /* payload parse failure — skip auto-ack */
+      }
     }
   }
   return { success: true, ...result };
@@ -748,7 +781,11 @@ function handleConsumeEvents(data: IpcData): IpcResult {
   }
 
   const events = consumeEvents(eventTypes, claimedBy, limit);
-  return { success: true, events } as any;
+  const wrapped = events.map((e) => ({
+    ...e,
+    payload: wrapWithNonce(e.payload).wrapped,
+  }));
+  return { success: true, events: wrapped } as any;
 }
 
 function handleAckEvent(data: IpcData): IpcResult {

@@ -583,3 +583,23 @@ export function upsertLabel(
     );
   }
 }
+
+export interface ExportableObservationRow {
+  id: number;
+  source_type: string;
+  raw_text: string;
+  sanitised_json: string;
+  expected_json: string;
+}
+
+export function getExportableObservations(): ExportableObservationRow[] {
+  return db
+    .prepare(
+      `SELECT o.id, o.source_type, o.raw_text, o.sanitised_json, l.expected_json
+       FROM observed_messages o
+       JOIN observation_labels l ON l.observation_id = o.id
+       WHERE o.sanitised_json IS NOT NULL AND l.expected_json IS NOT NULL
+       ORDER BY o.id`,
+    )
+    .all() as ExportableObservationRow[];
+}
