@@ -151,7 +151,8 @@ async function handlePipelineCrossChannel(
   deps: IpcDeps,
 ): Promise<IpcResult | null> {
   // Look up the specific consumed event by ID (passed from the container)
-  const contextEventId = data.contextEventId as number | undefined;
+  const rawEventId = data.contextEventId as string | number | undefined;
+  const contextEventId = rawEventId != null ? Number(rawEventId) : undefined;
   if (!contextEventId) return null;
 
   const eventPayload = getEventPayloadById(contextEventId);

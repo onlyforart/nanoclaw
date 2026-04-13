@@ -171,7 +171,7 @@ server.tool(
       sourceGroup: groupFolder,
       sourceTaskId: taskId,
       threadTs: args.thread_ts || undefined,
-      contextEventId: lastConsumedEventId,
+      contextEventId: lastConsumedEventId != null ? String(lastConsumedEventId) : undefined,
       timestamp: new Date().toISOString(),
     };
 

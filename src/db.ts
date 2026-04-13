@@ -1355,9 +1355,7 @@ export function consumeEvents(
  * Used for pipeline auto-routing: the container passes the consumed event ID,
  * and the host looks up the specific event to extract source context.
  */
-export function getEventPayloadById(
-  eventId: number,
-): string | undefined {
+export function getEventPayloadById(eventId: number): string | undefined {
   const row = db
     .prepare('SELECT payload FROM events WHERE id = ?')
     .get(eventId) as { payload: string } | undefined;
