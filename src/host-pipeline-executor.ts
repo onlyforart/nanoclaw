@@ -46,6 +46,8 @@ export interface PipelineDeps {
   noiseRetentionMs?: number;
   /** Tier 2: delete all unlabelled observations + events older than this (ms). Default: 7d */
   fullRetentionMs?: number;
+  /** Sender IDs to skip in passive channel processing (loaded from sanitiser-config.yaml) */
+  excludedSenders?: string[];
 }
 
 export interface PipelineResult {
@@ -145,6 +147,11 @@ export async function executeHostPipeline(
     costUSD: null,
   };
 
+  // Build excluded-sender set for O(1) lookups
+  const excludedSenders = deps.excludedSenders?.length
+    ? new Set(deps.excludedSenders)
+    : null;
+
   // --- Process passive channel messages ---
   for (const chatJid of deps.sourceChannels) {
     const cursorKey = `${CURSOR_PREFIX}${chatJid}`;
@@ -154,6 +161,13 @@ export async function executeHostPipeline(
     if (messages.length === 0) continue;
 
     for (const msg of messages) {
+      // Skip excluded senders — advance cursor but don't create observation
+      if (excludedSenders?.has(msg.sender)) {
+        setRouterState(cursorKey, msg.timestamp);
+        result.messagesProcessed++;
+        continue;
+      }
+
       const obsId = insertObservedMessage({
         source_chat_jid: chatJid,
         source_message_id: msg.id,
@@ -229,10 +243,7 @@ export async function executeHostPipeline(
   const noiseDeleted = cleanupNoiseObservations(NOISE_RETENTION_MS);
   const oldDeleted = cleanupOldObservations(FULL_RETENTION_MS);
   if (noiseDeleted > 0 || oldDeleted > 0) {
-    logger.info(
-      { noiseDeleted, oldDeleted },
-      'Observation cleanup completed',
-    );
+    logger.info({ noiseDeleted, oldDeleted }, 'Observation cleanup completed');
   }
 
   return result;

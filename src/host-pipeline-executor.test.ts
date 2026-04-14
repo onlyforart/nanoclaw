@@ -165,6 +165,89 @@ describe('executeHostPipeline — passive channel', () => {
   });
 });
 
+// --- Excluded senders ---
+
+describe('executeHostPipeline — excludedSenders', () => {
+  it('skips messages from excluded senders without calling LLM', async () => {
+    storeMessage({
+      id: 'msg-exc1',
+      chat_jid: 'slack:CPASSIVE',
+      sender: 'UBOT1',
+      sender_name: 'NoisyBot',
+      content: 'Automated status: all green',
+      timestamp: '2024-06-01T10:00:01.000Z',
+    });
+    storeMessage({
+      id: 'msg-exc2',
+      chat_jid: 'slack:CPASSIVE',
+      sender: 'U123',
+      sender_name: 'Alice',
+      content: 'Real issue here',
+      timestamp: '2024-06-01T10:00:02.000Z',
+    });
+
+    const deps = makeDeps({ excludedSenders: ['UBOT1'] });
+    const result = await executeHostPipeline(deps);
+
+    // Only Alice's message should be processed by LLM
+    expect(deps.callLLM).toHaveBeenCalledTimes(1);
+    // Both messages count as processed (cursor advances past both)
+    expect(result.messagesProcessed).toBe(2);
+  });
+
+  it('advances cursor past excluded messages', async () => {
+    storeMessage({
+      id: 'msg-exconly',
+      chat_jid: 'slack:CPASSIVE',
+      sender: 'UBOT1',
+      sender_name: 'NoisyBot',
+      content: 'Just noise',
+      timestamp: '2024-06-01T10:00:01.000Z',
+    });
+
+    const deps = makeDeps({ excludedSenders: ['UBOT1'] });
+    await executeHostPipeline(deps);
+
+    // Cursor should have advanced — second run should not reprocess
+    const deps2 = makeDeps({ excludedSenders: ['UBOT1'] });
+    await executeHostPipeline(deps2);
+    expect(deps2.callLLM).toHaveBeenCalledTimes(0);
+  });
+
+  it('excludes multiple senders', async () => {
+    storeMessage({
+      id: 'msg-m1',
+      chat_jid: 'slack:CPASSIVE',
+      sender: 'UBOT1',
+      sender_name: 'Bot1',
+      content: 'noise 1',
+      timestamp: '2024-06-01T10:00:01.000Z',
+    });
+    storeMessage({
+      id: 'msg-m2',
+      chat_jid: 'slack:CPASSIVE',
+      sender: 'UBOT2',
+      sender_name: 'Bot2',
+      content: 'noise 2',
+      timestamp: '2024-06-01T10:00:02.000Z',
+    });
+    storeMessage({
+      id: 'msg-m3',
+      chat_jid: 'slack:CPASSIVE',
+      sender: 'U123',
+      sender_name: 'Alice',
+      content: 'Real issue',
+      timestamp: '2024-06-01T10:00:03.000Z',
+    });
+
+    const deps = makeDeps({ excludedSenders: ['UBOT1', 'UBOT2'] });
+    const result = await executeHostPipeline(deps);
+
+    expect(deps.callLLM).toHaveBeenCalledTimes(1);
+    expect(result.messagesProcessed).toBe(3);
+  });
+});
+
 // --- Quarantine ---
 
 describe('executeHostPipeline — quarantine', () => {

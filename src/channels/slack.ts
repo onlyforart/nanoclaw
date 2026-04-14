@@ -176,9 +176,7 @@ export class SlackChannel implements Channel {
           if (!msg.text || !msg.ts) continue;
           if (msg.bot_id || msg.user === this.botUserId) continue;
 
-          const timestamp = new Date(
-            parseFloat(msg.ts) * 1000,
-          ).toISOString();
+          const timestamp = new Date(parseFloat(msg.ts) * 1000).toISOString();
           this.opts.onMessage(jid, {
             id: msg.ts,
             chat_jid: jid,
@@ -199,10 +197,7 @@ export class SlackChannel implements Channel {
           );
         }
       } catch (err) {
-        logger.warn(
-          { jid, err },
-          'Failed to backfill passive channel history',
-        );
+        logger.warn({ jid, err }, 'Failed to backfill passive channel history');
       }
     }
   }

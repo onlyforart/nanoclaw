@@ -336,7 +336,16 @@ async function runTask(
   updateTaskAfterRun(task.id, nextRun, resultSummary);
 }
 
-function loadSanitiserModel(): string {
+interface SanitiserConfig {
+  model: string;
+  excludedSenders: string[];
+}
+
+function loadSanitiserConfig(): SanitiserConfig {
+  const defaults: SanitiserConfig = {
+    model: 'ollama:gemma4',
+    excludedSenders: [],
+  };
   try {
     const configPath = path.join(
       process.cwd(),
@@ -345,12 +354,17 @@ function loadSanitiserModel(): string {
     );
     if (fs.existsSync(configPath)) {
       const config = parseYaml(fs.readFileSync(configPath, 'utf-8'));
-      if (config?.layer2_model) return config.layer2_model;
+      if (config?.layer2_model) defaults.model = config.layer2_model;
+      if (Array.isArray(config?.excluded_senders)) {
+        defaults.excludedSenders = config.excluded_senders.filter(
+          (s: unknown) => typeof s === 'string',
+        );
+      }
     }
   } catch {
     /* fall through */
   }
-  return 'ollama:gemma4'; // fallback default
+  return defaults;
 }
 
 async function runHostPipeline(
@@ -362,7 +376,7 @@ async function runHostPipeline(
     'Running host_pipeline task',
   );
 
-  const model = loadSanitiserModel();
+  const sanitiserConfig = loadSanitiserConfig();
   const passiveGroups = getPassiveGroups();
   const sourceChannels = passiveGroups.map((g) => g.jid);
 
@@ -377,9 +391,10 @@ async function runHostPipeline(
 
   const deps: PipelineDeps = {
     callLLM: (req) => callExtractionLLM(req),
-    model,
+    model: sanitiserConfig.model,
     sanitiserVersion: '1',
     sourceChannels,
+    excludedSenders: sanitiserConfig.excludedSenders,
   };
 
   let error: string | null = null;
