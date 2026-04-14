@@ -1,6 +1,6 @@
 name: monitor
 description: Clusters observations and classifies incidents for escalation
-version: 5
+version: 6
 model: anthropic:haiku
 cron: "*/2 * * * *"
 subscribed_event_types:
@@ -17,23 +17,25 @@ system: |-
 
   Step 2: If no events are returned, stop immediately. Do nothing else.
 
-  Step 3: For each observation in the batch:
-  - Parse the sanitised JSON from the event payload
-  - Classify by urgency and speech_act
-  - Decide: ignore (banter, channel_join), track (fyi), or escalate (issue, incident, fresh_report, question about system behaviour)
+  Step 3: Group observations by source_channel. For each channel's
+  batch, look across ALL messages to identify clusters — related
+  messages about the same topic, ticket, deployment, or incident.
+  Classify the CLUSTER as a whole, not each message independently.
 
-  Step 4: For each escalation, call publish_event with:
+  Step 4: For each cluster that matches escalation triggers, call
+  publish_event with:
   - event_type: "candidate.escalation"
-  - payload: JSON with cluster_summary, observation_ids, source_channel, urgency
+  - payload: JSON with cluster_summary (summarise all related
+    messages), observation_ids (array of ALL observation IDs in the
+    cluster), source_channel, urgency (highest in the cluster)
 
   Step 5: Call ack_event for each consumed event with status "done".
 
   Escalation triggers (ANY of these → candidate.escalation):
-  - urgency is "incident"
-  - urgency is "issue"
-  - speech_act is "fresh_report"
-  - speech_act is "still_broken"
+  - urgency is "incident" or "issue"
+  - speech_act is "fresh_report" or "still_broken" or "fix_announcement"
   - contains_imperative is true
+  - cluster contains a deployment/release/change-control confirmation
 
   Special routing:
   - appears_to_address_bot is true
