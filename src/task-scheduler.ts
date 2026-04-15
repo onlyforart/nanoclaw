@@ -1,8 +1,6 @@
 import { ChildProcess } from 'child_process';
 import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
-import path from 'path';
-import { parse as parseYaml } from 'yaml';
 
 import { ASSISTANT_NAME, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { isOllamaModel, resolveProfile } from './connection-profiles.js';
@@ -14,7 +12,6 @@ import {
 import {
   getAllTasks,
   getDueTasks,
-  getPassiveGroups,
   getRecentEvents,
   getTaskById,
   logTaskRun,
@@ -23,13 +20,8 @@ import {
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
-import {
-  executeHostPipeline,
-  type PipelineDeps,
-} from './host-pipeline-executor.js';
 import { logger } from './logger.js';
 import type { PipelinePlugin } from './pipeline-plugin.js';
-import { callExtractionLLM } from './sanitiser/llm-client.js';
 import { RegisteredGroup, ScheduledTask } from './types.js';
 
 /**
@@ -123,13 +115,17 @@ async function runTask(
   }
   fs.mkdirSync(groupDir, { recursive: true });
 
-  // Host-side pipeline tasks run directly — no container spawned
+  // Host-side pipeline tasks — delegated to plugin
   if (task.executionMode === 'host_pipeline') {
     if (deps.plugin?.executeHostTask) {
       await deps.plugin.executeHostTask(task, startTime);
-      return;
+    } else {
+      logger.warn(
+        { taskId: task.id },
+        'host_pipeline task skipped — no pipeline plugin installed',
+      );
+      updateTaskAfterRun(task.id, computeNextRun(task), 'No pipeline plugin');
     }
-    await runHostPipeline(task, startTime);
     return;
   }
 
@@ -342,103 +338,7 @@ async function runTask(
   updateTaskAfterRun(task.id, nextRun, resultSummary);
 }
 
-interface SanitiserConfig {
-  model: string;
-  excludedSenders: string[];
-}
 
-function loadSanitiserConfig(): SanitiserConfig {
-  const defaults: SanitiserConfig = {
-    model: 'ollama:gemma4',
-    excludedSenders: [],
-  };
-  try {
-    const configPath = path.join(
-      process.cwd(),
-      'pipeline',
-      'sanitiser-config.yaml',
-    );
-    if (fs.existsSync(configPath)) {
-      const config = parseYaml(fs.readFileSync(configPath, 'utf-8'));
-      if (config?.layer2_model) defaults.model = config.layer2_model;
-      if (Array.isArray(config?.excluded_senders)) {
-        defaults.excludedSenders = config.excluded_senders.filter(
-          (s: unknown) => typeof s === 'string',
-        );
-      }
-    }
-  } catch {
-    /* fall through */
-  }
-  return defaults;
-}
-
-async function runHostPipeline(
-  task: ScheduledTask,
-  startTime: number,
-): Promise<void> {
-  logger.info(
-    { taskId: task.id, group: task.group_folder },
-    'Running host_pipeline task',
-  );
-
-  const sanitiserConfig = loadSanitiserConfig();
-  const passiveGroups = getPassiveGroups();
-  const sourceChannels = passiveGroups.map((g) => g.jid);
-
-  if (sourceChannels.length === 0) {
-    logger.info(
-      { taskId: task.id },
-      'No passive channels — skipping sanitiser run',
-    );
-    updateTaskAfterRun(task.id, computeNextRun(task), 'No passive channels');
-    return;
-  }
-
-  const deps: PipelineDeps = {
-    callLLM: (req) => callExtractionLLM(req),
-    model: sanitiserConfig.model,
-    sanitiserVersion: '1',
-    sourceChannels,
-    excludedSenders: sanitiserConfig.excludedSenders,
-  };
-
-  let error: string | null = null;
-  let result: string | null = null;
-  let pipelineResult: Awaited<ReturnType<typeof executeHostPipeline>> | null =
-    null;
-
-  try {
-    pipelineResult = await executeHostPipeline(deps);
-    result = `Processed ${pipelineResult.messagesProcessed} messages, ${pipelineResult.intakeProcessed} intake, ${pipelineResult.quarantined} quarantined`;
-    logger.info(
-      { taskId: task.id, ...pipelineResult },
-      'Host pipeline completed',
-    );
-  } catch (err) {
-    error = err instanceof Error ? err.message : String(err);
-    logger.error({ taskId: task.id, err }, 'Host pipeline failed');
-  }
-
-  const durationMs = Date.now() - startTime;
-  logTaskRun({
-    task_id: task.id,
-    run_at: new Date().toISOString(),
-    duration_ms: durationMs,
-    status: error ? 'error' : 'success',
-    result,
-    error,
-    input_tokens: pipelineResult?.inputTokens ?? null,
-    output_tokens: pipelineResult?.outputTokens ?? null,
-    cost_usd: pipelineResult?.costUSD ?? null,
-  });
-
-  updateTaskAfterRun(
-    task.id,
-    computeNextRun(task),
-    error ? `Error: ${error}` : (result?.slice(0, 200) ?? 'Completed'),
-  );
-}
 
 let schedulerRunning = false;
 const consecutiveFailures = new Map<string, number>();

@@ -60,6 +60,8 @@ agents-sdk-docs
 eval/results/
 eval/sets/
 eval/taxonomy.md
-pipeline/field-catalog.yaml
+
+# Pipeline plugin — installed via symlink from private repo
 pipeline/sanitiser-config.yaml
+pipeline/field-catalog.yaml
 pipeline/sanitiser-schema.yaml

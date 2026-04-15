@@ -65,10 +65,6 @@ import {
   loadSenderAllowlist,
   shouldDropMessage,
 } from './sender-allowlist.js';
-import {
-  loadAllPipelineSpecs,
-  reconcilePipelineTasks,
-} from './pipeline-loader.js';
 import { loadPlugin } from './pipeline-plugin.js';
 import {
   handleReaction,
@@ -767,30 +763,22 @@ async function main(): Promise<void> {
   refreshAllGroupSnapshots();
   refreshAllTaskSnapshots();
 
-  // Backfill missed messages for passive channels (Slack doesn't replay events)
-  const passiveGroups = getPassiveGroups();
-  if (passiveGroups.length > 0) {
-    const passiveJids = passiveGroups.map((g) => g.jid);
-    const cursors: Record<string, string> = {};
-    for (const g of passiveGroups) {
-      const cursor = getRouterState(`sanitiser_cursor:${g.jid}`);
-      if (cursor) cursors[g.jid] = cursor;
-    }
-    if (Object.keys(cursors).length > 0) {
-      if (plugin?.onStartupBackfill) {
+  // Backfill missed messages for passive channels (plugin-managed)
+  if (plugin?.onStartupBackfill) {
+    const passiveGroups = getPassiveGroups();
+    if (passiveGroups.length > 0) {
+      const passiveJids = passiveGroups.map((g) => g.jid);
+      const cursors: Record<string, string> = {};
+      for (const g of passiveGroups) {
+        const cursor = getRouterState(`sanitiser_cursor:${g.jid}`);
+        if (cursor) cursors[g.jid] = cursor;
+      }
+      if (Object.keys(cursors).length > 0) {
         plugin
           .onStartupBackfill(channels, passiveJids, cursors)
           .catch((err) =>
             logger.warn({ err }, 'Plugin startup backfill failed'),
           );
-      } else {
-        for (const ch of channels) {
-          if (ch.backfillPassiveChannels) {
-            ch.backfillPassiveChannels(passiveJids, cursors).catch((err) =>
-              logger.warn({ err }, 'Passive channel backfill failed'),
-            );
-          }
-        }
       }
     }
   }
@@ -802,43 +790,7 @@ async function main(): Promise<void> {
     registeredGroups = getAllRegisteredGroups();
   }, 60_000);
 
-  // Reconcile pipeline tasks from YAML specs
-  try {
-    const fs = await import('fs');
-    const path = await import('path');
-    const { parse: parseYaml } = await import('yaml');
-    const configPath = path.join(
-      process.cwd(),
-      'pipeline',
-      'sanitiser-config.yaml',
-    );
-    if (fs.existsSync(configPath)) {
-      const config = parseYaml(fs.readFileSync(configPath, 'utf-8'));
-      if (config?.team_group_folder && config?.team_chat_jid) {
-        const specs = loadAllPipelineSpecs();
-        if (specs.length > 0) {
-          reconcilePipelineTasks(
-            specs,
-            config.team_group_folder,
-            config.team_chat_jid,
-            config.tool_profiles,
-          );
-          logger.info(
-            { count: specs.length, teamGroup: config.team_group_folder },
-            'Pipeline tasks reconciled',
-          );
-        }
-      } else {
-        logger.info(
-          'Pipeline config missing team_group_folder/team_chat_jid — skipping reconciliation',
-        );
-      }
-    }
-  } catch (err) {
-    logger.warn({ err }, 'Pipeline reconciliation skipped');
-  }
-
-  // Plugin startup hook (e.g. reconcile tasks, init state)
+  // Plugin startup hook (e.g. reconcile pipeline tasks from YAML specs)
   plugin?.onStartup?.();
 
   // Start subsystems (independently of connection handler)

@@ -7,31 +7,23 @@ import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import {
   ackEvent,
   bumpConsumerTaskNextRun,
-  cacheReextraction,
   consumeEvents,
   createTask,
   deleteTask,
-  getCachedReextraction,
   _clearCrossChannelDeliveries,
-  getEventPayloadById,
-  getObservationById,
   getTaskById,
   isCrossChannelDelivered,
   recordCrossChannelDeliveryDB,
-  insertIntakeLog,
   publishEvent,
   readChatMessages,
   updateRegisteredGroup,
   updateTask,
 } from './db.js';
-import { getFieldEntry, loadFieldCatalog } from './field-catalog.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { sendWithRetry } from './outbound-retry.js';
-import { callExtractionLLM } from './sanitiser/llm-client.js';
-import { wrapWithNonce } from './sanitiser/nonce.js';
 import type { PipelinePlugin } from './pipeline-plugin.js';
-import { IntakeSourceContext, RegisteredGroup } from './types.js';
+import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
   sendMessage: (
@@ -119,99 +111,6 @@ export function hasRecentIpcDelivery(
   const valid = entries.filter((e) => now - e.timestamp < ttlMs);
   recentDeliveries.set(chatJid, valid);
   return valid.some((e) => e.textHash === targetHash);
-}
-
-/**
- * Auto-route cross-channel sends from pipeline tasks.
- * Primary: always to source channel thread. Secondary: model's target with context header.
- * Returns null if no pipeline context (caller should fall through to normal handling).
- */
-async function handlePipelineCrossChannel(
-  data: IpcData,
-  sourceTaskId: string,
-  registeredGroups: Record<string, RegisteredGroup>,
-  deps: IpcDeps,
-): Promise<IpcResult | null> {
-  // Look up the specific consumed event by ID (passed from the container)
-  const rawEventId = data.contextEventId as string | number | undefined;
-  const contextEventId = rawEventId != null ? Number(rawEventId) : undefined;
-  if (!contextEventId) {
-    return {
-      success: false,
-      error:
-        'Pipeline task must consume events before sending. Call consume_events first.',
-    };
-  }
-
-  const eventPayload = getEventPayloadById(contextEventId);
-  if (!eventPayload) return null;
-
-  let ctx: Record<string, unknown>;
-  try {
-    ctx = JSON.parse(eventPayload);
-  } catch {
-    return null;
-  }
-
-  const sourceChannel = ctx.source_channel as string | undefined;
-  const sourceMessageId = ctx.source_message_id as string | undefined;
-  if (!sourceChannel) return null;
-
-  const sourceGroup = registeredGroups[sourceChannel];
-  if (!sourceGroup) return null;
-
-  // Primary: send to source channel thread (unless replies are blocked)
-  const primaryKey = `${sourceTaskId}:${sourceChannel}:evt${contextEventId}`;
-  if (sourceGroup.pipelineRepliesBlocked) {
-    logger.info(
-      { sourceChannel, sourceTaskId, contextEventId },
-      'Pipeline reply blocked (channel has pipeline_replies_blocked)',
-    );
-  } else if (!isCrossChannelDelivered(primaryKey)) {
-    const result = await sendWithRetry(
-      (jid, text) =>
-        deps.sendMessage(
-          jid,
-          text,
-          sourceMessageId ? { threadTs: sourceMessageId } : undefined,
-        ),
-      sourceChannel,
-      data.text as string,
-    );
-    if (result.success) {
-      recordCrossChannelDeliveryDB(primaryKey);
-      logger.info(
-        {
-          targetChatJid: sourceChannel,
-          sourceTaskId,
-          threadTs: sourceMessageId,
-        },
-        'Pipeline reply auto-routed to source channel thread',
-      );
-    }
-  }
-
-  // Secondary: if model targeted a different channel, send context copy
-  if (data.targetChatJid !== sourceChannel) {
-    const target = registeredGroups[data.targetChatJid as string];
-    if (target) {
-      const secondaryKey = `${sourceTaskId}:${data.targetChatJid}:evt${contextEventId}`;
-      if (!isCrossChannelDelivered(secondaryKey)) {
-        const sourceName =
-          registeredGroups[sourceChannel]?.name || sourceChannel;
-        const summary = (ctx.cluster_summary as string) || '(escalation)';
-        const header = `_Investigated report in #${sourceName}_\n> ${summary}\n\n`;
-        await sendWithRetry(
-          (jid, text) => deps.sendMessage(jid, text),
-          data.targetChatJid as string,
-          header + (data.text as string),
-        );
-        recordCrossChannelDeliveryDB(secondaryKey);
-      }
-    }
-  }
-
-  return { success: true };
 }
 
 /** Reset singleton guard and delivery tracking — test-only. */
@@ -308,29 +207,23 @@ export function startIpcWatcher(deps: IpcDeps): void {
                 if (targetGroup) {
                   const sourceTaskId = data.sourceTaskId as string | undefined;
 
-                  // Pipeline auto-routing: send to source channel thread
-                  if (sourceTaskId?.startsWith('pipeline:')) {
-                    const pluginResult =
-                      await deps.plugin?.onCrossChannelSend?.(
+                  // Pipeline auto-routing: delegate to plugin
+                  if (
+                    sourceTaskId?.startsWith('pipeline:') &&
+                    deps.plugin?.onCrossChannelSend
+                  ) {
+                    const pipelineResult =
+                      await deps.plugin.onCrossChannelSend(
                         data,
                         sourceTaskId,
                         registeredGroups,
                         deps,
                       );
-                    const pipelineResult =
-                      pluginResult ??
-                      (await handlePipelineCrossChannel(
-                        data,
-                        sourceTaskId,
-                        registeredGroups,
-                        deps,
-                      ));
                     if (pipelineResult) {
                       crossChannelResult = pipelineResult;
                       writeIpcResult(`${filePath}.result`, crossChannelResult);
                       continue;
                     }
-                    // No pipeline context — fall through to normal handling
                   }
 
                   // Enforce allowed_send_targets when sourceTaskId is present
@@ -833,30 +726,9 @@ function handlePublishEvent(
   const dedupeKey = (data.dedupeKey as string) || null;
   const ttlSeconds = (data.ttlSeconds as number) ?? null;
 
-  // Auto-enrich escalation payloads with source fields from observations
-  let enrichedPayload =
+  // Plugin enrichment (e.g. inject source fields into candidate.* payloads)
+  const enrichedPayload =
     deps?.plugin?.enrichEventPayload?.(eventType, payload) ?? payload;
-  if (enrichedPayload === payload && eventType.startsWith('candidate.')) {
-    try {
-      const payloadObj = JSON.parse(payload);
-      const obsIds = payloadObj.observation_ids as number[] | undefined;
-      if (
-        obsIds?.length &&
-        (!payloadObj.source_message_id || !payloadObj.source_channel)
-      ) {
-        const obs = getObservationById(obsIds[0]);
-        if (obs) {
-          if (!payloadObj.source_channel && obs.source_chat_jid)
-            payloadObj.source_channel = obs.source_chat_jid;
-          if (!payloadObj.source_message_id && obs.source_message_id)
-            payloadObj.source_message_id = obs.source_message_id;
-          enrichedPayload = JSON.stringify(payloadObj);
-        }
-      }
-    } catch {
-      /* parse failure — publish as-is */
-    }
-  }
 
   const result = publishEvent(
     eventType,
@@ -868,31 +740,7 @@ function handlePublishEvent(
   );
   if (result.isNew) {
     bumpConsumerTaskNextRun(eventType);
-
-    // Plugin hook for post-publish actions (e.g. auto-ack)
     deps?.plugin?.onEventPublished?.(eventType, enrichedPayload, deps);
-
-    // Built-in auto-acknowledge escalations in the source channel
-    if (eventType === 'candidate.escalation' && deps?.sendMessage) {
-      try {
-        const payloadObj = JSON.parse(enrichedPayload);
-        const sourceChannel = payloadObj.source_channel;
-        const sourceMessageId = payloadObj.source_message_id;
-        const groups = deps.registeredGroups();
-        const blocked = groups[sourceChannel]?.pipelineRepliesBlocked;
-        if (sourceChannel && !blocked) {
-          deps
-            .sendMessage(
-              sourceChannel,
-              'Looking into this — investigation in progress.',
-              sourceMessageId ? { threadTs: sourceMessageId } : undefined,
-            )
-            .catch((err) => logger.warn({ err }, 'Auto-ack send failed'));
-        }
-      } catch {
-        /* payload parse failure — skip auto-ack */
-      }
-    }
   }
   return { success: true, ...result };
 }
@@ -908,11 +756,7 @@ function handleConsumeEvents(data: IpcData, deps?: IpcDeps): IpcResult {
 
   const events = consumeEvents(eventTypes, claimedBy, limit);
   const transformed = deps?.plugin?.transformConsumedEvents?.(events) ?? events;
-  const wrapped = transformed.map((e) => ({
-    ...e,
-    payload: wrapWithNonce(e.payload).wrapped,
-  }));
-  return { success: true, events: wrapped } as any;
+  return { success: true, events: transformed } as any;
 }
 
 function handleAckEvent(data: IpcData): IpcResult {
@@ -926,49 +770,6 @@ function handleAckEvent(data: IpcData): IpcResult {
   const note = (data.note as string) || undefined;
   ackEvent(eventId, status, note);
   return ok();
-}
-
-function handleSubmitToPipeline(data: IpcData, sourceGroup: string): IpcResult {
-  const rawText = data.rawText as string | undefined;
-  const sourceContext = data.sourceContext as IntakeSourceContext | undefined;
-
-  if (!rawText) {
-    return fail('submit_to_pipeline requires rawText');
-  }
-  if (!sourceContext?.source_group || !sourceContext?.reason) {
-    return fail(
-      'submit_to_pipeline requires sourceContext with source_group and reason',
-    );
-  }
-
-  const dedupeKey = (data.dedupeKey as string) || null;
-  const rawTextHash = crypto.createHash('sha256').update(rawText).digest('hex');
-
-  const eventPayload = JSON.stringify({
-    raw_text: rawText,
-    source_context: sourceContext,
-  });
-  const eventResult = publishEvent(
-    'intake.raw',
-    sourceContext.source_group || sourceGroup,
-    sourceContext.source_task_id || null,
-    eventPayload,
-    dedupeKey,
-  );
-
-  // Log to pipeline_intake_log (only on new events to avoid duplicate logs)
-  if (eventResult.isNew) {
-    insertIntakeLog(eventResult.id, rawTextHash, sourceContext);
-  }
-
-  if (eventResult.isNew) {
-    bumpConsumerTaskNextRun('intake.raw');
-  }
-  return {
-    success: true,
-    eventId: eventResult.id,
-    isNew: eventResult.isNew,
-  } as any;
 }
 
 function handleReadChatMessages(
@@ -996,82 +797,6 @@ function handleReadChatMessages(
     includeBotMessages,
   );
   return { success: true, ...result } as any;
-}
-
-async function handleReextractObservation(data: IpcData): Promise<IpcResult> {
-  // Ensure field catalog is loaded
-  try {
-    loadFieldCatalog();
-  } catch {
-    /* catalog file may not exist */
-  }
-
-  const observationId = data.observationId as number | undefined;
-  const requestFields = data.requestFields as string[] | undefined;
-  const sanitiserVersion = (data.sanitiserVersion as string) || '1';
-
-  if (
-    observationId == null ||
-    !requestFields ||
-    !Array.isArray(requestFields)
-  ) {
-    return fail(
-      'reextract_observation requires observationId and requestFields (array)',
-    );
-  }
-
-  // Load the observation
-  const obs = getObservationById(observationId);
-  if (!obs) {
-    return fail(`Observation ${observationId} not found`);
-  }
-
-  // Check cache for each field, return cached results
-  const fields: Record<string, string | null> = {};
-  for (const fieldName of requestFields) {
-    const cached = getCachedReextraction(
-      observationId,
-      fieldName,
-      sanitiserVersion,
-    );
-    if (cached) {
-      fields[fieldName] = cached;
-    } else {
-      // Look up field definition from catalog
-      const fieldDef = getFieldEntry(fieldName);
-      if (!fieldDef) {
-        fields[fieldName] = null;
-        continue;
-      }
-
-      // Call LLM with the field's extraction prompt
-      try {
-        const model = (data.model as string) || 'ollama:gemma4';
-        const response = await callExtractionLLM({
-          model,
-          system: `You are a structured data extractor. Extract the requested field from the message. Return only valid JSON.`,
-          user: `${fieldDef.prompt_fragment}\n\nMessage:\n${obs.raw_text}`,
-        });
-
-        const resultJson = response.response;
-        cacheReextraction(
-          observationId,
-          fieldName,
-          sanitiserVersion,
-          resultJson,
-        );
-        fields[fieldName] = resultJson;
-      } catch (err) {
-        logger.warn(
-          { fieldName, observationId, err },
-          'Re-extraction LLM call failed',
-        );
-        fields[fieldName] = null;
-      }
-    }
-  }
-
-  return { success: true, fields } as any;
 }
 
 // --- Main dispatcher ---
@@ -1124,12 +849,8 @@ export async function processTaskIpc(
       return handleConsumeEvents(data, deps);
     case 'ack_event':
       return handleAckEvent(data);
-    case 'submit_to_pipeline':
-      return handleSubmitToPipeline(data, sourceGroup);
     case 'read_chat_messages':
       return handleReadChatMessages(data, registeredGroups);
-    case 'reextract_observation':
-      return handleReextractObservation(data);
     default: {
       const pluginResult = await deps.plugin?.handleIpcTask?.(
         data.type,
