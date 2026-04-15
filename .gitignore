@@ -62,5 +62,5 @@ eval/sets/
 eval/taxonomy.md
 
 # Pipeline plugin — specs symlinked from private repo, compiled JS copied to dist/
-pipeline/
+pipeline
 eval/
