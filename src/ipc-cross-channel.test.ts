@@ -527,5 +527,4 @@ describe('cross_channel_message IPC', () => {
     );
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
-
 });

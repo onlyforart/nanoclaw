@@ -212,13 +212,12 @@ export function startIpcWatcher(deps: IpcDeps): void {
                     sourceTaskId?.startsWith('pipeline:') &&
                     deps.plugin?.onCrossChannelSend
                   ) {
-                    const pipelineResult =
-                      await deps.plugin.onCrossChannelSend(
-                        data,
-                        sourceTaskId,
-                        registeredGroups,
-                        deps,
-                      );
+                    const pipelineResult = await deps.plugin.onCrossChannelSend(
+                      data,
+                      sourceTaskId,
+                      registeredGroups,
+                      deps,
+                    );
                     if (pipelineResult) {
                       crossChannelResult = pipelineResult;
                       writeIpcResult(`${filePath}.result`, crossChannelResult);

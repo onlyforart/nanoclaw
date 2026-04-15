@@ -338,8 +338,6 @@ async function runTask(
   updateTaskAfterRun(task.id, nextRun, resultSummary);
 }
 
-
-
 let schedulerRunning = false;
 const consecutiveFailures = new Map<string, number>();
 
