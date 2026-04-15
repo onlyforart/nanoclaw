@@ -68,6 +68,7 @@ import {
   loadAllPipelineSpecs,
   reconcilePipelineTasks,
 } from './pipeline-loader.js';
+import { loadPlugin } from './pipeline-plugin.js';
 import {
   handleReaction,
   findPendingEditRequest,
@@ -552,6 +553,9 @@ async function main(): Promise<void> {
   loadState();
   restoreRemoteControl();
 
+  // Load pipeline plugin (null when not installed — all hooks are no-ops)
+  const plugin = loadPlugin();
+
   // Start credential proxy (containers route API calls through this)
   const proxyServer = await startCredentialProxy(
     CREDENTIAL_PROXY_PORT,
@@ -673,13 +677,13 @@ async function main(): Promise<void> {
       }
 
       // Sender allowlist drop mode: discard messages from denied senders before storing
-      // Passive channels are exempt — the pipeline needs to see all messages
+      // Plugin can bypass for specific groups (e.g. passive channels)
       const groupForAllowlist = registeredGroups[chatJid];
       if (
         !msg.is_from_me &&
         !msg.is_bot_message &&
         groupForAllowlist &&
-        groupForAllowlist.mode !== 'passive'
+        !plugin?.shouldBypassSenderAllowlist?.(groupForAllowlist)
       ) {
         const cfg = loadSenderAllowlist();
         if (
@@ -757,20 +761,26 @@ async function main(): Promise<void> {
   // Backfill missed messages for passive channels (Slack doesn't replay events)
   const passiveGroups = getPassiveGroups();
   if (passiveGroups.length > 0) {
+    const passiveJids = passiveGroups.map((g) => g.jid);
     const cursors: Record<string, string> = {};
     for (const g of passiveGroups) {
       const cursor = getRouterState(`sanitiser_cursor:${g.jid}`);
       if (cursor) cursors[g.jid] = cursor;
     }
     if (Object.keys(cursors).length > 0) {
-      for (const ch of channels) {
-        if (ch.backfillPassiveChannels) {
-          ch.backfillPassiveChannels(
-            passiveGroups.map((g) => g.jid),
-            cursors,
-          ).catch((err) =>
-            logger.warn({ err }, 'Passive channel backfill failed'),
+      if (plugin?.onStartupBackfill) {
+        plugin
+          .onStartupBackfill(channels, passiveJids, cursors)
+          .catch((err) =>
+            logger.warn({ err }, 'Plugin startup backfill failed'),
           );
+      } else {
+        for (const ch of channels) {
+          if (ch.backfillPassiveChannels) {
+            ch.backfillPassiveChannels(passiveJids, cursors).catch((err) =>
+              logger.warn({ err }, 'Passive channel backfill failed'),
+            );
+          }
         }
       }
     }
@@ -835,6 +845,7 @@ async function main(): Promise<void> {
       const text = formatOutbound(rawText);
       if (text) await channel.sendMessage(jid, text);
     },
+    plugin,
   });
   startIpcWatcher({
     sendMessage: (jid, text, options) => {
@@ -863,6 +874,7 @@ async function main(): Promise<void> {
     },
     refreshAllGroupSnapshots,
     refreshAllTaskSnapshots,
+    plugin,
   });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();

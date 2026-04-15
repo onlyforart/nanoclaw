@@ -28,6 +28,7 @@ import {
   type PipelineDeps,
 } from './host-pipeline-executor.js';
 import { logger } from './logger.js';
+import type { PipelinePlugin } from './pipeline-plugin.js';
 import { callExtractionLLM } from './sanitiser/llm-client.js';
 import { RegisteredGroup, ScheduledTask } from './types.js';
 
@@ -91,6 +92,7 @@ export interface SchedulerDependencies {
     groupFolder: string,
   ) => void;
   sendMessage: (jid: string, text: string) => Promise<void>;
+  plugin?: PipelinePlugin | null;
 }
 
 async function runTask(
@@ -123,6 +125,10 @@ async function runTask(
 
   // Host-side pipeline tasks run directly — no container spawned
   if (task.executionMode === 'host_pipeline') {
+    if (deps.plugin?.executeHostTask) {
+      await deps.plugin.executeHostTask(task, startTime);
+      return;
+    }
     await runHostPipeline(task, startTime);
     return;
   }

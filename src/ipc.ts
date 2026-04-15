@@ -30,6 +30,7 @@ import { logger } from './logger.js';
 import { sendWithRetry } from './outbound-retry.js';
 import { callExtractionLLM } from './sanitiser/llm-client.js';
 import { wrapWithNonce } from './sanitiser/nonce.js';
+import type { PipelinePlugin } from './pipeline-plugin.js';
 import { IntakeSourceContext, RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
@@ -56,6 +57,7 @@ export interface IpcDeps {
   syncGroups: (force: boolean) => Promise<void>;
   refreshAllGroupSnapshots: () => void;
   refreshAllTaskSnapshots: () => void;
+  plugin?: PipelinePlugin | null;
 }
 
 interface IpcResult {
@@ -308,12 +310,21 @@ export function startIpcWatcher(deps: IpcDeps): void {
 
                   // Pipeline auto-routing: send to source channel thread
                   if (sourceTaskId?.startsWith('pipeline:')) {
-                    const pipelineResult = await handlePipelineCrossChannel(
-                      data,
-                      sourceTaskId,
-                      registeredGroups,
-                      deps,
-                    );
+                    const pluginResult =
+                      await deps.plugin?.onCrossChannelSend?.(
+                        data,
+                        sourceTaskId,
+                        registeredGroups,
+                        deps,
+                      );
+                    const pipelineResult =
+                      pluginResult ??
+                      (await handlePipelineCrossChannel(
+                        data,
+                        sourceTaskId,
+                        registeredGroups,
+                        deps,
+                      ));
                     if (pipelineResult) {
                       crossChannelResult = pipelineResult;
                       writeIpcResult(`${filePath}.result`, crossChannelResult);
@@ -823,8 +834,8 @@ function handlePublishEvent(
   const ttlSeconds = (data.ttlSeconds as number) ?? null;
 
   // Auto-enrich escalation payloads with source fields from observations
-  let enrichedPayload = payload;
-  if (eventType.startsWith('candidate.')) {
+  let enrichedPayload = deps?.plugin?.enrichEventPayload?.(eventType, payload) ?? payload;
+  if (enrichedPayload === payload && eventType.startsWith('candidate.')) {
     try {
       const payloadObj = JSON.parse(payload);
       const obsIds = payloadObj.observation_ids as number[] | undefined;
@@ -857,7 +868,10 @@ function handlePublishEvent(
   if (result.isNew) {
     bumpConsumerTaskNextRun(eventType);
 
-    // Auto-acknowledge escalations in the source channel
+    // Plugin hook for post-publish actions (e.g. auto-ack)
+    deps?.plugin?.onEventPublished?.(eventType, enrichedPayload, deps);
+
+    // Built-in auto-acknowledge escalations in the source channel
     if (eventType === 'candidate.escalation' && deps?.sendMessage) {
       try {
         const payloadObj = JSON.parse(enrichedPayload);
@@ -882,7 +896,7 @@ function handlePublishEvent(
   return { success: true, ...result };
 }
 
-function handleConsumeEvents(data: IpcData): IpcResult {
+function handleConsumeEvents(data: IpcData, deps?: IpcDeps): IpcResult {
   const eventTypes = data.eventTypes as string[] | undefined;
   const claimedBy = data.claimedBy as string | undefined;
   const limit = (data.limit as number) ?? 50;
@@ -892,7 +906,8 @@ function handleConsumeEvents(data: IpcData): IpcResult {
   }
 
   const events = consumeEvents(eventTypes, claimedBy, limit);
-  const wrapped = events.map((e) => ({
+  const transformed = deps?.plugin?.transformConsumedEvents?.(events) ?? events;
+  const wrapped = transformed.map((e) => ({
     ...e,
     payload: wrapWithNonce(e.payload).wrapped,
   }));
@@ -1105,7 +1120,7 @@ export async function processTaskIpc(
     case 'publish_event':
       return handlePublishEvent(data, sourceGroup, deps);
     case 'consume_events':
-      return handleConsumeEvents(data);
+      return handleConsumeEvents(data, deps);
     case 'ack_event':
       return handleAckEvent(data);
     case 'submit_to_pipeline':
