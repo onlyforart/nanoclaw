@@ -1,4 +1,9 @@
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
 import type { IpcDeps } from './ipc.js';
+import { logger } from './logger.js';
 import type {
   Channel,
   EventRow,
@@ -88,25 +93,85 @@ export interface PipelinePlugin {
 }
 
 /**
+ * Increment this when making breaking changes to the PipelinePlugin interface.
+ * Plugins declare the API version they were built against in plugin.json.
+ * A mismatch means the plugin needs to be rebuilt.
+ */
+export const PLUGIN_API_VERSION = 1;
+
+export interface PluginManifest {
+  name: string;
+  version: string;
+  pluginApiVersion: number;
+  entry: string;
+  description?: string;
+  nanoclaw?: {
+    minVersion?: string;
+  };
+}
+
+/**
  * Load the pipeline plugin, if installed.
  * Returns null when no plugin is available — all hook call sites
  * use optional chaining so this is safe.
  *
- * The plugin is loaded via dynamic import from src/pipeline/plugin.js,
- * which is a gitignored symlink to the private plugin repository.
+ * The plugin is installed by symlinking compiled JS into dist/pipeline/.
+ * A plugin.json manifest in that directory declares API version compatibility.
  */
 export async function loadPlugin(): Promise<PipelinePlugin | null> {
   try {
-    // Dynamic path prevents TypeScript from resolving at compile time.
-    // The module exists only when the plugin is installed (symlinked).
-    const pluginPath = './pipeline/plugin.js';
-    const mod = await (Function('p', 'return import(p)')(pluginPath) as Promise<
-      Record<string, unknown>
-    >);
+    const __dirname = path.dirname(fileURLToPath(import.meta.url));
+    const pluginDir = path.join(__dirname, 'pipeline');
+    const manifestPath = path.join(pluginDir, 'plugin.json');
+
+    if (!fs.existsSync(manifestPath)) return null;
+
+    const manifest: PluginManifest = JSON.parse(
+      fs.readFileSync(manifestPath, 'utf-8'),
+    );
+
+    if (manifest.pluginApiVersion !== PLUGIN_API_VERSION) {
+      logger.error(
+        {
+          expected: PLUGIN_API_VERSION,
+          got: manifest.pluginApiVersion,
+          plugin: manifest.name,
+        },
+        'Plugin API version mismatch — rebuild the plugin',
+      );
+      return null;
+    }
+
+    if (manifest.nanoclaw?.minVersion) {
+      try {
+        const pkgPath = path.join(__dirname, '..', 'package.json');
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+        if (pkg.version && pkg.version < manifest.nanoclaw.minVersion) {
+          logger.warn(
+            {
+              required: manifest.nanoclaw.minVersion,
+              current: pkg.version,
+              plugin: manifest.name,
+            },
+            'Plugin requires a newer nanoclaw version',
+          );
+        }
+      } catch {
+        /* version check is best-effort */
+      }
+    }
+
+    const entryPath = path.join(pluginDir, manifest.entry);
+    const mod = await import(entryPath);
     const plugin = (mod.default ?? mod.plugin) as PipelinePlugin | undefined;
-    if (plugin?.name) return plugin;
-    return null;
+    if (!plugin?.name) return null;
+
+    logger.info(
+      { plugin: plugin.name, version: manifest.version },
+      'Pipeline plugin loaded',
+    );
+    return plugin;
   } catch {
-    return null; // Plugin not installed — all hooks are no-ops
+    return null; // Plugin not installed or failed to load
   }
 }
