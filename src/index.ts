@@ -32,6 +32,7 @@ import {
   PROXY_BIND_HOST,
 } from './container-runtime.js';
 import {
+  execMigrationSql,
   getAllChats,
   getAllRegisteredGroups,
   getAllSessions,
@@ -554,7 +555,14 @@ async function main(): Promise<void> {
   restoreRemoteControl();
 
   // Load pipeline plugin (null when not installed — all hooks are no-ops)
-  const plugin = loadPlugin();
+  const plugin = await loadPlugin();
+
+  // Run plugin migrations (idempotent CREATE TABLE IF NOT EXISTS, ALTER TABLE)
+  if (plugin?.migrations) {
+    for (const sql of plugin.migrations()) {
+      execMigrationSql(sql);
+    }
+  }
 
   // Start credential proxy (containers route API calls through this)
   const proxyServer = await startCredentialProxy(
@@ -677,12 +685,13 @@ async function main(): Promise<void> {
       }
 
       // Sender allowlist drop mode: discard messages from denied senders before storing
-      // Plugin can bypass for specific groups (e.g. passive channels)
+      // Passive channels are always exempt; plugin can bypass for additional reasons
       const groupForAllowlist = registeredGroups[chatJid];
       if (
         !msg.is_from_me &&
         !msg.is_bot_message &&
         groupForAllowlist &&
+        groupForAllowlist.mode !== 'passive' &&
         !plugin?.shouldBypassSenderAllowlist?.(groupForAllowlist)
       ) {
         const cfg = loadSenderAllowlist();
@@ -828,6 +837,9 @@ async function main(): Promise<void> {
   } catch (err) {
     logger.warn({ err }, 'Pipeline reconciliation skipped');
   }
+
+  // Plugin startup hook (e.g. reconcile tasks, init state)
+  plugin?.onStartup?.();
 
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({

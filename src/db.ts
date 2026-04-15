@@ -434,6 +434,15 @@ export function initDatabase(): void {
   migrateJsonState();
 }
 
+/** Run a raw SQL statement (for plugin migrations). Swallows errors (idempotent). */
+export function execMigrationSql(sql: string): void {
+  try {
+    db.exec(sql);
+  } catch {
+    /* table/column already exists */
+  }
+}
+
 /** @internal - for tests only. Creates a fresh in-memory database. */
 export function _initTestDatabase(): void {
   db = new Database(':memory:');

@@ -834,7 +834,8 @@ function handlePublishEvent(
   const ttlSeconds = (data.ttlSeconds as number) ?? null;
 
   // Auto-enrich escalation payloads with source fields from observations
-  let enrichedPayload = deps?.plugin?.enrichEventPayload?.(eventType, payload) ?? payload;
+  let enrichedPayload =
+    deps?.plugin?.enrichEventPayload?.(eventType, payload) ?? payload;
   if (enrichedPayload === payload && eventType.startsWith('candidate.')) {
     try {
       const payloadObj = JSON.parse(payload);
@@ -1129,8 +1130,17 @@ export async function processTaskIpc(
       return handleReadChatMessages(data, registeredGroups);
     case 'reextract_observation':
       return handleReextractObservation(data);
-    default:
+    default: {
+      const pluginResult = await deps.plugin?.handleIpcTask?.(
+        data.type,
+        data,
+        sourceGroup,
+        isMain,
+        deps,
+      );
+      if (pluginResult) return pluginResult as IpcResult;
       logger.warn({ type: data.type }, 'Unknown IPC task type');
       return fail(`Unknown IPC task type: ${data.type}`);
+    }
   }
 }
