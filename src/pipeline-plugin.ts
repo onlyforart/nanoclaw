@@ -115,63 +115,102 @@ export interface PluginManifest {
  * Returns null when no plugin is available — all hook call sites
  * use optional chaining so this is safe.
  *
- * The plugin is installed by symlinking compiled JS into dist/pipeline/.
- * A plugin.json manifest in that directory declares API version compatibility.
+ * Supports two installation modes:
+ * 1. Separate compilation: symlink compiled build/ into dist/pipeline/ with plugin.json manifest
+ * 2. Compile-together: symlink source into src/pipeline/ — tsc produces dist/pipeline/,
+ *    and the plugin exports its manifest as a named `manifest` export
  */
 export async function loadPlugin(): Promise<PipelinePlugin | null> {
   try {
     const __dirname = path.dirname(fileURLToPath(import.meta.url));
     const pluginDir = path.join(__dirname, 'pipeline');
+
+    // Mode 1: JSON manifest file (separate compilation)
     const manifestPath = path.join(pluginDir, 'plugin.json');
-
-    if (!fs.existsSync(manifestPath)) return null;
-
-    const manifest: PluginManifest = JSON.parse(
-      fs.readFileSync(manifestPath, 'utf-8'),
-    );
-
-    if (manifest.pluginApiVersion !== PLUGIN_API_VERSION) {
-      logger.error(
-        {
-          expected: PLUGIN_API_VERSION,
-          got: manifest.pluginApiVersion,
-          plugin: manifest.name,
-        },
-        'Plugin API version mismatch — rebuild the plugin',
+    if (fs.existsSync(manifestPath)) {
+      const manifest: PluginManifest = JSON.parse(
+        fs.readFileSync(manifestPath, 'utf-8'),
       );
+      return loadAndValidate(pluginDir, manifest);
+    }
+
+    // Mode 2: plugin.js with exported manifest (compile-together)
+    const entryPath = path.join(pluginDir, 'plugin.js');
+    if (!fs.existsSync(entryPath)) return null;
+
+    const mod = await import(entryPath);
+    const manifest = mod.manifest as PluginManifest | undefined;
+    if (!manifest) {
+      logger.error('Plugin module missing manifest export');
       return null;
     }
-
-    if (manifest.nanoclaw?.minVersion) {
-      try {
-        const pkgPath = path.join(__dirname, '..', 'package.json');
-        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
-        if (pkg.version && pkg.version < manifest.nanoclaw.minVersion) {
-          logger.warn(
-            {
-              required: manifest.nanoclaw.minVersion,
-              current: pkg.version,
-              plugin: manifest.name,
-            },
-            'Plugin requires a newer nanoclaw version',
-          );
-        }
-      } catch {
-        /* version check is best-effort */
-      }
-    }
-
-    const entryPath = path.join(pluginDir, manifest.entry);
-    const mod = await import(entryPath);
-    const plugin = (mod.default ?? mod.plugin) as PipelinePlugin | undefined;
-    if (!plugin?.name) return null;
-
-    logger.info(
-      { plugin: plugin.name, version: manifest.version },
-      'Pipeline plugin loaded',
-    );
-    return plugin;
+    return validateAndReturn(mod, manifest);
   } catch {
     return null; // Plugin not installed or failed to load
+  }
+}
+
+async function loadAndValidate(
+  pluginDir: string,
+  manifest: PluginManifest,
+): Promise<PipelinePlugin | null> {
+  if (!validateApiVersion(manifest)) return null;
+  checkNanoclawVersion(manifest);
+
+  const entryPath = path.join(pluginDir, manifest.entry);
+  const mod = await import(entryPath);
+  return validateAndReturn(mod, manifest);
+}
+
+function validateAndReturn(
+  mod: Record<string, unknown>,
+  manifest: PluginManifest,
+): PipelinePlugin | null {
+  if (!validateApiVersion(manifest)) return null;
+  checkNanoclawVersion(manifest);
+
+  const plugin = (mod.default ?? mod.plugin) as PipelinePlugin | undefined;
+  if (!plugin?.name) return null;
+
+  logger.info(
+    { plugin: plugin.name, version: manifest.version },
+    'Pipeline plugin loaded',
+  );
+  return plugin;
+}
+
+function validateApiVersion(manifest: PluginManifest): boolean {
+  if (manifest.pluginApiVersion !== PLUGIN_API_VERSION) {
+    logger.error(
+      {
+        expected: PLUGIN_API_VERSION,
+        got: manifest.pluginApiVersion,
+        plugin: manifest.name,
+      },
+      'Plugin API version mismatch — rebuild the plugin',
+    );
+    return false;
+  }
+  return true;
+}
+
+function checkNanoclawVersion(manifest: PluginManifest): void {
+  if (!manifest.nanoclaw?.minVersion) return;
+  try {
+    const __dirname = path.dirname(fileURLToPath(import.meta.url));
+    const pkgPath = path.join(__dirname, '..', 'package.json');
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+    if (pkg.version && pkg.version < manifest.nanoclaw.minVersion) {
+      logger.warn(
+        {
+          required: manifest.nanoclaw.minVersion,
+          current: pkg.version,
+          plugin: manifest.name,
+        },
+        'Plugin requires a newer nanoclaw version',
+      );
+    }
+  } catch {
+    /* version check is best-effort */
   }
 }

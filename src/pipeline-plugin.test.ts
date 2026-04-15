@@ -102,6 +102,11 @@ describe('loadPlugin', () => {
     expect(plugin).toBeNull();
   });
 
+  // Compile-together mode tests are hard to test via loadPlugin because
+  // Node caches ESM imports by URL. The exported-manifest code path is
+  // tested indirectly: it uses the same validateApiVersion/validateAndReturn
+  // helpers as the JSON path, which are covered above.
+
   it('exports PLUGIN_API_VERSION as a number', () => {
     expect(typeof PLUGIN_API_VERSION).toBe('number');
     expect(PLUGIN_API_VERSION).toBeGreaterThan(0);
