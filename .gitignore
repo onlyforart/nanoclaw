@@ -61,7 +61,6 @@ eval/results/
 eval/sets/
 eval/taxonomy.md
 
-# Pipeline plugin — installed via symlink from private repo
-pipeline/sanitiser-config.yaml
-pipeline/field-catalog.yaml
-pipeline/sanitiser-schema.yaml
+# Pipeline plugin — specs symlinked from private repo, compiled JS copied to dist/
+pipeline/
+eval/
