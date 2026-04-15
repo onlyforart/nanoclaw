@@ -108,7 +108,11 @@ vi.mock('child_process', async () => {
   };
 });
 
-import { runContainerAgent, ContainerOutput } from './container-runner.js';
+import {
+  runContainerAgent,
+  ContainerOutput,
+  filterServerTools,
+} from './container-runner.js';
 import type { RegisteredGroup } from './types.js';
 import { spawn } from 'child_process';
 
@@ -231,6 +235,85 @@ describe('container-runner timeout behavior', () => {
     const result = await resultPromise;
     expect(result.status).toBe('success');
     expect(result.newSessionId).toBe('session-456');
+  });
+});
+
+describe('filterServerTools', () => {
+  function schema(name: string) {
+    return {
+      name,
+      description: `${name} description`,
+      inputSchema: { type: 'object' },
+    };
+  }
+
+  const allSchemas = [
+    schema('tool_a'),
+    schema('tool_b'),
+    schema('tool_c'),
+    schema('tool_d'),
+    schema('tool_e'),
+  ];
+
+  it('filters discovered schemas to configured tools only', () => {
+    const result = filterServerTools(['tool_a', 'tool_c'], allSchemas);
+    expect(result).not.toBeNull();
+    expect(result!.tools).toEqual(['tool_a', 'tool_c']);
+    expect(result!.toolSchemas.map((s) => s.name)).toEqual([
+      'tool_a',
+      'tool_c',
+    ]);
+  });
+
+  it('passes all configured tools when no allowedTools', () => {
+    const result = filterServerTools(
+      ['tool_a', 'tool_b', 'tool_c'],
+      allSchemas,
+    );
+    expect(result!.tools).toEqual(['tool_a', 'tool_b', 'tool_c']);
+    expect(result!.toolSchemas).toHaveLength(3);
+  });
+
+  it('intersects allowedTools with configured tools', () => {
+    const result = filterServerTools(
+      ['tool_a', 'tool_b', 'tool_c'],
+      allSchemas,
+      ['tool_a', 'tool_c', 'tool_x'],
+    );
+    expect(result!.tools).toEqual(['tool_a', 'tool_c']);
+    expect(result!.toolSchemas.map((s) => s.name)).toEqual([
+      'tool_a',
+      'tool_c',
+    ]);
+  });
+
+  it('returns null when allowedTools excludes all configured tools', () => {
+    const result = filterServerTools(
+      ['tool_a', 'tool_b'],
+      allSchemas,
+      ['tool_x', 'tool_y'],
+    );
+    expect(result).toBeNull();
+  });
+
+  it('handles discovered schemas being a subset of configured tools', () => {
+    const partial = [schema('tool_a')];
+    const result = filterServerTools(['tool_a', 'tool_b'], partial);
+    expect(result!.tools).toEqual(['tool_a', 'tool_b']);
+    expect(result!.toolSchemas).toHaveLength(1);
+    expect(result!.toolSchemas[0].name).toBe('tool_a');
+  });
+
+  it('returns empty toolSchemas when none discovered', () => {
+    const result = filterServerTools(['tool_a', 'tool_b'], []);
+    expect(result!.tools).toEqual(['tool_a', 'tool_b']);
+    expect(result!.toolSchemas).toEqual([]);
+  });
+
+  it('treats null allowedTools same as undefined', () => {
+    const result = filterServerTools(['tool_a', 'tool_b'], allSchemas, null);
+    expect(result!.tools).toEqual(['tool_a', 'tool_b']);
+    expect(result!.toolSchemas).toHaveLength(2);
   });
 });
 

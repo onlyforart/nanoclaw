@@ -91,6 +91,30 @@ interface VolumeMount {
 }
 
 /**
+ * Filter discovered tool schemas to only those in the configured tools list,
+ * optionally further restricted by a per-task allowedTools allowlist.
+ * Returns null if no tools survive filtering (caller should skip the server).
+ */
+export function filterServerTools(
+  configuredTools: string[],
+  discoveredSchemas: Array<{ name: string; description?: string; inputSchema: unknown }>,
+  allowedTools?: string[] | null,
+): { tools: string[]; toolSchemas: Array<{ name: string; description?: string; inputSchema: unknown }> } | null {
+  let effectiveTools = configuredTools;
+
+  if (allowedTools) {
+    const allowed = new Set(allowedTools);
+    effectiveTools = effectiveTools.filter((t) => allowed.has(t));
+    if (effectiveTools.length === 0) return null;
+  }
+
+  const toolSet = new Set(effectiveTools);
+  const filteredSchemas = discoveredSchemas.filter((s) => toolSet.has(s.name));
+
+  return { tools: effectiveTools, toolSchemas: filteredSchemas };
+}
+
+/**
  * Briefly spawn an MCP server to discover its tool schemas via JSON-RPC.
  * Uses newline-delimited JSON-RPC over stdio to avoid adding SDK dependency.
  */
@@ -531,15 +555,6 @@ async function buildVolumeMounts(
             );
             continue;
           }
-          // Pipeline allow-list: filter stdio MCP tools too
-          if (input?.allowedTools) {
-            const allowed = new Set(input.allowedTools);
-            const filteredTools = (server.tools || []).filter((t: string) =>
-              allowed.has(t),
-            );
-            if (filteredTools.length === 0) continue; // skip server entirely
-          }
-
           const containerPath = `/workspace/mcp-servers/${name}`;
           mounts.push({
             hostPath: resolvedHostPath,
@@ -583,6 +598,14 @@ async function buildVolumeMounts(
             );
           }
 
+          // Filter schemas to configured tools, apply per-task allowedTools
+          const filtered = filterServerTools(
+            server.tools || [],
+            toolSchemas,
+            input?.allowedTools,
+          );
+          if (!filtered) continue; // all tools excluded by allowedTools
+
           containerServers[name] = {
             command: server.command,
             args: server.args.map((a) =>
@@ -590,10 +613,12 @@ async function buildVolumeMounts(
                 .replace(/^\.\//, `${containerPath}/`)
                 .replace(/^build\//, `${containerPath}/build/`),
             ),
-            tools: server.tools || [],
+            tools: filtered.tools,
             ...(Object.keys(resolvedEnv).length > 0 && { env: resolvedEnv }),
             ...(server.skill && { skill: server.skill }),
-            ...(toolSchemas.length > 0 && { toolSchemas }),
+            ...(filtered.toolSchemas.length > 0 && {
+              toolSchemas: filtered.toolSchemas,
+            }),
           };
         }
       }
