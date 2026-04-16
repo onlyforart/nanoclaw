@@ -97,9 +97,20 @@ interface VolumeMount {
  */
 export function filterServerTools(
   configuredTools: string[],
-  discoveredSchemas: Array<{ name: string; description?: string; inputSchema: unknown }>,
+  discoveredSchemas: Array<{
+    name: string;
+    description?: string;
+    inputSchema: unknown;
+  }>,
   allowedTools?: string[] | null,
-): { tools: string[]; toolSchemas: Array<{ name: string; description?: string; inputSchema: unknown }> } | null {
+): {
+  tools: string[];
+  toolSchemas: Array<{
+    name: string;
+    description?: string;
+    inputSchema: unknown;
+  }>;
+} | null {
   let effectiveTools = configuredTools;
 
   if (allowedTools) {

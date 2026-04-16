@@ -288,11 +288,10 @@ describe('filterServerTools', () => {
   });
 
   it('returns null when allowedTools excludes all configured tools', () => {
-    const result = filterServerTools(
-      ['tool_a', 'tool_b'],
-      allSchemas,
-      ['tool_x', 'tool_y'],
-    );
+    const result = filterServerTools(['tool_a', 'tool_b'], allSchemas, [
+      'tool_x',
+      'tool_y',
+    ]);
     expect(result).toBeNull();
   });
 
