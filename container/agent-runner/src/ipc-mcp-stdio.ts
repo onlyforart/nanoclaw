@@ -10,6 +10,7 @@ import { z } from 'zod';
 import fs from 'fs';
 import path from 'path';
 import { CronExpressionParser } from 'cron-parser';
+import { resolveTargetGroup } from './resolve-target-group.js';
 
 const IPC_DIR = '/workspace/ipc';
 const MESSAGES_DIR = path.join(IPC_DIR, 'messages');
@@ -112,13 +113,13 @@ server.tool(
     target_group: z
       .string()
       .describe(
-        'The name of the target group as it appears in available_groups.json (e.g. "support-channel"). Case-insensitive match.',
+        'The target group, given either as its registered name (e.g. "support-channel", case-insensitive) or as its channel JID (e.g. "slack:C0123..."). When replying to an escalation, the source_channel field from the observation payload is a valid JID and can be passed through directly.',
       ),
     text: z.string().describe('The message text to send'),
     thread_ts: z.string().optional().describe('Reply in a thread attached to this message timestamp. Use the source_message_id from an observation to thread replies on the original message.'),
   },
   async (args) => {
-    // Read available_groups.json to resolve group name to JID
+    // Read available_groups.json to resolve group name/JID to a registered group
     const groupsFile = path.join(IPC_DIR, 'available_groups.json');
     let groups: { groups: Array<{ jid: string; name: string; isRegistered: boolean }> };
     try {
@@ -134,35 +135,15 @@ server.tool(
       };
     }
 
-    const targetName = args.target_group.toLowerCase();
-    const match = groups.groups.find(
-      (g) => g.name.toLowerCase() === targetName,
-    );
-
-    if (!match) {
-      const registered = groups.groups
-        .filter((g) => g.isRegistered)
-        .map((g) => g.name);
+    const resolved = resolveTargetGroup(args.target_group, groups.groups);
+    if (resolved.error || !resolved.match) {
       return {
         content: [
-          {
-            type: 'text' as const,
-            text: `Error: group "${args.target_group}" not found. Registered groups: ${registered.join(', ')}`,
-          },
+          { type: 'text' as const, text: `Error: ${resolved.error}` },
         ],
       };
     }
-
-    if (!match.isRegistered) {
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: `Error: group "${match.name}" exists but is not registered (bot is not active in it). Only registered groups can receive messages.`,
-          },
-        ],
-      };
-    }
+    const match = resolved.match;
 
     const data: Record<string, string | undefined> = {
       type: 'cross_channel_message',
