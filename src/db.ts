@@ -420,6 +420,23 @@ function createSchema(database: Database.Database): void {
       created_at TEXT NOT NULL,
       UNIQUE(observation_id, field_name, sanitiser_version)
     );
+
+    CREATE TABLE IF NOT EXISTS pipeline_clusters (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_channel TEXT NOT NULL,
+      cluster_key TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      summary TEXT NOT NULL,
+      observation_ids TEXT NOT NULL,
+      observation_count INTEGER NOT NULL DEFAULT 0,
+      last_observation_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      resolved_at TEXT,
+      UNIQUE(source_channel, cluster_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_pipeline_clusters_lookup
+      ON pipeline_clusters(source_channel, status, last_observation_at DESC);
   `);
 }
 
@@ -447,6 +464,11 @@ export function execMigrationSql(sql: string): void {
 export function _initTestDatabase(): void {
   db = new Database(':memory:');
   createSchema(db);
+}
+
+/** @internal - for tests only. Returns the underlying database handle. */
+export function _getTestDatabase(): Database.Database {
+  return db;
 }
 
 /**
@@ -1762,5 +1784,143 @@ export function cleanupOldObservations(maxAgeMs: number): number {
          )`,
     )
     .run(cutoff);
+  return result.changes;
+}
+
+// --- Pipeline clusters ---
+
+export type ClusterStatus = 'active' | 'resolved' | 'expired';
+
+export interface ClusterRow {
+  id: number;
+  source_channel: string;
+  cluster_key: string;
+  status: ClusterStatus;
+  summary: string;
+  observation_ids: number[];
+  observation_count: number;
+  last_observation_at: string;
+  created_at: string;
+  updated_at: string;
+  resolved_at: string | null;
+}
+
+interface RawClusterRow {
+  id: number;
+  source_channel: string;
+  cluster_key: string;
+  status: ClusterStatus;
+  summary: string;
+  observation_ids: string;
+  observation_count: number;
+  last_observation_at: string;
+  created_at: string;
+  updated_at: string;
+  resolved_at: string | null;
+}
+
+function parseClusterRow(raw: RawClusterRow): ClusterRow {
+  return { ...raw, observation_ids: JSON.parse(raw.observation_ids) };
+}
+
+function dedupeAndSort(ids: number[]): number[] {
+  return Array.from(new Set(ids)).sort((a, b) => a - b);
+}
+
+export function getActiveClusters(sourceChannels: string[]): ClusterRow[] {
+  if (sourceChannels.length === 0) return [];
+  const placeholders = sourceChannels.map(() => '?').join(',');
+  const rows = db
+    .prepare(
+      `SELECT * FROM pipeline_clusters
+       WHERE source_channel IN (${placeholders}) AND status = 'active'
+       ORDER BY last_observation_at DESC`,
+    )
+    .all(...sourceChannels) as RawClusterRow[];
+  return rows.map(parseClusterRow);
+}
+
+export function upsertCluster(input: {
+  source_channel: string;
+  cluster_key: string;
+  summary: string;
+  observation_ids: number[];
+  status?: 'active' | 'resolved';
+}): ClusterRow {
+  if (!input.observation_ids || input.observation_ids.length === 0) {
+    throw new Error('upsertCluster: observation_ids must be non-empty');
+  }
+
+  const now = new Date().toISOString();
+  const status = input.status ?? 'active';
+  const resolvedAt = status === 'resolved' ? now : null;
+
+  const existing = db
+    .prepare(
+      `SELECT * FROM pipeline_clusters
+       WHERE source_channel = ? AND cluster_key = ?`,
+    )
+    .get(input.source_channel, input.cluster_key) as RawClusterRow | undefined;
+
+  if (existing) {
+    const merged = dedupeAndSort([
+      ...(JSON.parse(existing.observation_ids) as number[]),
+      ...input.observation_ids,
+    ]);
+    db.prepare(
+      `UPDATE pipeline_clusters
+         SET summary = ?, observation_ids = ?, observation_count = ?,
+             last_observation_at = ?, updated_at = ?, status = ?,
+             resolved_at = COALESCE(?, resolved_at)
+       WHERE id = ?`,
+    ).run(
+      input.summary,
+      JSON.stringify(merged),
+      merged.length,
+      now,
+      now,
+      status,
+      resolvedAt,
+      existing.id,
+    );
+  } else {
+    const ids = dedupeAndSort(input.observation_ids);
+    db.prepare(
+      `INSERT INTO pipeline_clusters
+         (source_channel, cluster_key, status, summary, observation_ids,
+          observation_count, last_observation_at, created_at, updated_at, resolved_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      input.source_channel,
+      input.cluster_key,
+      status,
+      input.summary,
+      JSON.stringify(ids),
+      ids.length,
+      now,
+      now,
+      now,
+      resolvedAt,
+    );
+  }
+
+  const row = db
+    .prepare(
+      `SELECT * FROM pipeline_clusters
+       WHERE source_channel = ? AND cluster_key = ?`,
+    )
+    .get(input.source_channel, input.cluster_key) as RawClusterRow;
+  return parseClusterRow(row);
+}
+
+export function expireStaleClusters(maxAgeMs: number): number {
+  const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
+  const result = db
+    .prepare(
+      `UPDATE pipeline_clusters
+         SET status = 'expired', updated_at = ?
+       WHERE status = 'active' AND last_observation_at < ?`,
+    )
+    .run(new Date().toISOString(), cutoff);
   return result.changes;
 }
