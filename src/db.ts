@@ -460,6 +460,16 @@ export function execMigrationSql(sql: string): void {
   }
 }
 
+/**
+ * Return the underlying database handle. Intended for plugins that prepare
+ * their own statements against core's shared connection (see nanoclaw-pipeline).
+ * Behaves identically in production and test — tests use the in-memory handle
+ * installed by _initTestDatabase().
+ */
+export function getDb(): Database.Database {
+  return db;
+}
+
 /** @internal - for tests only. Creates a fresh in-memory database. */
 export function _initTestDatabase(): void {
   db = new Database(':memory:');
