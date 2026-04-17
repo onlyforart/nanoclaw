@@ -30,6 +30,7 @@ import { handleGetEvents } from './routes/events.js';
 import { handleGetIntakeLogs } from './routes/intake.js';
 import { handleGetObservations, handleGetObservation, handlePatchLabel, handleExportEvalSet } from './routes/observations.js';
 import { handleGetPipeline } from './routes/pipeline.js';
+import { handleGetClusters, handleGetCluster } from './routes/clusters.js';
 
 const startTime = Date.now();
 
@@ -249,6 +250,22 @@ export function createApp(groupsDir: string, publicDir?: string): http.Server {
       method: 'GET',
       compiled: compilePath('/api/v1/pipeline'),
       handler: (_params, _req, query) => handleGetPipeline(query),
+    },
+
+    // Clusters
+    {
+      method: 'GET',
+      compiled: compilePath('/api/v1/clusters'),
+      handler: (_params, _req, query) => handleGetClusters(query),
+    },
+    {
+      method: 'GET',
+      compiled: compilePath('/api/v1/clusters/:id'),
+      handler: (params) => {
+        const id = parseInt(params.id, 10);
+        if (Number.isNaN(id)) throw new HttpError(400, 'invalid id');
+        return handleGetCluster(id);
+      },
     },
   ];
 

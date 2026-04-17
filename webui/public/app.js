@@ -243,6 +243,12 @@ const AppSidebar = {
           <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons.prompts}</svg>
           Observations
         </a>
+        <a href="#/clusters"
+          :class="isActive('/clusters') ? 'bg-gray-800 text-white border-l-3 border-blue-500' : 'hover:bg-white/10 hover:text-gray-200 border-l-3 border-transparent'"
+          class="flex items-center gap-3 px-3 py-2 rounded-r-lg text-sm font-medium transition-colors">
+          <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons.prompts}</svg>
+          Clusters
+        </a>
         <a href="#/events"
           :class="isActive('/events') ? 'bg-gray-800 text-white border-l-3 border-blue-500' : 'hover:bg-white/10 hover:text-gray-200 border-l-3 border-transparent'"
           class="flex items-center gap-3 px-3 py-2 rounded-r-lg text-sm font-medium transition-colors">
@@ -2080,6 +2086,176 @@ const AppObservationDetail = {
   },
 };
 
+// Clusters list — read-only inspector for the pipeline_clusters journal
+const AppClusters = {
+  template: `
+    <div>
+      <h1 class="text-2xl font-bold mb-6">Clusters</h1>
+      <div class="mb-4 flex flex-wrap gap-3 items-end">
+        <div>
+          <label class="block text-xs font-medium mb-1">Status</label>
+          <select v-model="status" @change="fetch"
+            class="px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm">
+            <option value="active">Active</option>
+            <option value="resolved">Resolved</option>
+            <option value="expired">Expired</option>
+            <option value="">All</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-medium mb-1">Source Channel</label>
+          <select v-model="sourceChannel" @change="fetch"
+            class="px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm">
+            <option value="">All</option>
+            <option v-for="ch in sourceChannels" :key="ch.jid" :value="ch.jid">{{ ch.name || ch.jid }}</option>
+          </select>
+        </div>
+        <button @click="fetch" class="px-3 py-1.5 bg-gray-200 dark:bg-gray-700 rounded-lg text-sm hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors">Refresh</button>
+      </div>
+      <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+        <table v-if="clusters.length" class="w-full text-sm">
+          <thead>
+            <tr class="border-b border-gray-200 dark:border-gray-700">
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Cluster Key</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Source</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Obs</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Summary</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Last Observed</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="c in clusters" :key="c.id"
+              @click="window.location.hash = '#/clusters/' + c.id"
+              class="border-b border-gray-100 dark:border-gray-700/50 hover:bg-gray-50 dark:hover:bg-gray-750 cursor-pointer">
+              <td class="px-4 py-3 font-mono text-xs">{{ c.clusterKey }}</td>
+              <td class="px-4 py-3 text-xs">{{ channelName(c.sourceChannel) || c.sourceChannel }}</td>
+              <td class="px-4 py-3">
+                <span :class="statusClass(c.status)" class="px-2 py-0.5 rounded-full text-xs font-medium">{{ c.status }}</span>
+              </td>
+              <td class="px-4 py-3 text-gray-500">{{ c.observationCount }}</td>
+              <td class="px-4 py-3 max-w-md truncate">{{ c.summary }}</td>
+              <td class="px-4 py-3 text-gray-500 text-xs">{{ new Date(c.lastObservationAt).toLocaleString() }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div v-else class="p-8 text-center text-gray-400">No clusters found</div>
+      </div>
+    </div>
+  `,
+  setup() {
+    const clusters = ref([]);
+    const status = ref('active');
+    const sourceChannel = ref('');
+    const sourceChannels = ref([]);
+
+    const statusClass = (s) => {
+      if (s === 'active') return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200';
+      if (s === 'resolved') return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200';
+      return 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300';
+    };
+
+    const fetch = async () => {
+      try {
+        const params = new URLSearchParams();
+        if (status.value) params.set('status', status.value);
+        if (sourceChannel.value) params.set('sourceChannel', sourceChannel.value);
+        clusters.value = await api(`/clusters?${params}`);
+      } catch {}
+    };
+
+    const fetchChannels = async () => {
+      try {
+        const groups = await api('/groups');
+        sourceChannels.value = (groups || []).filter((g) => g.mode === 'passive');
+      } catch {}
+    };
+
+    onMounted(() => { fetchChannels(); fetch(); });
+    const interval = setInterval(fetch, 10000);
+    onUnmounted(() => clearInterval(interval));
+    return { clusters, status, sourceChannel, sourceChannels, fetch, statusClass, channelName, window };
+  },
+};
+
+// Cluster detail — metadata + summary + constituent observations
+const AppClusterDetail = {
+  props: ['clusterId'],
+  template: `
+    <div v-if="!loading && cluster">
+      <div class="mb-4">
+        <a href="#/clusters" class="text-blue-600 hover:text-blue-700 text-sm flex items-center gap-1">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons.back}</svg>
+          Back to clusters
+        </a>
+      </div>
+      <h1 class="text-2xl font-bold mb-6">Cluster {{ cluster.clusterKey }}</h1>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Left: metadata + summary -->
+        <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+          <h2 class="text-sm font-semibold mb-3 text-gray-500 uppercase">Metadata</h2>
+          <dl class="text-xs space-y-1.5 mb-4">
+            <div class="flex gap-2"><dt class="text-gray-500 w-32 shrink-0">Cluster key:</dt><dd class="font-mono">{{ cluster.clusterKey }}</dd></div>
+            <div class="flex gap-2"><dt class="text-gray-500 w-32 shrink-0">Source channel:</dt><dd>{{ channelName(cluster.sourceChannel) || cluster.sourceChannel }}</dd></div>
+            <div class="flex gap-2"><dt class="text-gray-500 w-32 shrink-0">Status:</dt><dd><span :class="statusClass(cluster.status)" class="px-2 py-0.5 rounded-full text-xs font-medium">{{ cluster.status }}</span></dd></div>
+            <div class="flex gap-2"><dt class="text-gray-500 w-32 shrink-0">Observation count:</dt><dd>{{ cluster.observationCount }}</dd></div>
+            <div class="flex gap-2"><dt class="text-gray-500 w-32 shrink-0">Last observed:</dt><dd>{{ new Date(cluster.lastObservationAt).toLocaleString() }}</dd></div>
+            <div class="flex gap-2"><dt class="text-gray-500 w-32 shrink-0">Created:</dt><dd>{{ new Date(cluster.createdAt).toLocaleString() }}</dd></div>
+            <div class="flex gap-2"><dt class="text-gray-500 w-32 shrink-0">Updated:</dt><dd>{{ new Date(cluster.updatedAt).toLocaleString() }}</dd></div>
+            <div v-if="cluster.resolvedAt" class="flex gap-2"><dt class="text-gray-500 w-32 shrink-0">Resolved:</dt><dd>{{ new Date(cluster.resolvedAt).toLocaleString() }}</dd></div>
+          </dl>
+          <h2 class="text-sm font-semibold mb-2 text-gray-500 uppercase">Summary</h2>
+          <pre class="text-sm whitespace-pre-wrap font-mono bg-gray-50 dark:bg-gray-900 rounded-lg p-3">{{ cluster.summary }}</pre>
+        </div>
+
+        <!-- Right: constituent observations -->
+        <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+          <h2 class="text-sm font-semibold mb-3 text-gray-500 uppercase">Observations ({{ cluster.observations.length }})</h2>
+          <div v-if="cluster.observations.length" class="space-y-2 max-h-[32rem] overflow-y-auto">
+            <a v-for="o in cluster.observations" :key="o.id"
+              :href="'#/observations/' + o.id"
+              class="block bg-gray-50 dark:bg-gray-900 rounded-lg p-3 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
+              <div class="flex items-center justify-between text-xs text-gray-500 mb-1">
+                <span class="font-mono">#{{ o.id }}</span>
+                <span>{{ new Date(o.createdAt).toLocaleString() }}</span>
+              </div>
+              <div class="text-sm font-mono whitespace-pre-wrap">{{ o.rawText }}</div>
+            </a>
+          </div>
+          <div v-else class="text-center py-8 text-gray-400">No observations</div>
+        </div>
+      </div>
+    </div>
+    <div v-else-if="loading" class="text-center py-20 text-gray-400">Loading...</div>
+    <div v-else class="text-center py-20 text-gray-400">Cluster not found</div>
+  `,
+  setup(props) {
+    const cluster = ref(null);
+    const loading = ref(true);
+
+    const statusClass = (s) => {
+      if (s === 'active') return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200';
+      if (s === 'resolved') return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200';
+      return 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300';
+    };
+
+    const fetchCluster = async () => {
+      loading.value = true;
+      try {
+        cluster.value = await api(`/clusters/${props.clusterId}`);
+      } catch {
+        cluster.value = null;
+      } finally {
+        loading.value = false;
+      }
+    };
+
+    onMounted(fetchCluster);
+    return { cluster, loading, statusClass, channelName };
+  },
+};
+
 const app = createApp({
   template: `
     <div class="flex h-screen overflow-hidden">
@@ -2106,6 +2282,8 @@ const app = createApp({
           <app-pipeline v-if="route.view === 'pipeline'" />
           <app-observations v-if="route.view === 'observations'" />
           <app-observation-detail v-if="route.view === 'observation-detail'" :observation-id="route.id" :key="route.id" />
+          <app-clusters v-if="route.view === 'clusters'" />
+          <app-cluster-detail v-if="route.view === 'cluster-detail'" :cluster-id="route.id" :key="route.id" />
           <app-group-detail v-if="route.view === 'group-detail'" :folder="route.folder" :initial-tab="route.tab" :key="route.folder + (route.tab || '')" />
           <app-task-detail v-if="route.view === 'task-detail'" :task-id="route.id" :key="route.id" @group-loaded="taskGroupFolder = $event" />
           <div v-if="route.view === 'not-found'" class="text-center py-20 text-gray-400">
@@ -2134,6 +2312,9 @@ const app = createApp({
       if (path === '/observations') return { view: 'observations' };
       const om = path.match(/^\/observations\/(\d+)$/);
       if (om) return { view: 'observation-detail', id: parseInt(om[1], 10) };
+      if (path === '/clusters') return { view: 'clusters' };
+      const cm = path.match(/^\/clusters\/(\d+)$/);
+      if (cm) return { view: 'cluster-detail', id: parseInt(cm[1], 10) };
       const gm = path.match(/^\/groups\/([^/]+)$/);
       if (gm) return { view: 'group-detail', folder: gm[1], tab: params.get('tab') };
       const tm = path.match(/^\/tasks\/([^/]+)$/);
@@ -2185,6 +2366,8 @@ app.component('app-events', AppEvents);
 app.component('app-pipeline', AppPipeline);
 app.component('app-observations', AppObservations);
 app.component('app-observation-detail', AppObservationDetail);
+app.component('app-clusters', AppClusters);
+app.component('app-cluster-detail', AppClusterDetail);
 app.component('tab-bar', TabBar);
 app.component('status-badge', StatusBadge);
 

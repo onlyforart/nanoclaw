@@ -537,6 +537,89 @@ export function getObservationById(id: number): ObservationDetailRow | undefined
   return { ...row, label: label ?? null };
 }
 
+// --- Pipeline clusters ---
+
+export type ClusterStatus = 'active' | 'resolved' | 'expired';
+
+export interface ClusterListRow {
+  id: number;
+  source_channel: string;
+  cluster_key: string;
+  status: ClusterStatus;
+  summary: string;
+  observation_count: number;
+  last_observation_at: string;
+  created_at: string;
+  updated_at: string;
+  resolved_at: string | null;
+}
+
+export interface ClusterDetailRow extends ClusterListRow {
+  observation_ids: string; // JSON-encoded number[]
+}
+
+export interface ClusterObservationRow {
+  id: number;
+  source_chat_jid: string | null;
+  raw_text: string;
+  created_at: string;
+}
+
+export function getClusters(opts?: {
+  status?: ClusterStatus;
+  sourceChannel?: string;
+  limit?: number;
+  offset?: number;
+}): ClusterListRow[] {
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+  if (opts?.status) {
+    conditions.push('status = ?');
+    params.push(opts.status);
+  }
+  if (opts?.sourceChannel) {
+    conditions.push('source_channel = ?');
+    params.push(opts.sourceChannel);
+  }
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  const limit = opts?.limit ?? 100;
+  const offset = opts?.offset ?? 0;
+  return db
+    .prepare(
+      `SELECT id, source_channel, cluster_key, status, summary,
+              observation_count, last_observation_at,
+              created_at, updated_at, resolved_at
+       FROM pipeline_clusters
+       ${where}
+       ORDER BY last_observation_at DESC
+       LIMIT ? OFFSET ?`,
+    )
+    .all(...params, limit, offset) as ClusterListRow[];
+}
+
+export function getClusterById(id: number): ClusterDetailRow | undefined {
+  return db
+    .prepare(
+      `SELECT id, source_channel, cluster_key, status, summary,
+              observation_ids, observation_count, last_observation_at,
+              created_at, updated_at, resolved_at
+       FROM pipeline_clusters WHERE id = ?`,
+    )
+    .get(id) as ClusterDetailRow | undefined;
+}
+
+export function getClusterObservations(ids: number[]): ClusterObservationRow[] {
+  if (ids.length === 0) return [];
+  const placeholders = ids.map(() => '?').join(',');
+  return db
+    .prepare(
+      `SELECT id, source_chat_jid, raw_text, created_at
+       FROM observed_messages WHERE id IN (${placeholders})
+       ORDER BY id`,
+    )
+    .all(...ids) as ClusterObservationRow[];
+}
+
 export function upsertLabel(
   observationId: number,
   fields: {
