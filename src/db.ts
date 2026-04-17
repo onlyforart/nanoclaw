@@ -1345,4 +1345,3 @@ function migrateJsonState(): void {
     }
   }
 }
-

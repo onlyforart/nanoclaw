@@ -33,6 +33,7 @@ export const NANOCLAW_TOOL_META: Record<string, ToolMetadata> = {
   re_extract_observation: { management: false },
   get_active_clusters: { management: false },
   update_cluster: { management: false },
+  reply_to_event: { management: false },
 
   // task + group management — denied to scheduled tasks
   schedule_task: { management: true },

@@ -47,6 +47,7 @@ describe('NANOCLAW_TOOL_META regression guards', () => {
     'publish_event',
     're_extract_observation',
     'read_chat_messages',
+    'reply_to_event',
     'send_cross_channel_message',
     'send_message',
     'submit_to_pipeline',

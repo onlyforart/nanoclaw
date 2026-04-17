@@ -777,7 +777,6 @@ describe('getRecentEvents', () => {
   });
 });
 
-
 // --- registered group mode + threading_mode ---
 
 describe('registered group mode', () => {
@@ -1081,4 +1080,3 @@ describe('task allowed_tools and allowed_send_targets', () => {
     expect(task!.allowedTools).toBeNull();
   });
 });
-

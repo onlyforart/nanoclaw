@@ -11,6 +11,7 @@ import {
   createTask,
   deleteTask,
   _clearCrossChannelDeliveries,
+  getEventPayloadById,
   getTaskById,
   isCrossChannelDelivered,
   recordCrossChannelDeliveryDB,
@@ -771,6 +772,98 @@ function handleAckEvent(data: IpcData): IpcResult {
   return ok();
 }
 
+// --- reply_to_event: deterministic thread routing (Phase F3) ---
+//
+// The LLM passes only (event_id, text). The host looks up the event,
+// extracts source_channel + source_message_id, and posts to the correct
+// thread. Misrouting is structurally impossible.
+
+const REPLY_TO_EVENT_MAX_TEXT = 2000;
+
+async function handleReplyToEvent(
+  data: IpcData,
+  registeredGroups: Record<string, RegisteredGroup>,
+  deps: IpcDeps,
+): Promise<IpcResult> {
+  const rawEventId = data.eventId;
+  const eventId =
+    typeof rawEventId === 'number'
+      ? rawEventId
+      : rawEventId != null
+        ? Number(rawEventId)
+        : NaN;
+  const text = data.text as string | undefined;
+
+  if (!Number.isFinite(eventId) || eventId <= 0) {
+    return fail('reply_to_event requires event_id');
+  }
+  if (!text || typeof text !== 'string') {
+    return fail('reply_to_event requires text');
+  }
+  if (text.length > REPLY_TO_EVENT_MAX_TEXT) {
+    return fail(
+      `text too long (${text.length} > ${REPLY_TO_EVENT_MAX_TEXT} chars)`,
+    );
+  }
+
+  const payloadJson = getEventPayloadById(eventId);
+  if (!payloadJson) {
+    return fail(`event ${eventId} not found`);
+  }
+
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(payloadJson);
+  } catch {
+    return fail(`event ${eventId} has malformed payload`);
+  }
+
+  const sourceChannel = payload.source_channel as string | undefined;
+  if (!sourceChannel) {
+    return fail(`event ${eventId} payload missing source_channel`);
+  }
+
+  const targetGroup = registeredGroups[sourceChannel];
+  if (!targetGroup) {
+    return fail(`source channel ${sourceChannel} is not registered`);
+  }
+
+  const sourceMessageId = payload.source_message_id as string | undefined;
+  const flags: string[] = [];
+  if (!sourceMessageId) flags.push('no-thread');
+
+  try {
+    await deps.sendMessage(
+      sourceChannel,
+      text,
+      sourceMessageId ? { threadTs: sourceMessageId } : undefined,
+    );
+  } catch (err) {
+    return fail(
+      `send failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  logger.info(
+    {
+      eventId,
+      sourceChannel,
+      threadTs: sourceMessageId,
+      flags,
+    },
+    'reply_to_event delivered',
+  );
+
+  return {
+    success: true,
+    delivered_to: {
+      channel: sourceChannel,
+      thread_ts: sourceMessageId ?? null,
+    },
+    ...(flags.length > 0 ? { flags } : {}),
+  } as IpcResult;
+}
+
 function handleReadChatMessages(
   data: IpcData,
   registeredGroups: Record<string, RegisteredGroup>,
@@ -850,6 +943,8 @@ export async function processTaskIpc(
       return handleAckEvent(data);
     case 'read_chat_messages':
       return handleReadChatMessages(data, registeredGroups);
+    case 'reply_to_event':
+      return handleReplyToEvent(data, registeredGroups, deps);
     default: {
       const pluginResult = await deps.plugin?.handleIpcTask?.(
         data.type,
