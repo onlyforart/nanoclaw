@@ -18,6 +18,7 @@ import fs from 'fs';
 import path from 'path';
 import { query, HookCallback, PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
+import { NANOCLAW_TOOL_META, deriveNanoclawTools } from './tool-metadata.js';
 import { Ollama } from 'ollama';
 import { runOllamaChat } from './ollama-chat-engine.js';
 import { runAnthropicApiChat } from './anthropic-api-engine.js';
@@ -669,12 +670,16 @@ async function runOllamaDirectMode(containerInput: ContainerInput): Promise<void
     ? new Set(containerInput.allowedTools)
     : null;
 
-  // Scheduled tasks only get send_message, send_cross_channel_message, and
-  // list_tasks — they must not create/modify tasks or groups (defense-in-depth
-  // against runaway models).
-  let nanoclawTools = containerInput.isScheduledTask
-    ? ['send_message', 'send_cross_channel_message', 'list_tasks', 'publish_event', 'consume_events', 'ack_event', 'submit_to_pipeline', 'read_chat_messages', 're_extract_observation']
-    : ['send_message', 'send_cross_channel_message', 'schedule_task', 'list_tasks', 'pause_task', 'resume_task', 'cancel_task', 'update_task', 'register_group', 'update_group', 'list_groups', 'publish_event', 'consume_events', 'ack_event', 'submit_to_pipeline', 'read_chat_messages', 're_extract_observation'];
+  // Tool catalogue (what exists) lives in ./tool-metadata.ts alongside the
+  // management classification. Adding a tool = one registerTool() call in
+  // ipc-mcp-stdio.ts + one metadata entry; drift is caught at MCP server
+  // startup (see self-consistency check in ipc-mcp-stdio.ts). Scheduled tasks
+  // are denied management tools (defense-in-depth against runaway models);
+  // per-task allowed_tools filter applies on top.
+  let nanoclawTools = deriveNanoclawTools(
+    NANOCLAW_TOOL_META,
+    !!containerInput.isScheduledTask,
+  );
 
   if (allowedToolsSet) {
     nanoclawTools = nanoclawTools.filter((t) => allowedToolsSet.has(t));
@@ -870,10 +875,12 @@ async function runAnthropicApiMode(containerInput: ContainerInput): Promise<void
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const ipcServerPath = path.join(__dirname, 'ipc-mcp-stdio.js');
 
-  // Scheduled tasks get restricted tool access (same as Ollama path)
-  let nanoclawTools = containerInput.isScheduledTask
-    ? ['send_message', 'send_cross_channel_message', 'list_tasks', 'publish_event', 'consume_events', 'ack_event', 'submit_to_pipeline', 'read_chat_messages', 're_extract_observation']
-    : ['send_message', 'send_cross_channel_message', 'schedule_task', 'list_tasks', 'pause_task', 'resume_task', 'cancel_task', 'update_task', 'register_group', 'update_group', 'list_groups', 'publish_event', 'consume_events', 'ack_event', 'submit_to_pipeline', 'read_chat_messages', 're_extract_observation'];
+  // Same derivation as the Ollama path above — see ./tool-metadata.ts for
+  // the authoritative catalogue and management classification.
+  let nanoclawTools = deriveNanoclawTools(
+    NANOCLAW_TOOL_META,
+    !!containerInput.isScheduledTask,
+  );
 
   // Pipeline allow-list
   const allowedToolsSet = containerInput.allowedTools
