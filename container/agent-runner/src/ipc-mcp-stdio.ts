@@ -725,13 +725,46 @@ registerTool(
 
 registerTool(
   'update_cluster',
-  'Create or update a cluster. New observation_ids are merged into the existing set (deduped). Pass status="resolved" to terminate the cluster — resolved clusters are not returned by get_active_clusters and cannot be re-expired.',
+  'Create or update a cluster and (optionally) publish exactly one downstream candidate.* event. New observation_ids are merged into the existing set (deduped). Pass status="resolved" to terminate the cluster — resolved clusters are not returned by get_active_clusters and cannot be re-expired. Pass the `routing` object to let the host decide which candidate.* event to publish: exactly one of candidate.escalation / human_review_required / candidate.question / candidate.unhandled fires per cluster per tick, deterministically. When routing is provided, do NOT separately call publish_event for candidate.* events — the host emits it.',
   {
     source_channel: z.string().describe('Source channel JID'),
     cluster_key: z.string().describe('Cluster identifier (e.g. ticket number or topic slug)'),
     summary: z.string().describe('Compacted running summary of the cluster (rewritten on each update)'),
     observation_ids: z.array(z.number().int()).min(1).describe('Observation IDs to add to the cluster'),
     status: z.enum(['active', 'resolved']).optional().describe('Cluster lifecycle status (default: "active")'),
+    source_message_id: z
+      .string()
+      .optional()
+      .describe('source_message_id of the newest observation in this tick — threaded-reply target for downstream events.'),
+    routing: z
+      .object({
+        newest_obs_id: z
+          .number()
+          .int()
+          .describe('ID of the newest observation added to the cluster in this tick.'),
+        escalation_triggers: z
+          .array(z.string())
+          .describe('Escalation trigger strings that fired for NEW observations this tick (e.g. ["urgency:incident","speech_act:fresh_report"]). Empty array means no escalation.'),
+        appears_to_address_bot: z
+          .boolean()
+          .describe('True if the newest observation addresses the bot directly.'),
+        question: z
+          .object({
+            asked: z.boolean(),
+            in_scope: z.boolean().describe('Whether the question clearly references an in-scope surface/artefact.'),
+            addressee: z.enum(['channel', 'nobody', 'specific_human', 'bot']),
+            text: z.string().describe('Raw question text, verbatim.'),
+            urgency: z.string(),
+          })
+          .nullable()
+          .describe('Question facts, or null if the newest observation is not a question.'),
+        unhandled_reason: z
+          .string()
+          .optional()
+          .describe('Free-form reason surfaced in the unhandled payload when nothing else matched (e.g. "urgency fyi, speech_act banter").'),
+      })
+      .optional()
+      .describe('Classification facts; host decides routing and publishes exactly one candidate.* event.'),
   },
   async (args) => {
     const result = await writeIpcFileAndWaitForResult(TASKS_DIR, {
@@ -741,6 +774,8 @@ registerTool(
       summary: args.summary,
       observationIds: args.observation_ids,
       status: args.status,
+      sourceMessageId: args.source_message_id,
+      routing: args.routing,
       groupFolder,
       timestamp: new Date().toISOString(),
     });
@@ -751,7 +786,16 @@ registerTool(
 
     const r = result as any;
     return {
-      content: [{ type: 'text' as const, text: JSON.stringify({ cluster: r.cluster }, null, 2) }],
+      content: [
+        {
+          type: 'text' as const,
+          text: JSON.stringify(
+            { cluster: r.cluster, ...(r.routed ? { routed: r.routed } : {}) },
+            null,
+            2,
+          ),
+        },
+      ],
     };
   },
 );
