@@ -50,6 +50,9 @@ start-nanoclaw.sh
 .idea/
 .vscode/
 
+# Claude Code per-session state (auto-generated; not reproducible across installs)
+.claude/scheduled_tasks.lock
+
 # Skills system — ignore all by default (copied from other repos per-install),
 # then whitelist skills that are part of this repo.
 .nanoclaw/
