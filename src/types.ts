@@ -80,6 +80,13 @@ export interface ScheduledTask {
   allowedSendTargets?: string[] | null;
   executionMode?: 'container' | 'host_pipeline';
   subscribedEventTypes?: string[] | null;
+  /**
+   * Maximum number of events a single invocation may claim via
+   * consume_events. The IPC handler caps the LLM-requested limit to
+   * this value, enforcing serial per-event processing regardless of
+   * what the prompt asks for. NULL = no cap (legacy behaviour).
+   */
+  batchSize?: number | null;
   next_run: string | null;
   last_run: string | null;
   last_result: string | null;
@@ -195,10 +202,34 @@ export interface Channel {
   // the pipeline approval reacji handler to read draft text from a
   // team-channel message when a 👍 is reacted.
   fetchMessageText?(jid: string, messageId: string): Promise<string | null>;
+  // Optional: fetch all replies in a thread. Used by the pipeline
+  // post-write delivery verification to confirm our reply landed.
+  // Returns null if the channel adapter can't fetch or the thread is
+  // empty.
+  fetchThreadReplies?(
+    jid: string,
+    threadTs: string,
+  ): Promise<Array<{ ts: string; text: string | null }> | null>;
 }
 
 // Callback type that channels use to deliver inbound messages
 export type OnInboundMessage = (chatJid: string, message: NewMessage) => void;
+
+/**
+ * Callback channels invoke when a user adds/removes a reaction. Used
+ * for the pipeline approval flow (👍 on a team-channel PROPOSED REPLY
+ * draft) and the legacy proposed_reply reacji bridge.
+ */
+export type OnReaction = (
+  chatJid: string,
+  reaction: {
+    emoji: string;
+    userId: string;
+    messageId: string;
+    chatJid: string;
+    timestamp: string;
+  },
+) => void | Promise<void>;
 
 // Callback for chat metadata discovery.
 // name is optional — channels that deliver names inline (Telegram) pass it here;

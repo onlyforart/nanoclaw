@@ -11,6 +11,7 @@ import {
   Channel,
   OnInboundMessage,
   OnChatMetadata,
+  OnReaction,
   RegisteredGroup,
 } from '../types.js';
 
@@ -22,6 +23,7 @@ type HandledMessageEvent = GenericMessageEvent | BotMessageEvent;
 export interface SlackChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
+  onReaction?: OnReaction;
   registeredGroups: () => Record<string, RegisteredGroup>;
 }
 
@@ -128,6 +130,39 @@ export class SlackChannel implements Channel {
         is_bot_message: isBotMessage,
       });
     });
+
+    // Reaction events — needed for the pipeline approval flow (F5b).
+    // Requires `reactions:read` OAuth scope on the Slack app. Socket
+    // mode delivers these alongside message events.
+    this.app.event('reaction_added', async ({ event }) => {
+      if (!this.opts.onReaction) return;
+      // The event item can be a message, file, or file_comment; we
+      // only care about message reactions.
+      if (event.item?.type !== 'message') return;
+      const channelId = event.item.channel;
+      const messageId = event.item.ts;
+      const jid = `slack:${channelId}`;
+
+      // Ignore reactions in unregistered channels — we wouldn't know
+      // what to do with them.
+      const groups = this.opts.registeredGroups();
+      if (!groups[jid]) return;
+
+      try {
+        await this.opts.onReaction(jid, {
+          emoji: event.reaction,
+          userId: event.user,
+          messageId,
+          chatJid: jid,
+          timestamp: new Date(parseFloat(event.event_ts) * 1000).toISOString(),
+        });
+      } catch (err) {
+        logger.warn(
+          { err, jid, messageId, emoji: event.reaction },
+          'Slack reaction_added handler threw',
+        );
+      }
+    });
   }
 
   async connect(): Promise<void> {
@@ -232,6 +267,37 @@ export class SlackChannel implements Channel {
         { jid, err, queueSize: this.outgoingQueue.length },
         'Failed to send Slack message, queued',
       );
+    }
+  }
+
+  /**
+   * Fetch all replies in a thread (including the root message), for
+   * post-write delivery verification. Returns null if the channel
+   * adapter can't fetch or the thread is empty.
+   */
+  async fetchThreadReplies(
+    jid: string,
+    threadTs: string,
+  ): Promise<Array<{ ts: string; text: string | null }> | null> {
+    const channelId = jid.replace(/^slack:/, '');
+    if (!this.connected) return null;
+    try {
+      const res = await this.app.client.conversations.replies({
+        channel: channelId,
+        ts: threadTs,
+        limit: 100,
+      });
+      const msgs = res.messages ?? [];
+      return msgs.map((m) => ({
+        ts: (m.ts ?? '') as string,
+        text: (m.text ?? null) as string | null,
+      }));
+    } catch (err) {
+      logger.warn(
+        { jid, threadTs, err },
+        'Failed to fetch Slack thread replies',
+      );
+      return null;
     }
   }
 

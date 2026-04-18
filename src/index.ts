@@ -54,6 +54,8 @@ import {
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
+import { scheduleDeliveryVerification } from './delivery-verification.js';
+import { publishEvent } from './db.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import {
   restoreRemoteControl,
@@ -73,7 +75,11 @@ import {
   completeEditFlow,
   type Reaction,
 } from './reaction-bridge.js';
-import { handlePipelineApprovalReaction } from './pipeline-approval.js';
+import {
+  handlePipelineApprovalReaction,
+  parseApprovalTimeoutMs,
+  parseApproverList,
+} from './pipeline-approval.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -732,6 +738,12 @@ async function main(): Promise<void> {
               channel.fetchMessageText!(jid, messageId),
             registeredGroups,
             getEventPayloadById,
+            approverUserIds: parseApproverList(
+              process.env.PIPELINE_APPROVER_USER_IDS,
+            ),
+            approvalTimeoutMs: parseApprovalTimeoutMs(
+              process.env.PIPELINE_APPROVAL_TIMEOUT_MS,
+            ),
           });
           if (handled) return;
         } catch (err) {
@@ -826,14 +838,14 @@ async function main(): Promise<void> {
     queue,
     onProcess: (groupJid, proc, containerName, groupFolder) =>
       queue.registerProcess(groupJid, proc, containerName, groupFolder, true),
-    sendMessage: async (jid, rawText) => {
+    sendMessage: async (jid, rawText, options) => {
       const channel = findChannel(channels, jid);
       if (!channel) {
         logger.warn({ jid }, 'No channel owns JID, cannot send message');
         return;
       }
       const text = formatOutbound(rawText);
-      if (text) await channel.sendMessage(jid, text);
+      if (text) await channel.sendMessage(jid, text, options);
     },
     plugin,
   });
@@ -842,6 +854,20 @@ async function main(): Promise<void> {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
       return channel.sendMessage(jid, text, options);
+    },
+    scheduleDeliveryVerification: (args) => {
+      const channel = findChannel(channels, args.channelJid);
+      if (!channel?.fetchThreadReplies) {
+        logger.debug(
+          { channelJid: args.channelJid },
+          'F6.2 skipped — no fetchThreadReplies on this channel',
+        );
+        return;
+      }
+      scheduleDeliveryVerification(args, {
+        fetchThreadReplies: (c, t) => channel.fetchThreadReplies!(c, t),
+        publishEvent,
+      });
     },
     registeredGroups: () => registeredGroups,
     registerGroup,

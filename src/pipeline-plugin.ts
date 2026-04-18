@@ -83,13 +83,40 @@ export interface PipelinePlugin {
 
   // --- Task scheduling (task-scheduler.ts) ---
 
-  /** Called for tasks with executionMode === 'host_pipeline' */
-  executeHostTask?(task: ScheduledTask, startTime: number): Promise<void>;
+  /**
+   * Called for tasks with executionMode === 'host_pipeline'.
+   * `deps` is a narrow capability surface — it carries only what
+   * host-side pipeline tasks need (outbound message delivery, group
+   * lookup). Older plugins that ignore the third argument still work;
+   * newer plugins (F8 trivial-answerer) use it to reply directly from
+   * the host without spawning a container.
+   */
+  executeHostTask?(
+    task: ScheduledTask,
+    startTime: number,
+    deps?: HostTaskDeps,
+  ): Promise<void>;
 
   // --- DB migrations ---
 
   /** SQL statements to run on startup (CREATE TABLE IF NOT EXISTS, etc.) */
   migrations?(): string[];
+}
+
+/**
+ * Capabilities exposed to host_pipeline tasks. Keep this minimal — if
+ * a task needs more, grow the type deliberately rather than widening
+ * to full IpcDeps.
+ */
+export interface HostTaskDeps {
+  /** Post a message to a registered channel, optionally into a thread. */
+  sendMessage: (
+    jid: string,
+    text: string,
+    options?: { threadTs?: string },
+  ) => Promise<void>;
+  /** Snapshot of currently-registered groups (channel JID → group). */
+  registeredGroups: () => Record<string, RegisteredGroup>;
 }
 
 /**

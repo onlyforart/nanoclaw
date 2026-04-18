@@ -20,6 +20,7 @@ import {
   updateRegisteredGroup,
   updateTask,
 } from './db.js';
+import { normaliseEventTypes } from './event-type-normaliser.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { sendWithRetry } from './outbound-retry.js';
@@ -32,6 +33,18 @@ export interface IpcDeps {
     text: string,
     options?: { threadTs?: string },
   ) => Promise<void>;
+  /**
+   * Schedule a best-effort post-write delivery verification (F6.2).
+   * Implementations fetch the thread after a short delay and publish a
+   * pipeline_delivery_failed event if our message isn't present. No-op
+   * when the host has no channel adapter capable of thread fetches.
+   */
+  scheduleDeliveryVerification?: (args: {
+    eventId: number;
+    channelJid: string;
+    threadTs: string;
+    expectedText: string;
+  }) => void;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   updateGroup: (
@@ -746,12 +759,38 @@ function handlePublishEvent(
 }
 
 function handleConsumeEvents(data: IpcData, deps?: IpcDeps): IpcResult {
-  const eventTypes = data.eventTypes as string[] | undefined;
+  const rawEventTypes = data.eventTypes as string[] | undefined;
   const claimedBy = data.claimedBy as string | undefined;
-  const limit = (data.limit as number) ?? 50;
+  let limit = (data.limit as number) ?? 50;
 
-  if (!eventTypes || !Array.isArray(eventTypes) || !claimedBy) {
+  if (!rawEventTypes || !Array.isArray(rawEventTypes) || !claimedBy) {
     return fail('consume_events requires eventTypes (array) and claimedBy');
+  }
+
+  // Small local LLMs (e.g. gemma4) occasionally wrap event types in
+  // regex-like delimiters ("|observation.*|") or quotes. That matches
+  // zero rows and silently starves the consumer. Strip the noise.
+  const { normalised: eventTypes, anyStripped } =
+    normaliseEventTypes(rawEventTypes);
+  if (anyStripped) {
+    logger.warn(
+      { claimedBy, rawEventTypes, normalised: eventTypes },
+      'consume_events: normalised sloppy event type(s) from caller',
+    );
+  }
+  if (eventTypes.length === 0) {
+    return fail(
+      `consume_events eventTypes were all empty or noise-only after normalisation (raw: ${JSON.stringify(rawEventTypes)})`,
+    );
+  }
+
+  // Phase F2.b: enforce task-level batch_size cap on consume_events.
+  // The task row's batch_size is a structural guarantee that the LLM
+  // cannot bypass — even if the prompt asks for limit: 999, the cap
+  // applies.
+  const task = getTaskById(claimedBy);
+  if (task?.batchSize != null && task.batchSize > 0) {
+    if (limit > task.batchSize) limit = task.batchSize;
   }
 
   const events = consumeEvents(eventTypes, claimedBy, limit);
@@ -853,6 +892,17 @@ async function handleReplyToEvent(
     },
     'reply_to_event delivered',
   );
+
+  // Phase F6.2: best-effort post-write delivery verification. Skipped
+  // for channel-level replies (no thread to re-read).
+  if (sourceMessageId && deps.scheduleDeliveryVerification) {
+    deps.scheduleDeliveryVerification({
+      eventId,
+      channelJid: sourceChannel,
+      threadTs: sourceMessageId,
+      expectedText: text,
+    });
+  }
 
   return {
     success: true,

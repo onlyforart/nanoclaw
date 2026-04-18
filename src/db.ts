@@ -276,6 +276,15 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  // Add batch_size column (Phase F2.b: cap consume_events limit per task)
+  try {
+    database.exec(
+      `ALTER TABLE scheduled_tasks ADD COLUMN batch_size INTEGER DEFAULT NULL`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
   // Add channel and is_group columns if they don't exist (migration for existing DBs)
   try {
     database.exec(`ALTER TABLE chats ADD COLUMN channel TEXT`);
@@ -631,8 +640,8 @@ export function createTask(
 ): void {
   db.prepare(
     `
-    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, model, temperature, timezone, max_tool_rounds, timeout_ms, use_agent_sdk, allowed_tools, allowed_send_targets, execution_mode, subscribed_event_types, fallback_poll_ms, next_run, status, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, model, temperature, timezone, max_tool_rounds, timeout_ms, use_agent_sdk, allowed_tools, allowed_send_targets, execution_mode, subscribed_event_types, fallback_poll_ms, batch_size, next_run, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `,
   ).run(
     task.id,
@@ -655,13 +664,14 @@ export function createTask(
       ? JSON.stringify(task.subscribedEventTypes)
       : null,
     task.fallbackPollMs ?? null,
+    task.batchSize ?? null,
     task.next_run,
     task.status,
     task.created_at,
   );
 }
 
-const TASK_SELECT = `SELECT id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, model, temperature, timezone, max_tool_rounds AS maxToolRounds, timeout_ms AS timeoutMs, use_agent_sdk AS useAgentSdk, allowed_tools, allowed_send_targets, execution_mode AS executionMode, subscribed_event_types, fallback_poll_ms AS fallbackPollMs, next_run, last_run, last_result, status, created_at FROM scheduled_tasks`;
+const TASK_SELECT = `SELECT id, group_folder, chat_jid, prompt, schedule_type, schedule_value, context_mode, model, temperature, timezone, max_tool_rounds AS maxToolRounds, timeout_ms AS timeoutMs, use_agent_sdk AS useAgentSdk, allowed_tools, allowed_send_targets, execution_mode AS executionMode, subscribed_event_types, fallback_poll_ms AS fallbackPollMs, batch_size AS batchSize, next_run, last_run, last_result, status, created_at FROM scheduled_tasks`;
 
 function parseTaskRow(row: any): ScheduledTask {
   return {
@@ -717,6 +727,7 @@ export function updateTask(
       | 'executionMode'
       | 'subscribedEventTypes'
       | 'fallbackPollMs'
+      | 'batchSize'
     >
   >,
 ): void {
@@ -797,6 +808,10 @@ export function updateTask(
     fields.push('fallback_poll_ms = ?');
     values.push(updates.fallbackPollMs ?? null);
   }
+  if (updates.batchSize !== undefined) {
+    fields.push('batch_size = ?');
+    values.push(updates.batchSize ?? null);
+  }
 
   if (fields.length === 0) return;
 
@@ -836,6 +851,19 @@ export function updateTaskAfterRun(
     WHERE id = ?
   `,
   ).run(nextRun, now, lastResult, nextRun, id);
+}
+
+/**
+ * Advance only next_run, leaving last_run / last_result / status untouched.
+ * Used for no-op scheduler skips (e.g. pre-flight: no pending events) so
+ * the task's displayed history keeps reflecting the last REAL execution
+ * rather than flipping to "ran just now" every minute.
+ */
+export function bumpTaskNextRun(id: string, nextRun: string | null): void {
+  db.prepare(`UPDATE scheduled_tasks SET next_run = ? WHERE id = ?`).run(
+    nextRun,
+    id,
+  );
 }
 
 export function logTaskRun(log: TaskRunLog): void {
@@ -1288,6 +1316,54 @@ export function ackEvent(
   db.prepare(
     `UPDATE events SET status = ?, processed_at = ?, result_note = ? WHERE id = ?`,
   ).run(status, now, note ?? null, eventId);
+}
+
+/**
+ * Release a claimed event back to pending so another consumer can pick
+ * it up. Only releases if the event is still claimed AND still held by
+ * the caller — prevents a stale releaser from un-claiming a freshly
+ * re-claimed row. Returns true iff a row was actually released.
+ *
+ * Used by racing consumers (e.g. Phase F8 trivial-answerer claims
+ * candidate.question first; if it can't handle the specific event, it
+ * releases the claim so the solver picks it up on the next tick).
+ */
+export function releaseEvent(eventId: number, claimedBy: string): boolean {
+  const result = db
+    .prepare(
+      `UPDATE events
+          SET status = 'pending', claimed_by = NULL, claimed_at = NULL
+        WHERE id = ? AND status = 'claimed' AND claimed_by = ?`,
+    )
+    .run(eventId, claimedBy);
+  return result.changes > 0;
+}
+
+/**
+ * Bulk-release all events a task still holds since the given timestamp.
+ * Used when a container task exits with an error (e.g. upstream LLM
+ * 500/429, container crash, process kill): any events it claimed during
+ * that run should be returned to the pool rather than waiting for the
+ * TTL sweep. Returns the number of rows released.
+ *
+ * The `claimedSince` filter prevents releasing events from an earlier
+ * successful run of the same task that failed to ack (those are
+ * genuine orphans that the TTL sweep handles).
+ */
+export function releaseClaimsByTaskId(
+  claimedBy: string,
+  claimedSince: string,
+): number {
+  const result = db
+    .prepare(
+      `UPDATE events
+          SET status = 'pending', claimed_by = NULL, claimed_at = NULL
+        WHERE status = 'claimed'
+          AND claimed_by = ?
+          AND claimed_at >= ?`,
+    )
+    .run(claimedBy, claimedSince);
+  return result.changes;
 }
 
 export function getRecentEvents(

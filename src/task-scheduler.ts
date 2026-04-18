@@ -16,11 +16,13 @@ import {
   writeTasksSnapshot,
 } from './container-runner.js';
 import {
+  bumpTaskNextRun,
   getAllTasks,
   getDueTasks,
   getTaskById,
   hasPendingEventsOfTypes,
   logTaskRun,
+  releaseClaimsByTaskId,
   updateTask,
   updateTaskAfterRun,
 } from './db.js';
@@ -89,7 +91,11 @@ export interface SchedulerDependencies {
     containerName: string,
     groupFolder: string,
   ) => void;
-  sendMessage: (jid: string, text: string) => Promise<void>;
+  sendMessage: (
+    jid: string,
+    text: string,
+    options?: { threadTs?: string },
+  ) => Promise<void>;
   plugin?: PipelinePlugin | null;
 }
 
@@ -124,7 +130,10 @@ async function runTask(
   // Host-side pipeline tasks — delegated to plugin
   if (task.executionMode === 'host_pipeline') {
     if (deps.plugin?.executeHostTask) {
-      await deps.plugin.executeHostTask(task, startTime);
+      await deps.plugin.executeHostTask(task, startTime, {
+        sendMessage: deps.sendMessage,
+        registeredGroups: deps.registeredGroups,
+      });
     } else {
       logger.warn(
         { taskId: task.id },
@@ -139,18 +148,13 @@ async function runTask(
   // Checks status='pending' only (NOT 'claimed'), matching consumeEvents
   // semantics. Orphaned 'claimed' events can never be returned by
   // consumeEvents, so firing the task on them wastes LLM tokens.
+  //
+  // Silent skip: only next_run is advanced. last_run / last_result /
+  // task_run_logs are left alone so the UI history reflects real
+  // executions, not every idle fallback tick.
   if (task.schedule_type === 'event' && task.subscribedEventTypes?.length) {
     if (!hasPendingEventsOfTypes(task.subscribedEventTypes)) {
-      const nextRun = computeNextRun(task);
-      updateTaskAfterRun(task.id, nextRun, 'No pending events');
-      logTaskRun({
-        task_id: task.id,
-        run_at: new Date().toISOString(),
-        duration_ms: Date.now() - startTime,
-        status: 'success',
-        result: 'No pending events (pre-flight)',
-        error: null,
-      });
+      bumpTaskNextRun(task.id, computeNextRun(task));
       return;
     }
   }
@@ -307,6 +311,36 @@ async function runTask(
     );
   }
 
+  // Self-healing claim release: any events the task claimed during
+  // this run but did NOT ack are released back to pending, regardless
+  // of whether the container exited with error or success. Success +
+  // unacked-claims is an LLM drift failure mode (the model silently
+  // skipped update_cluster/ack_event calls) that is indistinguishable
+  // from error at the orchestration layer — both leave the pipeline
+  // stuck until the TTL sweep. The scoped `claimed_at >= runStartIso`
+  // guarantees we never touch claims that belong to a concurrent run
+  // of the same task.
+  //
+  // For observation.* events this is pure win: retries are safe. For
+  // candidate.* events that the solver replies to, a retry after a
+  // mid-run external-write crash could duplicate the Slack message —
+  // but 10 min of stuck state is a worse UX than an occasional
+  // duplicate, and reply_to_event's F6.2 delivery verification
+  // already logs the anomaly.
+  {
+    const runStartIso = new Date(startTime).toISOString();
+    const released = releaseClaimsByTaskId(task.id, runStartIso);
+    if (released > 0) {
+      const level = error ? 'warn' : 'info';
+      logger[level](
+        { taskId: task.id, released, exitedWithError: !!error, error },
+        error
+          ? 'Task failed — released stuck event claims'
+          : 'Task exited success with unacked claims — released (likely LLM drift)',
+      );
+    }
+  }
+
   const durationMs = Date.now() - startTime;
 
   logTaskRun({
@@ -337,12 +371,28 @@ async function runTask(
     consecutiveFailures.delete(task.id);
   }
 
-  const nextRun = computeNextRun(task);
+  let nextRun = computeNextRun(task);
   const resultSummary = error
     ? `Error: ${error}`
     : result
       ? result.slice(0, 200)
       : 'Completed';
+
+  // Phase F2.b: if this was a batched event-driven run and more events
+  // of the subscribed types are still pending, bump next_run to now so
+  // the scheduler picks this task up on the next tick. Without this the
+  // task would wait for fallback_poll_ms before draining the backlog.
+  if (
+    !error &&
+    task.schedule_type === 'event' &&
+    task.batchSize != null &&
+    task.batchSize > 0 &&
+    task.subscribedEventTypes?.length &&
+    hasPendingEventsOfTypes(task.subscribedEventTypes)
+  ) {
+    nextRun = new Date().toISOString();
+  }
+
   updateTaskAfterRun(task.id, nextRun, resultSummary);
 }
 

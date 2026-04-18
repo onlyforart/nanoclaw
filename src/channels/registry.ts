@@ -2,12 +2,19 @@ import {
   Channel,
   OnInboundMessage,
   OnChatMetadata,
+  OnReaction,
   RegisteredGroup,
 } from '../types.js';
 
 export interface ChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
+  /**
+   * Optional: channels that can surface user reactions on messages
+   * invoke this to feed the pipeline approval reacji handler (F5b).
+   * Channels without reaction support omit it.
+   */
+  onReaction?: OnReaction;
   registeredGroups: () => Record<string, RegisteredGroup>;
 }
 

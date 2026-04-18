@@ -156,6 +156,60 @@ describe('consume_events IPC', () => {
     expect(result.success).toBe(false);
   });
 
+  it('tolerates sloppy LLM event-type noise (pipe delimiters)', async () => {
+    // Real regression seen from gemma4 monitor: "|observation.*|" instead
+    // of "observation.*". Without normalisation this matches zero rows
+    // and silently starves the consumer task.
+    publishEvent('observation.passive', 'g', null, '{"obs":1}');
+    publishEvent('observation.passive', 'g', null, '{"obs":2}');
+
+    const result = await processTaskIpc(
+      {
+        type: 'consume_events',
+        eventTypes: ['|observation.*|'],
+        claimedBy: 'pipeline:monitor',
+        limit: 10,
+      },
+      'slack_main',
+      true,
+      deps,
+    );
+    expect(result.success).toBe(true);
+    expect((result as any).events).toHaveLength(2);
+  });
+
+  it('also tolerates regex-slash and quote delimiters', async () => {
+    publishEvent('candidate.question', 'g', null, '{"q":1}');
+    const result = await processTaskIpc(
+      {
+        type: 'consume_events',
+        eventTypes: [' "/candidate.question/" '],
+        claimedBy: 'pipeline:solver',
+        limit: 5,
+      },
+      'slack_main',
+      true,
+      deps,
+    );
+    expect(result.success).toBe(true);
+    expect((result as any).events).toHaveLength(1);
+  });
+
+  it('rejects when every event type normalises to empty', async () => {
+    const result = await processTaskIpc(
+      {
+        type: 'consume_events',
+        eventTypes: ['|||', '   '],
+        claimedBy: 'c',
+        limit: 5,
+      },
+      'slack_main',
+      true,
+      deps,
+    );
+    expect(result.success).toBe(false);
+  });
+
   // Nonce wrapping tests moved to pipeline plugin (nonce-transform.test.ts)
 });
 

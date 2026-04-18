@@ -70,9 +70,14 @@ If the user doesn't have a Slack app, share [SLACK_SETUP.md](SLACK_SETUP.md) whi
 Quick summary of what's needed:
 1. Create a Slack app at [api.slack.com/apps](https://api.slack.com/apps)
 2. Enable Socket Mode and generate an App-Level Token (`xapp-...`)
-3. Subscribe to bot events: `message.channels`, `message.groups`, `message.im`
-4. Add OAuth scopes: `chat:write`, `channels:history`, `groups:history`, `im:history`, `channels:read`, `groups:read`, `users:read`
+3. Subscribe to bot events: `message.channels`, `message.groups`, `message.im`, `reaction_added`
+4. Add OAuth scopes: `chat:write`, `channels:history`, `groups:history`, `im:history`, `channels:read`, `groups:read`, `users:read`, `reactions:read`
 5. Install to workspace and copy the Bot Token (`xoxb-...`)
+
+The `reaction_added` event + `reactions:read` scope are required for the
+pipeline approval flow (👍 on a PROPOSED REPLY draft in the team
+channel publishes the approved draft to the source thread). Without
+them, reactions are invisible to the bot.
 
 Wait for the user to provide both tokens.
 
