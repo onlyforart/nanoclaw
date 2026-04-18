@@ -32,6 +32,7 @@ export async function assertOutcome(
 
   let clusters: ClusterSnapshot[] = [];
   let events: DownstreamEventRow[] = [];
+  const testObsIds = new Set(injection.observation_ids);
 
   while (Date.now() < deadline) {
     clusters = getClustersByObservations(injection.observation_ids);
@@ -39,7 +40,13 @@ export async function assertOutcome(
       injection.observation_ids,
       injection.started_at,
     );
-    const quick = quickCheck(scenario.expected.clusters, clusters, scenario.expected.events, events);
+    const quick = quickCheck(
+      scenario.expected.clusters,
+      clusters,
+      scenario.expected.events,
+      events,
+      testObsIds,
+    );
     if (quick) break;
     await new Promise((r) => setTimeout(r, POLL_MS));
   }
@@ -49,6 +56,7 @@ export async function assertOutcome(
     clusters,
     scenario.expected.events,
     events,
+    testObsIds,
   );
 
   return {
@@ -65,13 +73,19 @@ function quickCheck(
   gotClusters: ClusterSnapshot[],
   expEvents: ExpectedEvent[],
   gotEvents: DownstreamEventRow[],
+  testObsIds: Set<number>,
 ): boolean {
-  // Quick check: all expected cluster keys appear with the right obs count,
-  // and all expected event types reach at least their target count.
+  // Quick check: all expected cluster keys appear with enough of THIS
+  // test's observations in them (not total cluster size — the cluster
+  // can legitimately contain live traffic too), and all expected event
+  // types reach at least their target count.
   for (const exp of expClusters) {
     const match = gotClusters.find((c) => c.cluster_key === exp.key);
     if (!match) return false;
-    if (match.observation_count < exp.observation_count) return false;
+    const testObsInCluster = match.observation_ids.filter((id) =>
+      testObsIds.has(id),
+    ).length;
+    if (testObsInCluster < exp.observation_count) return false;
     if (exp.status && match.status !== exp.status) return false;
   }
   for (const exp of expEvents) {
@@ -86,6 +100,7 @@ function diagnose(
   gotClusters: ClusterSnapshot[],
   expEvents: ExpectedEvent[],
   gotEvents: DownstreamEventRow[],
+  testObsIds: Set<number>,
 ): string[] {
   const failures: string[] = [];
 
@@ -99,9 +114,12 @@ function diagnose(
       );
       continue;
     }
-    if (match.observation_count !== exp.observation_count) {
+    const testObsInCluster = match.observation_ids.filter((id) =>
+      testObsIds.has(id),
+    ).length;
+    if (testObsInCluster !== exp.observation_count) {
       failures.push(
-        `Cluster "${exp.key}" has observation_count=${match.observation_count}, expected ${exp.observation_count}`,
+        `Cluster "${exp.key}" contains ${testObsInCluster} of this test's observations, expected ${exp.observation_count}`,
       );
     }
     if (exp.status && match.status !== exp.status) {
