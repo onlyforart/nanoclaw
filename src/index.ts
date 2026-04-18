@@ -37,6 +37,7 @@ import {
   getAllRegisteredGroups,
   getAllSessions,
   getAllTasks,
+  getEventPayloadById,
   getMessagesSince,
   getNewMessages,
   getPassiveGroups,
@@ -72,6 +73,7 @@ import {
   completeEditFlow,
   type Reaction,
 } from './reaction-bridge.js';
+import { handlePipelineApprovalReaction } from './pipeline-approval.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -714,7 +716,31 @@ async function main(): Promise<void> {
 
       storeMessage(msg);
     },
-    onReaction: (chatJid: string, reaction: Reaction) => {
+    onReaction: async (chatJid: string, reaction: Reaction) => {
+      // Phase F5b: try the pipeline approval path first. If the reacted
+      // message is a PROPOSED REPLY draft, this handler publishes the
+      // approved text to the source thread and marks the reaction
+      // consumed. Falls through to the legacy proposed_reply/edit flow
+      // otherwise.
+      const channel = channels.find((c) => c.ownsJid(chatJid));
+      if (channel?.fetchMessageText) {
+        try {
+          const handled = await handlePipelineApprovalReaction(reaction, {
+            sendMessage: (jid, text, options) =>
+              channel.sendMessage(jid, text, options),
+            fetchMessageText: (jid, messageId) =>
+              channel.fetchMessageText!(jid, messageId),
+            registeredGroups,
+            getEventPayloadById,
+          });
+          if (handled) return;
+        } catch (err) {
+          logger.warn(
+            { err, chatJid, messageId: reaction.messageId },
+            'Pipeline approval reaction handler threw; falling through',
+          );
+        }
+      }
       handleReaction(reaction);
     },
     onChatMetadata: (

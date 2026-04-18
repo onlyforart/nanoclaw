@@ -191,6 +191,10 @@ export interface Channel {
     passiveJids: string[],
     cursors: Record<string, string>,
   ): Promise<void>;
+  // Optional: fetch the text content of a specific message. Used by
+  // the pipeline approval reacji handler to read draft text from a
+  // team-channel message when a 👍 is reacted.
+  fetchMessageText?(jid: string, messageId: string): Promise<string | null>;
 }
 
 // Callback type that channels use to deliver inbound messages

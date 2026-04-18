@@ -235,6 +235,39 @@ export class SlackChannel implements Channel {
     }
   }
 
+  /**
+   * Fetch the text content of a specific message, given its channel JID
+   * and Slack timestamp. Used by the pipeline approval reacji handler to
+   * read the draft text from a team-channel PROPOSED REPLY before
+   * delivering the approved reply to the source thread.
+   */
+  async fetchMessageText(
+    jid: string,
+    messageId: string,
+  ): Promise<string | null> {
+    const channelId = jid.replace(/^slack:/, '');
+    if (!this.connected) return null;
+    try {
+      const res = await this.app.client.conversations.history({
+        channel: channelId,
+        latest: messageId,
+        oldest: messageId,
+        inclusive: true,
+        limit: 1,
+      });
+      const msg = res.messages?.[0];
+      if (!msg) return null;
+      if (msg.ts !== messageId) return null;
+      return msg.text ?? null;
+    } catch (err) {
+      logger.warn(
+        { jid, messageId, err },
+        'Failed to fetch Slack message text',
+      );
+      return null;
+    }
+  }
+
   isConnected(): boolean {
     return this.connected;
   }
