@@ -17,6 +17,7 @@
     "auth": "tsx src/whatsapp-auth.ts",
     "test": "vitest run",
     "test:watch": "vitest",
+    "pipeline-e2e": "tsx scripts/pipeline-e2e/index.ts",
     "build:webui": "tsc -p webui/tsconfig.json && node webui/scripts/validate-templates.mjs && rm -rf dist/webui/public && cp -r webui/public dist/webui/public",
     "webui": "node dist/webui/start.js",
     "webui:dev": "tsx webui/start.ts"
