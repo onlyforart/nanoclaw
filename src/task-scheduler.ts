@@ -90,7 +90,11 @@ export interface SchedulerDependencies {
     containerName: string,
     groupFolder: string,
   ) => void;
-  sendMessage: (jid: string, text: string) => Promise<void>;
+  sendMessage: (
+    jid: string,
+    text: string,
+    options?: { threadTs?: string },
+  ) => Promise<void>;
   plugin?: PipelinePlugin | null;
 }
 
@@ -125,7 +129,10 @@ async function runTask(
   // Host-side pipeline tasks — delegated to plugin
   if (task.executionMode === 'host_pipeline') {
     if (deps.plugin?.executeHostTask) {
-      await deps.plugin.executeHostTask(task, startTime);
+      await deps.plugin.executeHostTask(task, startTime, {
+        sendMessage: deps.sendMessage,
+        registeredGroups: deps.registeredGroups,
+      });
     } else {
       logger.warn(
         { taskId: task.id },

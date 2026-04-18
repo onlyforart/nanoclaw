@@ -8,7 +8,17 @@
 // Only characters at the leading AND trailing edges are stripped —
 // internal pipes or slashes could be part of a legitimate event type.
 
-const EDGE_NOISE = new Set<string>(['|', '/', '"', "'", '`', ' ', '\t', '\n', '\r']);
+const EDGE_NOISE = new Set<string>([
+  '|',
+  '/',
+  '"',
+  "'",
+  '`',
+  ' ',
+  '\t',
+  '\n',
+  '\r',
+]);
 
 export interface NormalisedEventType {
   /** Cleaned event type, or null if nothing usable remained. */

@@ -770,7 +770,8 @@ function handleConsumeEvents(data: IpcData, deps?: IpcDeps): IpcResult {
   // Small local LLMs (e.g. gemma4) occasionally wrap event types in
   // regex-like delimiters ("|observation.*|") or quotes. That matches
   // zero rows and silently starves the consumer. Strip the noise.
-  const { normalised: eventTypes, anyStripped } = normaliseEventTypes(rawEventTypes);
+  const { normalised: eventTypes, anyStripped } =
+    normaliseEventTypes(rawEventTypes);
   if (anyStripped) {
     logger.warn(
       { claimedBy, rawEventTypes, normalised: eventTypes },

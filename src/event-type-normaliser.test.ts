@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { normaliseEventType, normaliseEventTypes } from './event-type-normaliser.js';
+import {
+  normaliseEventType,
+  normaliseEventTypes,
+} from './event-type-normaliser.js';
 
 describe('normaliseEventType', () => {
   it('passes through a clean glob unchanged', () => {

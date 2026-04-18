@@ -1318,6 +1318,27 @@ export function ackEvent(
   ).run(status, now, note ?? null, eventId);
 }
 
+/**
+ * Release a claimed event back to pending so another consumer can pick
+ * it up. Only releases if the event is still claimed AND still held by
+ * the caller — prevents a stale releaser from un-claiming a freshly
+ * re-claimed row. Returns true iff a row was actually released.
+ *
+ * Used by racing consumers (e.g. Phase F8 trivial-answerer claims
+ * candidate.question first; if it can't handle the specific event, it
+ * releases the claim so the solver picks it up on the next tick).
+ */
+export function releaseEvent(eventId: number, claimedBy: string): boolean {
+  const result = db
+    .prepare(
+      `UPDATE events
+          SET status = 'pending', claimed_by = NULL, claimed_at = NULL
+        WHERE id = ? AND status = 'claimed' AND claimed_by = ?`,
+    )
+    .run(eventId, claimedBy);
+  return result.changes > 0;
+}
+
 export function getRecentEvents(
   types?: string[],
   limit?: number,

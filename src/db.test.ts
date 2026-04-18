@@ -15,6 +15,7 @@ import {
   getTaskById,
   readChatMessages,
   publishEvent,
+  releaseEvent,
   setRegisteredGroup,
   storeChatMetadata,
   storeMessage,
@@ -743,6 +744,61 @@ describe('ackEvent', () => {
     ackEvent(event.id, 'failed', 'LLM returned invalid JSON');
     const events = getRecentEvents(['ack.fail'], 10, true);
     expect(events[0].status).toBe('failed');
+  });
+});
+
+describe('releaseEvent', () => {
+  it('releases a claimed event back to pending so another consumer can claim it', () => {
+    publishEvent('rel.test', 'g', null, '{"n":1}');
+    const [event] = consumeEvents(['rel.test'], 'first', 1);
+    expect(event.status).toBe('claimed');
+    expect(event.claimed_by).toBe('first');
+
+    const released = releaseEvent(event.id, 'first');
+    expect(released).toBe(true);
+
+    const [reclaimed] = consumeEvents(['rel.test'], 'second', 1);
+    expect(reclaimed).toBeDefined();
+    expect(reclaimed.id).toBe(event.id);
+    expect(reclaimed.claimed_by).toBe('second');
+  });
+
+  it('refuses to release an event claimed by someone else', () => {
+    publishEvent('rel.other', 'g', null, '{}');
+    const [event] = consumeEvents(['rel.other'], 'first', 1);
+    const released = releaseEvent(event.id, 'different-consumer');
+    expect(released).toBe(false);
+
+    // still claimed by 'first'
+    const rows = getRecentEvents(['rel.other'], 10, true);
+    expect(rows[0].claimed_by).toBe('first');
+    expect(rows[0].status).toBe('claimed');
+  });
+
+  it('refuses to release an already-acked event', () => {
+    publishEvent('rel.acked', 'g', null, '{}');
+    const [event] = consumeEvents(['rel.acked'], 'c', 1);
+    ackEvent(event.id, 'done');
+
+    const released = releaseEvent(event.id, 'c');
+    expect(released).toBe(false);
+
+    const rows = getRecentEvents(['rel.acked'], 10, true);
+    expect(rows[0].status).toBe('done');
+  });
+
+  it('is a no-op on a pending (unclaimed) event', () => {
+    publishEvent('rel.pending', 'g', null, '{}');
+    const rows = getRecentEvents(['rel.pending'], 10, true);
+    const released = releaseEvent(rows[0].id, 'anyone');
+    expect(released).toBe(false);
+    const after = getRecentEvents(['rel.pending'], 10, true);
+    expect(after[0].status).toBe('pending');
+  });
+
+  it('is a no-op on a non-existent event id', () => {
+    const released = releaseEvent(999_999, 'c');
+    expect(released).toBe(false);
   });
 });
 
