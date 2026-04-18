@@ -132,9 +132,14 @@ export function parseToolResult(result: unknown): unknown {
  * response, terminate. Designed for use from host_pipeline tasks
  * where the caller has no long-lived MCP client.
  */
+// Ceiling is driven by the slowest tool a trivial-answer shape is
+// allowed to call. Browser-driven checks (pagepilot-style stored
+// scripts) routinely take 60–90 s on a live page. Fast health-probe
+// MCP tools return in under 5 s and aren't affected by the raised
+// ceiling.
 export async function invokeMcpTool(
   params: InvokeMcpToolArgs,
-  timeoutMs = 15_000,
+  timeoutMs = 120_000,
 ): Promise<unknown> {
   const entry = resolveStdioServer(params.server);
   if (!toolIsAllowed(entry, params.name)) {
