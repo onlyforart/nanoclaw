@@ -12,8 +12,8 @@ import {
 import {
   getAllTasks,
   getDueTasks,
-  getRecentEvents,
   getTaskById,
+  hasPendingEventsOfTypes,
   logTaskRun,
   updateTask,
   updateTaskAfterRun,
@@ -129,10 +129,12 @@ async function runTask(
     return;
   }
 
-  // Event-driven tasks: pre-flight check — skip container if no pending events
+  // Event-driven tasks: pre-flight check — skip container if no pending events.
+  // Checks status='pending' only (NOT 'claimed'), matching consumeEvents
+  // semantics. Orphaned 'claimed' events can never be returned by
+  // consumeEvents, so firing the task on them wastes LLM tokens.
   if (task.schedule_type === 'event' && task.subscribedEventTypes?.length) {
-    const pending = getRecentEvents(task.subscribedEventTypes, 1, false);
-    if (pending.length === 0) {
+    if (!hasPendingEventsOfTypes(task.subscribedEventTypes)) {
       const nextRun = computeNextRun(task);
       updateTaskAfterRun(task.id, nextRun, 'No pending events');
       logTaskRun({

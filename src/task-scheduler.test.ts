@@ -2,12 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   _initTestDatabase,
+  ackEvent,
+  consumeEvents,
   createTask,
   getTaskById,
-  getRecentEvents,
-  setRegisteredGroup,
-  storeChatMetadata,
-  storeMessage,
+  hasPendingEventsOfTypes,
+  publishEvent,
 } from './db.js';
 import {
   _resetSchedulerLoopForTests,
@@ -236,6 +236,44 @@ describe('task scheduler', () => {
     const delta = new Date(nextRun!).getTime() - Date.now();
     expect(delta).toBeGreaterThan(3500000);
     expect(delta).toBeLessThanOrEqual(3600000);
+  });
+
+  it('hasPendingEventsOfTypes excludes claimed events (orphan claims do not count as pending)', () => {
+    // Publish one observation event (starts as 'pending')
+    publishEvent(
+      'observation.passive',
+      'slack_main',
+      'producer',
+      '{}',
+      null,
+      null,
+    );
+    expect(hasPendingEventsOfTypes(['observation.*'])).toBe(true);
+
+    // Claim it — simulates mid-processing state
+    const claimed = consumeEvents(
+      ['observation.*'],
+      'pipeline:monitor',
+      10,
+    );
+    expect(claimed).toHaveLength(1);
+    // Orphan claim: consumeEvents ran but ackEvent never did (crash mid-run).
+    // The event is now status='claimed' and will never be returned again by
+    // consumeEvents. Pre-flight must NOT count it as work to do, otherwise
+    // the scheduler fires the LLM every fallback tick for nothing.
+    expect(hasPendingEventsOfTypes(['observation.*'])).toBe(false);
+
+    // Ack releases the slot; a fresh publish should be visible again.
+    ackEvent(claimed[0].id, 'done');
+    publishEvent(
+      'observation.passive',
+      'slack_main',
+      'producer',
+      '{}',
+      null,
+      null,
+    );
+    expect(hasPendingEventsOfTypes(['observation.*'])).toBe(true);
   });
 
   it('event-type task stays active after run with null nextRun', async () => {

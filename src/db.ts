@@ -1208,6 +1208,47 @@ export function consumeEvents(
 }
 
 /**
+ * Check whether any events of the given types are currently truly
+ * pending (status='pending'). Used by the scheduler's pre-flight to
+ * decide whether to invoke the consumer task at all.
+ *
+ * This is intentionally narrower than getRecentEvents(..., false),
+ * which counts both 'pending' and 'claimed' as "unprocessed". Orphan
+ * claims (from crashes or restarts mid-processing) can never be
+ * returned by consumeEvents — which only claims 'pending' rows — so
+ * the scheduler should not fire the task on them either, or it burns
+ * LLM tokens on a guaranteed no-op.
+ */
+export function hasPendingEventsOfTypes(types: string[]): boolean {
+  if (!types || types.length === 0) return false;
+
+  const hasGlob = types.some((t) => t.includes('*'));
+  let typeFilter: string;
+  let params: string[];
+  if (hasGlob) {
+    const conditions = types.map(() => 'type LIKE ?');
+    typeFilter = `(${conditions.join(' OR ')})`;
+    params = types.map((t) => t.replace(/\*/g, '%'));
+  } else {
+    const placeholders = types.map(() => '?').join(', ');
+    typeFilter = `type IN (${placeholders})`;
+    params = types;
+  }
+
+  const now = new Date().toISOString();
+  const row = db
+    .prepare(
+      `SELECT 1 AS found FROM events
+        WHERE status = 'pending'
+          AND ${typeFilter}
+          AND (expires_at IS NULL OR expires_at > ?)
+        LIMIT 1`,
+    )
+    .get(...params, now) as { found: number } | undefined;
+  return !!row;
+}
+
+/**
  * Get an event's payload by its ID.
  * Used for pipeline auto-routing: the container passes the consumed event ID,
  * and the host looks up the specific event to extract source context.
