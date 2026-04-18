@@ -30,23 +30,37 @@ export interface ScenarioMessage {
 }
 
 export interface ExpectedCluster {
-  /** Expected cluster_key the monitor should choose. */
+  /**
+   * Expected cluster_key. Accepts exact match ("topic:foo") OR a
+   * regex-like pattern delimited by slashes ("/topic:.*banter.*/"). The
+   * monitor's LLM sometimes chooses related slugs (e.g. topic:banter vs
+   * topic:general-banter) — scenarios should tolerate that where
+   * semantics are equivalent.
+   */
   key: string;
-  /** Expected number of observations in this cluster. */
+  /** Expected number of THIS TEST's injected observations in this cluster. */
   observation_count: number;
   /** If set, the cluster must reach this status (e.g. "resolved"). */
   status?: 'active' | 'resolved';
 }
 
+export type ExpectedEventType =
+  | 'candidate.escalation'
+  | 'candidate.question'
+  | 'candidate.unhandled'
+  | 'human_review_required'
+  | 'pipeline_event_timeout'
+  | 'pipeline_delivery_failed';
+
 export interface ExpectedEvent {
-  type:
-    | 'candidate.escalation'
-    | 'candidate.question'
-    | 'candidate.unhandled'
-    | 'human_review_required'
-    | 'pipeline_event_timeout'
-    | 'pipeline_delivery_failed';
-  /** Expected number of events of this type tied to the cluster. */
+  /**
+   * Expected event type. Can be a single type OR an array of acceptable
+   * types (for scenarios where the LLM may legitimately pick any of
+   * several — e.g. a borderline question/report could fire either
+   * candidate.question or candidate.escalation).
+   */
+  type: ExpectedEventType | ExpectedEventType[];
+  /** Expected number of events matching the type(s). */
   count: number;
   /** Optional payload assertions applied to each matching event. */
   payload_contains?: Record<string, unknown>;
