@@ -311,22 +311,32 @@ async function runTask(
     );
   }
 
-  // Self-healing claim release: upstream LLM 5xx/429, container
-  // crashes, and timeouts all leave any events this task consumed in
-  // the 'claimed' state until the TTL sweep (10+ minutes). That stalls
-  // the pipeline for every ask that happened mid-run. Release those
-  // claims now so the next tick can retry.
+  // Self-healing claim release: any events the task claimed during
+  // this run but did NOT ack are released back to pending, regardless
+  // of whether the container exited with error or success. Success +
+  // unacked-claims is an LLM drift failure mode (the model silently
+  // skipped update_cluster/ack_event calls) that is indistinguishable
+  // from error at the orchestration layer — both leave the pipeline
+  // stuck until the TTL sweep. The scoped `claimed_at >= runStartIso`
+  // guarantees we never touch claims that belong to a concurrent run
+  // of the same task.
   //
-  // Scoped to `claimed_at >= runStartIso` so a concurrent run (if
-  // scheduling ever permits one) doesn't release claims that still
-  // belong to another in-flight instance.
-  if (error) {
+  // For observation.* events this is pure win: retries are safe. For
+  // candidate.* events that the solver replies to, a retry after a
+  // mid-run external-write crash could duplicate the Slack message —
+  // but 10 min of stuck state is a worse UX than an occasional
+  // duplicate, and reply_to_event's F6.2 delivery verification
+  // already logs the anomaly.
+  {
     const runStartIso = new Date(startTime).toISOString();
     const released = releaseClaimsByTaskId(task.id, runStartIso);
     if (released > 0) {
-      logger.warn(
-        { taskId: task.id, released, error },
-        'Task failed — released stuck event claims',
+      const level = error ? 'warn' : 'info';
+      logger[level](
+        { taskId: task.id, released, exitedWithError: !!error, error },
+        error
+          ? 'Task failed — released stuck event claims'
+          : 'Task exited success with unacked claims — released (likely LLM drift)',
       );
     }
   }

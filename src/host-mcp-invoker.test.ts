@@ -7,11 +7,15 @@ import {
 
 describe('toolIsAllowed', () => {
   it('returns true for a tool in a flat array', () => {
-    expect(toolIsAllowed({ tools: ['check_status'] }, 'check_status')).toBe(true);
+    expect(
+      toolIsAllowed({ tools: ['check_status'] }, 'check_status'),
+    ).toBe(true);
   });
 
   it('returns false for an unlisted tool in a flat array', () => {
-    expect(toolIsAllowed({ tools: ['check_status'] }, 'restart_service')).toBe(false);
+    expect(
+      toolIsAllowed({ tools: ['check_status'] }, 'restart_service'),
+    ).toBe(false);
   });
 
   it('returns true for a tool in any access-level bucket', () => {
