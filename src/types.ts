@@ -215,6 +215,22 @@ export interface Channel {
 // Callback type that channels use to deliver inbound messages
 export type OnInboundMessage = (chatJid: string, message: NewMessage) => void;
 
+/**
+ * Callback channels invoke when a user adds/removes a reaction. Used
+ * for the pipeline approval flow (👍 on a team-channel PROPOSED REPLY
+ * draft) and the legacy proposed_reply reacji bridge.
+ */
+export type OnReaction = (
+  chatJid: string,
+  reaction: {
+    emoji: string;
+    userId: string;
+    messageId: string;
+    chatJid: string;
+    timestamp: string;
+  },
+) => void | Promise<void>;
+
 // Callback for chat metadata discovery.
 // name is optional — channels that deliver names inline (Telegram) pass it here;
 // channels that sync names separately (via syncGroups) omit it.
