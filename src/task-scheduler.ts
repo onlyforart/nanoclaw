@@ -349,17 +349,14 @@ async function runTask(
 let schedulerRunning = false;
 const consecutiveFailures = new Map<string, number>();
 
-// Event TTL sweep — runs every N scheduler ticks to avoid thrashing the DB.
-// SCHEDULER_POLL_INTERVAL is typically 1s; sweeping every 60 ticks ≈ 1 min.
-const EVENT_SWEEP_EVERY_N_TICKS = 60;
-let sweepTickCount = 0;
+// Event TTL sweep — runs on every scheduler loop iteration.
+// SCHEDULER_POLL_INTERVAL on the host is 60s, so this translates to one
+// sweep per minute. The sweep is cheap (pure SQL, no LLM); running it
+// every tick keeps the observed latency between an event expiring and
+// being auto-failed ≤ the scheduler poll interval.
 let sweepRules: TtlRule[] | null = null;
 
 function maybeRunEventTimeoutSweep(): void {
-  sweepTickCount += 1;
-  if (sweepTickCount < EVENT_SWEEP_EVERY_N_TICKS) return;
-  sweepTickCount = 0;
-
   if (sweepRules === null) {
     sweepRules = parseEventTtlOverrides(
       process.env.PIPELINE_EVENT_TTL_OVERRIDES,
@@ -413,6 +410,5 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
 /** @internal - for tests only. */
 export function _resetSchedulerLoopForTests(): void {
   schedulerRunning = false;
-  sweepTickCount = 0;
   sweepRules = null;
 }
