@@ -154,9 +154,7 @@ export class SlackChannel implements Channel {
           userId: event.user,
           messageId,
           chatJid: jid,
-          timestamp: new Date(
-            parseFloat(event.event_ts) * 1000,
-          ).toISOString(),
+          timestamp: new Date(parseFloat(event.event_ts) * 1000).toISOString(),
         });
       } catch (err) {
         logger.warn(

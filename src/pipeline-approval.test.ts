@@ -448,7 +448,9 @@ describe('F5b.2 — helper parsers', () => {
   it('normaliseReactionEmoji: strips Slack skin-tone modifiers', () => {
     expect(normaliseReactionEmoji('+1::skin-tone-2')).toBe('+1');
     expect(normaliseReactionEmoji('thumbsup::skin-tone-4')).toBe('thumbsup');
-    expect(normaliseReactionEmoji('thumbsdown::skin-tone-6')).toBe('thumbsdown');
+    expect(normaliseReactionEmoji('thumbsdown::skin-tone-6')).toBe(
+      'thumbsdown',
+    );
   });
 
   it('normaliseReactionEmoji: leaves unmodified emoji alone', () => {
@@ -483,12 +485,11 @@ React 👍 to approve.`;
         string,
         RegisteredGroup
       >,
-      getEventPayloadById: vi.fn(
-        (): string | undefined =>
-          JSON.stringify({
-            source_channel: 'slack:CDEV',
-            source_message_id: 'ts-original',
-          }),
+      getEventPayloadById: vi.fn((): string | undefined =>
+        JSON.stringify({
+          source_channel: 'slack:CDEV',
+          source_message_id: 'ts-original',
+        }),
       ),
     };
 
