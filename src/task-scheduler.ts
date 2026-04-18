@@ -16,6 +16,7 @@ import {
   writeTasksSnapshot,
 } from './container-runner.js';
 import {
+  bumpTaskNextRun,
   getAllTasks,
   getDueTasks,
   getTaskById,
@@ -139,18 +140,13 @@ async function runTask(
   // Checks status='pending' only (NOT 'claimed'), matching consumeEvents
   // semantics. Orphaned 'claimed' events can never be returned by
   // consumeEvents, so firing the task on them wastes LLM tokens.
+  //
+  // Silent skip: only next_run is advanced. last_run / last_result /
+  // task_run_logs are left alone so the UI history reflects real
+  // executions, not every idle fallback tick.
   if (task.schedule_type === 'event' && task.subscribedEventTypes?.length) {
     if (!hasPendingEventsOfTypes(task.subscribedEventTypes)) {
-      const nextRun = computeNextRun(task);
-      updateTaskAfterRun(task.id, nextRun, 'No pending events');
-      logTaskRun({
-        task_id: task.id,
-        run_at: new Date().toISOString(),
-        duration_ms: Date.now() - startTime,
-        status: 'success',
-        result: 'No pending events (pre-flight)',
-        error: null,
-      });
+      bumpTaskNextRun(task.id, computeNextRun(task));
       return;
     }
   }

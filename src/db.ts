@@ -838,6 +838,18 @@ export function updateTaskAfterRun(
   ).run(nextRun, now, lastResult, nextRun, id);
 }
 
+/**
+ * Advance only next_run, leaving last_run / last_result / status untouched.
+ * Used for no-op scheduler skips (e.g. pre-flight: no pending events) so
+ * the task's displayed history keeps reflecting the last REAL execution
+ * rather than flipping to "ran just now" every minute.
+ */
+export function bumpTaskNextRun(id: string, nextRun: string | null): void {
+  db.prepare(
+    `UPDATE scheduled_tasks SET next_run = ? WHERE id = ?`,
+  ).run(nextRun, id);
+}
+
 export function logTaskRun(log: TaskRunLog): void {
   db.prepare(
     `
