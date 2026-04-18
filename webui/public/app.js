@@ -2226,6 +2226,26 @@ const AppClusterDetail = {
           <div v-else class="text-center py-8 text-gray-400">No observations</div>
         </div>
       </div>
+
+      <!-- Downstream events journal (Phase F6) -->
+      <div class="mt-6 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+        <h2 class="text-sm font-semibold mb-3 text-gray-500 uppercase">Downstream events ({{ (cluster.downstreamEvents || []).length }})</h2>
+        <div v-if="cluster.downstreamEvents && cluster.downstreamEvents.length" class="space-y-2 max-h-[32rem] overflow-y-auto">
+          <div v-for="e in cluster.downstreamEvents" :key="e.id" class="bg-gray-50 dark:bg-gray-900 rounded-lg p-3">
+            <div class="flex items-center justify-between text-xs mb-1">
+              <span class="font-mono">#{{ e.id }} · <span :class="eventTypeClass(e.type)" class="px-2 py-0.5 rounded-full font-medium">{{ e.type }}</span></span>
+              <span class="text-gray-500">{{ new Date(e.createdAt).toLocaleString() }}</span>
+            </div>
+            <div class="text-xs text-gray-500 mb-1">
+              status: <span class="font-mono">{{ e.status }}</span>
+              <span v-if="e.resultNote"> · {{ e.resultNote }}</span>
+              <span v-if="e.processedAt"> · processed {{ new Date(e.processedAt).toLocaleString() }}</span>
+            </div>
+            <pre v-if="e.payload" class="text-xs font-mono whitespace-pre-wrap bg-gray-100 dark:bg-gray-800 rounded p-2 mt-1 max-h-32 overflow-y-auto">{{ JSON.stringify(e.payload, null, 2) }}</pre>
+          </div>
+        </div>
+        <div v-else class="text-center py-4 text-gray-400 text-sm">No downstream events yet</div>
+      </div>
     </div>
     <div v-else-if="loading" class="text-center py-20 text-gray-400">Loading...</div>
     <div v-else class="text-center py-20 text-gray-400">Cluster not found</div>
@@ -2237,6 +2257,15 @@ const AppClusterDetail = {
     const statusClass = (s) => {
       if (s === 'active') return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200';
       if (s === 'resolved') return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200';
+      return 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300';
+    };
+
+    const eventTypeClass = (t) => {
+      if (t === 'candidate.escalation') return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200';
+      if (t === 'candidate.question') return 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200';
+      if (t === 'human_review_required') return 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200';
+      if (t === 'candidate.unhandled') return 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300';
+      if (t === 'pipeline_delivery_failed') return 'bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200';
       return 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300';
     };
 
@@ -2252,7 +2281,7 @@ const AppClusterDetail = {
     };
 
     onMounted(fetchCluster);
-    return { cluster, loading, statusClass, channelName };
+    return { cluster, loading, statusClass, eventTypeClass, channelName };
   },
 };
 

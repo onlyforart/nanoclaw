@@ -26,8 +26,7 @@ export interface ProposedReplyParsed {
 const PROPOSED_REPLY_HEADER = /PROPOSED REPLY for event (\d+)/i;
 // Draft block: *Draft reply:* followed by one or more lines prefixed
 // with "> ". Block ends at the next blank line or the next *section*.
-const DRAFT_BLOCK_MATCHER =
-  /\*Draft reply:\*\s*\n((?:>[^\n]*\n?)+)/i;
+const DRAFT_BLOCK_MATCHER = /\*Draft reply:\*\s*\n((?:>[^\n]*\n?)+)/i;
 
 /**
  * Parse a team-channel message for the PROPOSED REPLY format emitted
@@ -50,7 +49,10 @@ export function parseProposedReply(text: string): ProposedReplyParsed | null {
     .map((line) => line.replace(/^>\s?/, ''));
   if (lines.length === 0) return null;
 
-  return { eventId, draft: lines.join('\n').trim() || null } as ProposedReplyParsed;
+  return {
+    eventId,
+    draft: lines.join('\n').trim() || null,
+  } as ProposedReplyParsed;
 }
 
 const APPROVE_EMOJI = new Set(['thumbsup', '+1', 'thumbs_up']);

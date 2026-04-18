@@ -620,6 +620,44 @@ export function getClusterObservations(ids: number[]): ClusterObservationRow[] {
     .all(...ids) as ClusterObservationRow[];
 }
 
+export interface DownstreamEventRow {
+  id: number;
+  type: string;
+  status: string;
+  created_at: string;
+  processed_at: string | null;
+  result_note: string | null;
+  payload: string;
+}
+
+/**
+ * Fetch candidate.* / human_review_required / delivery events that
+ * reference any of the given observation ids in their payload. Used by
+ * the cluster journal UI to show the downstream flow per cluster
+ * (Phase F6).
+ */
+export function getDownstreamEventsForObservations(
+  observationIds: number[],
+): DownstreamEventRow[] {
+  if (observationIds.length === 0) return [];
+  const placeholders = observationIds.map(() => '?').join(',');
+  return db
+    .prepare(
+      `SELECT e.id, e.type, e.status, e.created_at, e.processed_at,
+              e.result_note, e.payload
+         FROM events e
+        WHERE (e.type LIKE 'candidate.%'
+               OR e.type = 'human_review_required'
+               OR e.type = 'pipeline_delivery_failed')
+          AND EXISTS (
+            SELECT 1 FROM json_each(json_extract(e.payload, '$.observation_ids')) je
+             WHERE je.value IN (${placeholders})
+          )
+        ORDER BY e.created_at ASC, e.id ASC`,
+    )
+    .all(...observationIds) as DownstreamEventRow[];
+}
+
 export function upsertLabel(
   observationId: number,
   fields: {

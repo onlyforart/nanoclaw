@@ -38,6 +38,21 @@ beforeEach(() => {
       raw_text TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
+    CREATE TABLE events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT NOT NULL,
+      source_group TEXT,
+      source_task_id TEXT,
+      payload TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      dedupe_key TEXT,
+      ttl_seconds INTEGER,
+      claimed_by TEXT,
+      claimed_at TEXT,
+      created_at TEXT NOT NULL,
+      processed_at TEXT,
+      result_note TEXT
+    );
   `);
 
   // 3 clusters: active (newest), resolved (middle), expired (oldest)

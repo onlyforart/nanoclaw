@@ -91,12 +91,11 @@ describe('handlePipelineApprovalReaction — F5b dispatch', () => {
         string,
         RegisteredGroup
       >,
-      getEventPayloadById: vi.fn(
-        (): string | undefined =>
-          JSON.stringify({
-            source_channel: 'slack:CDEV',
-            source_message_id: 'ts-original',
-          }),
+      getEventPayloadById: vi.fn((): string | undefined =>
+        JSON.stringify({
+          source_channel: 'slack:CDEV',
+          source_message_id: 'ts-original',
+        }),
       ),
     };
   }
@@ -127,10 +126,7 @@ React 👍 to approve.`;
     );
 
     expect(handled).toBe(true);
-    expect(deps.fetchMessageText).toHaveBeenCalledWith(
-      'slack:CDEV',
-      'ts-team',
-    );
+    expect(deps.fetchMessageText).toHaveBeenCalledWith('slack:CDEV', 'ts-team');
     expect(deps.sendMessage).toHaveBeenCalledWith(
       'slack:CDEV',
       'approved text here',

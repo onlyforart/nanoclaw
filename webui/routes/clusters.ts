@@ -2,6 +2,7 @@ import {
   getClusters,
   getClusterById,
   getClusterObservations,
+  getDownstreamEventsForObservations,
   type ClusterStatus,
 } from '../db.js';
 import { HttpError } from '../router.js';
@@ -26,9 +27,20 @@ export interface ClusterObservationResponse {
   createdAt: string;
 }
 
+export interface DownstreamEventResponse {
+  id: number;
+  type: string;
+  status: string;
+  createdAt: string;
+  processedAt: string | null;
+  resultNote: string | null;
+  payload: Record<string, unknown> | null;
+}
+
 export interface ClusterDetailResponse extends ClusterListResponse {
   observationIds: number[];
   observations: ClusterObservationResponse[];
+  downstreamEvents: DownstreamEventResponse[];
 }
 
 function parseStatus(raw: string | undefined): ClusterStatus | undefined {
@@ -95,9 +107,33 @@ export function handleGetCluster(id: number): ClusterDetailResponse {
     createdAt: o.created_at,
   }));
 
+  const downstreamEvents = getDownstreamEventsForObservations(
+    observationIds,
+  ).map((e) => {
+    let payload: Record<string, unknown> | null = null;
+    try {
+      const parsed = JSON.parse(e.payload);
+      if (parsed && typeof parsed === 'object') {
+        payload = parsed as Record<string, unknown>;
+      }
+    } catch {
+      /* malformed — drop payload */
+    }
+    return {
+      id: e.id,
+      type: e.type,
+      status: e.status,
+      createdAt: e.created_at,
+      processedAt: e.processed_at,
+      resultNote: e.result_note,
+      payload,
+    };
+  });
+
   return {
     ...formatListRow(row),
     observationIds,
     observations,
+    downstreamEvents,
   };
 }
