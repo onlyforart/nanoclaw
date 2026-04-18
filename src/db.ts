@@ -1339,6 +1339,33 @@ export function releaseEvent(eventId: number, claimedBy: string): boolean {
   return result.changes > 0;
 }
 
+/**
+ * Bulk-release all events a task still holds since the given timestamp.
+ * Used when a container task exits with an error (e.g. upstream LLM
+ * 500/429, container crash, process kill): any events it claimed during
+ * that run should be returned to the pool rather than waiting for the
+ * TTL sweep. Returns the number of rows released.
+ *
+ * The `claimedSince` filter prevents releasing events from an earlier
+ * successful run of the same task that failed to ack (those are
+ * genuine orphans that the TTL sweep handles).
+ */
+export function releaseClaimsByTaskId(
+  claimedBy: string,
+  claimedSince: string,
+): number {
+  const result = db
+    .prepare(
+      `UPDATE events
+          SET status = 'pending', claimed_by = NULL, claimed_at = NULL
+        WHERE status = 'claimed'
+          AND claimed_by = ?
+          AND claimed_at >= ?`,
+    )
+    .run(claimedBy, claimedSince);
+  return result.changes;
+}
+
 export function getRecentEvents(
   types?: string[],
   limit?: number,

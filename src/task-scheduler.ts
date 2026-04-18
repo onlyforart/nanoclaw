@@ -22,6 +22,7 @@ import {
   getTaskById,
   hasPendingEventsOfTypes,
   logTaskRun,
+  releaseClaimsByTaskId,
   updateTask,
   updateTaskAfterRun,
 } from './db.js';
@@ -308,6 +309,26 @@ async function runTask(
       { taskId: task.id, group: task.group_folder, error },
       'Task failed',
     );
+  }
+
+  // Self-healing claim release: upstream LLM 5xx/429, container
+  // crashes, and timeouts all leave any events this task consumed in
+  // the 'claimed' state until the TTL sweep (10+ minutes). That stalls
+  // the pipeline for every ask that happened mid-run. Release those
+  // claims now so the next tick can retry.
+  //
+  // Scoped to `claimed_at >= runStartIso` so a concurrent run (if
+  // scheduling ever permits one) doesn't release claims that still
+  // belong to another in-flight instance.
+  if (error) {
+    const runStartIso = new Date(startTime).toISOString();
+    const released = releaseClaimsByTaskId(task.id, runStartIso);
+    if (released > 0) {
+      logger.warn(
+        { taskId: task.id, released, error },
+        'Task failed — released stuck event claims',
+      );
+    }
   }
 
   const durationMs = Date.now() - startTime;

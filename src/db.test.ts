@@ -15,6 +15,7 @@ import {
   getTaskById,
   readChatMessages,
   publishEvent,
+  releaseClaimsByTaskId,
   releaseEvent,
   setRegisteredGroup,
   storeChatMetadata,
@@ -799,6 +800,82 @@ describe('releaseEvent', () => {
   it('is a no-op on a non-existent event id', () => {
     const released = releaseEvent(999_999, 'c');
     expect(released).toBe(false);
+  });
+});
+
+describe('releaseClaimsByTaskId', () => {
+  it('releases all events claimed by a task at or after the given timestamp', () => {
+    publishEvent('claim.a', 'g', null, '{"n":1}');
+    publishEvent('claim.a', 'g', null, '{"n":2}');
+    publishEvent('claim.a', 'g', null, '{"n":3}');
+
+    const before = new Date(Date.now() - 1000).toISOString();
+    consumeEvents(['claim.a'], 'pipeline:solver', 10);
+
+    const released = releaseClaimsByTaskId('pipeline:solver', before);
+    expect(released).toBe(3);
+
+    const rows = getRecentEvents(['claim.a'], 10, true);
+    expect(rows.map((r) => r.status).sort()).toEqual([
+      'pending',
+      'pending',
+      'pending',
+    ]);
+    expect(rows.every((r) => r.claimed_by === null)).toBe(true);
+  });
+
+  it('does not release events claimed by a different task', () => {
+    publishEvent('claim.b', 'g', null, '{}');
+    publishEvent('claim.b', 'g', null, '{}');
+    const before = new Date(Date.now() - 1000).toISOString();
+
+    consumeEvents(['claim.b'], 'pipeline:monitor', 1);
+    consumeEvents(['claim.b'], 'pipeline:solver', 1);
+
+    const released = releaseClaimsByTaskId('pipeline:solver', before);
+    expect(released).toBe(1);
+
+    const rows = getRecentEvents(['claim.b'], 10, true);
+    const monitorRow = rows.find((r) => r.claimed_by === 'pipeline:monitor');
+    const releasedRow = rows.find((r) => r.claimed_by === null);
+    expect(monitorRow?.status).toBe('claimed');
+    expect(releasedRow?.status).toBe('pending');
+  });
+
+  it('honours the claimedSince filter — claims older than since are preserved', () => {
+    publishEvent('claim.old', 'g', null, '{}');
+    consumeEvents(['claim.old'], 'pipeline:solver', 1);
+
+    // Passing a `since` in the future means the just-claimed row is
+    // "older than" `since` and must not be released. This is the
+    // guard that prevents releasing claims from an earlier, completed
+    // run of the same task.
+    const futureSince = new Date(Date.now() + 60_000).toISOString();
+    expect(releaseClaimsByTaskId('pipeline:solver', futureSince)).toBe(0);
+
+    const rows = getRecentEvents(['claim.old'], 10, true);
+    expect(rows[0].status).toBe('claimed');
+  });
+
+  it('returns 0 when there are no claimed events to release', () => {
+    const released = releaseClaimsByTaskId(
+      'pipeline:solver',
+      new Date(0).toISOString(),
+    );
+    expect(released).toBe(0);
+  });
+
+  it('does not re-release already-acked events', () => {
+    publishEvent('claim.acked', 'g', null, '{}');
+    const before = new Date(Date.now() - 1000).toISOString();
+    const [event] = consumeEvents(['claim.acked'], 'pipeline:solver', 1);
+    ackEvent(event.id, 'done');
+
+    const released = releaseClaimsByTaskId('pipeline:solver', before);
+    expect(released).toBe(0);
+
+    const rows = getRecentEvents(['claim.acked'], 10, true);
+    expect(rows[0].status).toBe('done');
   });
 });
 
