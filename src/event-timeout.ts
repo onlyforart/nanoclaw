@@ -74,9 +74,7 @@ export function resolveTtlForType(
  * rules array. Overrides land BEFORE defaults so they win on first-match.
  * Malformed JSON falls back to defaults with a log warning — never throws.
  */
-export function parseEventTtlOverrides(
-  raw: string | undefined,
-): TtlRule[] {
+export function parseEventTtlOverrides(raw: string | undefined): TtlRule[] {
   if (!raw) return [...DEFAULT_EVENT_TTL_RULES];
 
   let parsed: Record<string, unknown>;
@@ -171,7 +169,9 @@ export function sweepExpiredEvents(
       if (res.changes === 0) continue; // raced with another writer
       auto_failed.push({ id: v.id, type: v.type });
 
-      const shouldNotify = notifyTypeGlobs.some((g) => typeMatchesGlob(v.type, g));
+      const shouldNotify = notifyTypeGlobs.some((g) =>
+        typeMatchesGlob(v.type, g),
+      );
       if (shouldNotify) {
         const meta = extractNotifyMeta(v.payload);
         publishEvent(
