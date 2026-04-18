@@ -58,6 +58,47 @@ export function parseProposedReply(text: string): ProposedReplyParsed | null {
 const APPROVE_EMOJI = new Set(['thumbsup', '+1', 'thumbs_up']);
 const REJECT_EMOJI = new Set(['thumbsdown', '-1', 'thumbs_down']);
 
+const DEFAULT_APPROVAL_TIMEOUT_MS = 15 * 60 * 1000;
+
+/**
+ * Parse the allowed approver list from an env-style comma-separated string.
+ * Empty / unset → null (no restriction — anyone may approve).
+ */
+export function parseApproverList(raw: string | undefined): Set<string> | null {
+  if (!raw) return null;
+  const entries = raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  if (entries.length === 0) return null;
+  return new Set(entries);
+}
+
+/**
+ * Parse the approval timeout env var. Invalid / unset → default.
+ */
+export function parseApprovalTimeoutMs(raw: string | undefined): number {
+  if (!raw) return DEFAULT_APPROVAL_TIMEOUT_MS;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_APPROVAL_TIMEOUT_MS;
+  return n;
+}
+
+/**
+ * Slack-style message timestamps are seconds since epoch as a string,
+ * e.g. "1730000000.000100". Other channels may use ISO strings. Return
+ * a milliseconds-since-epoch number, or null if unparseable.
+ */
+export function parseMessageTs(ts: string): number | null {
+  if (!ts) return null;
+  // Slack: numeric seconds with fraction
+  const asNum = Number(ts);
+  if (Number.isFinite(asNum) && asNum > 1e9) return asNum * 1000;
+  // ISO date
+  const asDate = Date.parse(ts);
+  return Number.isFinite(asDate) ? asDate : null;
+}
+
 export interface PipelineApprovalDeps {
   sendMessage: (
     jid: string,
@@ -76,6 +117,18 @@ export interface PipelineApprovalDeps {
   registeredGroups: Record<string, RegisteredGroup>;
   /** Looks up an event payload by id. Returns the payload JSON or undefined. */
   getEventPayloadById: (eventId: number) => string | undefined;
+  /**
+   * Allowed approver user ids. null = no restriction. Populated from
+   * PIPELINE_APPROVER_USER_IDS in production.
+   */
+  approverUserIds?: Set<string> | null;
+  /**
+   * Max age of the team-channel draft that can still be approved, in ms.
+   * After this elapses, a 👍 reaction is rejected with an expiry note
+   * posted to the team channel. Default 15 min. From
+   * PIPELINE_APPROVAL_TIMEOUT_MS in production.
+   */
+  approvalTimeoutMs?: number;
 }
 
 /**
@@ -106,6 +159,49 @@ export async function handlePipelineApprovalReaction(
       { eventId: parsed.eventId, by: reaction.userId },
       'F5b proposed reply rejected',
     );
+    return true;
+  }
+
+  // Approver allowlist gate (F5b.2): if configured, reject reactions
+  // from users outside the list. Silent — do NOT leak who the allowed
+  // approvers are into the team channel.
+  if (deps.approverUserIds && !deps.approverUserIds.has(reaction.userId)) {
+    logger.info(
+      { eventId: parsed.eventId, userId: reaction.userId },
+      'F5b approval ignored — approver not in allowlist',
+    );
+    return true;
+  }
+
+  // Approval timeout gate (F5b.2): drafts older than approvalTimeoutMs
+  // can no longer be approved. The team-channel message timestamp is
+  // authoritative (the draft landed when the message was posted). If
+  // the timestamp is unparseable, proceed — the clock check is a
+  // best-effort guardrail, not a security boundary.
+  const timeoutMs = deps.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS;
+  const draftTs = parseMessageTs(reaction.messageId);
+  if (draftTs != null && Date.now() - draftTs > timeoutMs) {
+    logger.info(
+      {
+        eventId: parsed.eventId,
+        ageMs: Date.now() - draftTs,
+        timeoutMs,
+      },
+      'F5b approval rejected — draft expired',
+    );
+    const minutes = Math.round(timeoutMs / 60000);
+    try {
+      await deps.sendMessage(
+        reaction.chatJid,
+        `Draft for event ${parsed.eventId} has expired (no approval within ${minutes} minutes). Please re-run the investigation or reply manually.`,
+        { threadTs: reaction.messageId },
+      );
+    } catch (err) {
+      logger.warn(
+        { err, eventId: parsed.eventId },
+        'F5b failed to post expiry note to team channel',
+      );
+    }
     return true;
   }
 

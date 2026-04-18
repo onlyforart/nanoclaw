@@ -73,7 +73,11 @@ import {
   completeEditFlow,
   type Reaction,
 } from './reaction-bridge.js';
-import { handlePipelineApprovalReaction } from './pipeline-approval.js';
+import {
+  handlePipelineApprovalReaction,
+  parseApprovalTimeoutMs,
+  parseApproverList,
+} from './pipeline-approval.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -732,6 +736,12 @@ async function main(): Promise<void> {
               channel.fetchMessageText!(jid, messageId),
             registeredGroups,
             getEventPayloadById,
+            approverUserIds: parseApproverList(
+              process.env.PIPELINE_APPROVER_USER_IDS,
+            ),
+            approvalTimeoutMs: parseApprovalTimeoutMs(
+              process.env.PIPELINE_APPROVAL_TIMEOUT_MS,
+            ),
           });
           if (handled) return;
         } catch (err) {

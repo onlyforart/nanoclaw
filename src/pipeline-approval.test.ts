@@ -1,6 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 
 import {
+  parseApprovalTimeoutMs,
+  parseApproverList,
+  parseMessageTs,
   parseProposedReply,
   handlePipelineApprovalReaction,
 } from './pipeline-approval.js';
@@ -193,5 +196,251 @@ React 👍 to approve.`;
       (c) => c[1] === 'approved text here',
     );
     expect(call).toBeUndefined();
+  });
+});
+
+describe('F5b.2 — approver allowlist', () => {
+  const DEV: RegisteredGroup = {
+    name: 'dev',
+    folder: 'slack_dev',
+    trigger: '@bot',
+    added_at: '2024-01-01T00:00:00.000Z',
+  };
+  const SAMPLE = `🟡 PROPOSED REPLY for event 42 on slack:CDEV
+*Draft reply:*
+> approved text here
+
+React 👍 to approve.`;
+
+  function nowTs(): string {
+    return String((Date.now() / 1000).toFixed(6));
+  }
+
+  function makeDeps(
+    approverUserIds: Set<string> | null,
+    approvalTimeoutMs?: number,
+  ) {
+    return {
+      sendMessage: vi.fn().mockResolvedValue(undefined),
+      fetchMessageText: vi.fn().mockResolvedValue(SAMPLE),
+      registeredGroups: { 'slack:CDEV': DEV } as Record<
+        string,
+        RegisteredGroup
+      >,
+      getEventPayloadById: vi.fn(
+        (): string | undefined =>
+          JSON.stringify({
+            source_channel: 'slack:CDEV',
+            source_message_id: 'ts-original',
+          }),
+      ),
+      approverUserIds,
+      approvalTimeoutMs,
+    };
+  }
+
+  it('F5b2.1 — unset approver list → anyone can approve (backwards compat)', async () => {
+    const deps = makeDeps(null);
+    const handled = await handlePipelineApprovalReaction(
+      {
+        emoji: 'thumbsup',
+        userId: 'U_ANYONE',
+        messageId: nowTs(),
+        chatJid: 'slack:CDEV',
+        timestamp: new Date().toISOString(),
+      },
+      deps,
+    );
+    expect(handled).toBe(true);
+    expect(deps.sendMessage).toHaveBeenCalledWith(
+      'slack:CDEV',
+      'approved text here',
+      { threadTs: 'ts-original' },
+    );
+  });
+
+  it('F5b2.2 — user outside allowlist → reaction consumed, no source-thread post', async () => {
+    const deps = makeDeps(new Set(['U_ALLOWED']));
+    const handled = await handlePipelineApprovalReaction(
+      {
+        emoji: 'thumbsup',
+        userId: 'U_RANDOM',
+        messageId: nowTs(),
+        chatJid: 'slack:CDEV',
+        timestamp: new Date().toISOString(),
+      },
+      deps,
+    );
+    expect(handled).toBe(true);
+    const draftCall = deps.sendMessage.mock.calls.find(
+      (c) => c[1] === 'approved text here',
+    );
+    expect(draftCall).toBeUndefined();
+  });
+
+  it('F5b2.3 — user in allowlist → approval proceeds', async () => {
+    const deps = makeDeps(new Set(['U_ALLOWED', 'U_ONCALL']));
+    const handled = await handlePipelineApprovalReaction(
+      {
+        emoji: 'thumbsup',
+        userId: 'U_ONCALL',
+        messageId: nowTs(),
+        chatJid: 'slack:CDEV',
+        timestamp: new Date().toISOString(),
+      },
+      deps,
+    );
+    expect(handled).toBe(true);
+    expect(deps.sendMessage).toHaveBeenCalledWith(
+      'slack:CDEV',
+      'approved text here',
+      { threadTs: 'ts-original' },
+    );
+  });
+});
+
+describe('F5b.2 — approval timeout', () => {
+  const DEV: RegisteredGroup = {
+    name: 'dev',
+    folder: 'slack_dev',
+    trigger: '@bot',
+    added_at: '2024-01-01T00:00:00.000Z',
+  };
+  const SAMPLE = `🟡 PROPOSED REPLY for event 42 on slack:CDEV
+*Draft reply:*
+> approved text here
+
+React 👍 to approve.`;
+
+  function makeDeps(approvalTimeoutMs?: number) {
+    return {
+      sendMessage: vi.fn().mockResolvedValue(undefined),
+      fetchMessageText: vi.fn().mockResolvedValue(SAMPLE),
+      registeredGroups: { 'slack:CDEV': DEV } as Record<
+        string,
+        RegisteredGroup
+      >,
+      getEventPayloadById: vi.fn(
+        (): string | undefined =>
+          JSON.stringify({
+            source_channel: 'slack:CDEV',
+            source_message_id: 'ts-original',
+          }),
+      ),
+      approvalTimeoutMs,
+    };
+  }
+
+  it('F5b2.4 — expired draft (ts older than timeout) → reaction consumed, no source-thread post, expiry note to team', async () => {
+    const deps = makeDeps(60_000); // 1 min
+    const twoMinAgoTs = String(((Date.now() - 2 * 60_000) / 1000).toFixed(6));
+
+    const handled = await handlePipelineApprovalReaction(
+      {
+        emoji: 'thumbsup',
+        userId: 'U_ANYONE',
+        messageId: twoMinAgoTs,
+        chatJid: 'slack:CDEV',
+        timestamp: new Date().toISOString(),
+      },
+      deps,
+    );
+
+    expect(handled).toBe(true);
+    const draftCall = deps.sendMessage.mock.calls.find(
+      (c) => c[1] === 'approved text here',
+    );
+    expect(draftCall).toBeUndefined();
+
+    const expiryCall = deps.sendMessage.mock.calls.find(
+      (c) => typeof c[1] === 'string' && c[1].includes('expired'),
+    );
+    expect(expiryCall).toBeDefined();
+    expect(expiryCall![0]).toBe('slack:CDEV');
+  });
+
+  it('F5b2.5 — fresh draft under timeout → approval proceeds', async () => {
+    const deps = makeDeps(60_000);
+    const nowTs = String((Date.now() / 1000).toFixed(6));
+
+    const handled = await handlePipelineApprovalReaction(
+      {
+        emoji: 'thumbsup',
+        userId: 'U_ANYONE',
+        messageId: nowTs,
+        chatJid: 'slack:CDEV',
+        timestamp: new Date().toISOString(),
+      },
+      deps,
+    );
+
+    expect(handled).toBe(true);
+    expect(deps.sendMessage).toHaveBeenCalledWith(
+      'slack:CDEV',
+      'approved text here',
+      { threadTs: 'ts-original' },
+    );
+  });
+
+  it('F5b2.6 — unparseable ts → proceeds (best-effort guard, not security)', async () => {
+    const deps = makeDeps(60_000);
+    const handled = await handlePipelineApprovalReaction(
+      {
+        emoji: 'thumbsup',
+        userId: 'U_ANYONE',
+        messageId: 'not-a-ts',
+        chatJid: 'slack:CDEV',
+        timestamp: new Date().toISOString(),
+      },
+      deps,
+    );
+    expect(handled).toBe(true);
+    expect(deps.sendMessage).toHaveBeenCalledWith(
+      'slack:CDEV',
+      'approved text here',
+      { threadTs: 'ts-original' },
+    );
+  });
+});
+
+describe('F5b.2 — helper parsers', () => {
+  it('parseApproverList: null-like → null', () => {
+    expect(parseApproverList(undefined)).toBeNull();
+    expect(parseApproverList('')).toBeNull();
+    expect(parseApproverList('   ')).toBeNull();
+    expect(parseApproverList(',')).toBeNull();
+  });
+
+  it('parseApproverList: csv with whitespace trimmed', () => {
+    expect(parseApproverList('U1, U2 ,U3')).toEqual(new Set(['U1', 'U2', 'U3']));
+  });
+
+  it('parseApprovalTimeoutMs: unset/invalid → 15 min default', () => {
+    expect(parseApprovalTimeoutMs(undefined)).toBe(15 * 60 * 1000);
+    expect(parseApprovalTimeoutMs('')).toBe(15 * 60 * 1000);
+    expect(parseApprovalTimeoutMs('abc')).toBe(15 * 60 * 1000);
+    expect(parseApprovalTimeoutMs('0')).toBe(15 * 60 * 1000);
+    expect(parseApprovalTimeoutMs('-5000')).toBe(15 * 60 * 1000);
+  });
+
+  it('parseApprovalTimeoutMs: valid number passes through', () => {
+    expect(parseApprovalTimeoutMs('300000')).toBe(300000);
+  });
+
+  it('parseMessageTs: Slack-style epoch-second string → ms', () => {
+    const ms = parseMessageTs('1730000000.000100');
+    // Floating-point: 1730000000000.1 ± rounding
+    expect(ms).not.toBeNull();
+    expect(Math.abs(ms! - 1730000000000.1)).toBeLessThan(1);
+  });
+
+  it('parseMessageTs: ISO string → ms', () => {
+    const iso = '2026-04-17T12:00:00.000Z';
+    expect(parseMessageTs(iso)).toBe(Date.parse(iso));
+  });
+
+  it('parseMessageTs: unparseable → null', () => {
+    expect(parseMessageTs('')).toBeNull();
+    expect(parseMessageTs('not-a-ts')).toBeNull();
   });
 });
