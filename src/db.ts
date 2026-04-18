@@ -829,9 +829,20 @@ export function deleteTask(id: string): void {
 
 export function getDueTasks(): ScheduledTask[] {
   const now = new Date().toISOString();
+  // Host_pipeline tasks beat container tasks on next_run ties. They
+  // finish in milliseconds (no container spawn) and frequently race
+  // the same event types as long-running container tasks — if the
+  // container task wins the tie, the host task gets nothing to do
+  // when it finally runs (the event is already claimed). Ordering
+  // host tasks first gives them a chance to claim first; if they
+  // don't handle the event, they release it and the container task
+  // picks it up on the next tick.
   return db
     .prepare(
-      `${TASK_SELECT} WHERE status = 'active' AND next_run IS NOT NULL AND next_run <= ? ORDER BY next_run`,
+      `${TASK_SELECT} WHERE status = 'active' AND next_run IS NOT NULL AND next_run <= ?
+       ORDER BY next_run,
+                CASE execution_mode WHEN 'host_pipeline' THEN 0 ELSE 1 END,
+                id`,
     )
     .all(now)
     .map(parseTaskRow);

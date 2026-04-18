@@ -8,6 +8,7 @@ import {
   deleteTask,
   getAllChats,
   getAllRegisteredGroups,
+  getDueTasks,
   getMessagesSince,
   getNewMessages,
   getRecentEvents,
@@ -800,6 +801,64 @@ describe('releaseEvent', () => {
   it('is a no-op on a non-existent event id', () => {
     const released = releaseEvent(999_999, 'c');
     expect(released).toBe(false);
+  });
+});
+
+describe('getDueTasks ordering', () => {
+  function make(
+    id: string,
+    executionMode: 'host_pipeline' | 'container',
+    nextRun: string,
+  ) {
+    createTask({
+      id,
+      group_folder: 'g',
+      chat_jid: 'jid',
+      prompt: 'p',
+      schedule_type: 'cron',
+      schedule_value: '* * * * *',
+      context_mode: 'isolated',
+      executionMode,
+      next_run: nextRun,
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+  }
+
+  it('returns host_pipeline tasks before container tasks on tied next_run', () => {
+    const past = new Date(Date.now() - 60_000).toISOString();
+    // Insert container task first so insertion order wouldn't help it.
+    make('task:solver', 'container', past);
+    make('task:trivial', 'host_pipeline', past);
+    make('task:monitor', 'container', past);
+
+    const due = getDueTasks();
+    expect(due.map((t) => t.id)).toEqual([
+      'task:trivial', // host_pipeline beats container on tie
+      'task:monitor', // then container tasks, ordered by id
+      'task:solver',
+    ]);
+  });
+
+  it('still orders by next_run first (earlier next_run wins)', () => {
+    const older = new Date(Date.now() - 120_000).toISOString();
+    const newer = new Date(Date.now() - 60_000).toISOString();
+    make('task:late-host', 'host_pipeline', newer);
+    make('task:early-container', 'container', older);
+
+    const due = getDueTasks();
+    expect(due[0].id).toBe('task:early-container');
+    expect(due[1].id).toBe('task:late-host');
+  });
+
+  it('filters out tasks whose next_run is in the future', () => {
+    const future = new Date(Date.now() + 60_000).toISOString();
+    const past = new Date(Date.now() - 60_000).toISOString();
+    make('task:future', 'host_pipeline', future);
+    make('task:due', 'container', past);
+
+    const due = getDueTasks();
+    expect(due.map((t) => t.id)).toEqual(['task:due']);
   });
 });
 
