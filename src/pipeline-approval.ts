@@ -58,6 +58,18 @@ export function parseProposedReply(text: string): ProposedReplyParsed | null {
 const APPROVE_EMOJI = new Set(['thumbsup', '+1', 'thumbs_up']);
 const REJECT_EMOJI = new Set(['thumbsdown', '-1', 'thumbs_down']);
 
+/**
+ * Slack delivers skin-toned reactions as e.g. "+1::skin-tone-4". Strip
+ * the modifier so a 👍🏽 registers the same as a plain 👍. Other
+ * channels typically don't carry modifiers but the strip is a no-op
+ * for them.
+ */
+export function normaliseReactionEmoji(emoji: string): string {
+  if (!emoji) return emoji;
+  const idx = emoji.indexOf('::');
+  return idx >= 0 ? emoji.slice(0, idx) : emoji;
+}
+
 const DEFAULT_APPROVAL_TIMEOUT_MS = 15 * 60 * 1000;
 
 /**
@@ -141,8 +153,9 @@ export async function handlePipelineApprovalReaction(
   reaction: Reaction,
   deps: PipelineApprovalDeps,
 ): Promise<boolean> {
-  const isApprove = APPROVE_EMOJI.has(reaction.emoji);
-  const isReject = REJECT_EMOJI.has(reaction.emoji);
+  const normalised = normaliseReactionEmoji(reaction.emoji);
+  const isApprove = APPROVE_EMOJI.has(normalised);
+  const isReject = REJECT_EMOJI.has(normalised);
   if (!isApprove && !isReject) return false;
 
   const text = await deps.fetchMessageText(

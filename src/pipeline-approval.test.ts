@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 
 import {
+  normaliseReactionEmoji,
   parseApprovalTimeoutMs,
   parseApproverList,
   parseMessageTs,
@@ -442,5 +443,71 @@ describe('F5b.2 — helper parsers', () => {
   it('parseMessageTs: unparseable → null', () => {
     expect(parseMessageTs('')).toBeNull();
     expect(parseMessageTs('not-a-ts')).toBeNull();
+  });
+
+  it('normaliseReactionEmoji: strips Slack skin-tone modifiers', () => {
+    expect(normaliseReactionEmoji('+1::skin-tone-2')).toBe('+1');
+    expect(normaliseReactionEmoji('thumbsup::skin-tone-4')).toBe('thumbsup');
+    expect(normaliseReactionEmoji('thumbsdown::skin-tone-6')).toBe('thumbsdown');
+  });
+
+  it('normaliseReactionEmoji: leaves unmodified emoji alone', () => {
+    expect(normaliseReactionEmoji('+1')).toBe('+1');
+    expect(normaliseReactionEmoji('thumbsup')).toBe('thumbsup');
+    expect(normaliseReactionEmoji('eyes')).toBe('eyes');
+  });
+
+  it('normaliseReactionEmoji: empty string safe', () => {
+    expect(normaliseReactionEmoji('')).toBe('');
+  });
+});
+
+describe('F5b.3 — skin-toned reaction matching', () => {
+  const DEV: RegisteredGroup = {
+    name: 'dev',
+    folder: 'slack_dev',
+    trigger: '@bot',
+    added_at: '2024-01-01T00:00:00.000Z',
+  };
+  const SAMPLE = `🟡 PROPOSED REPLY for event 42 on slack:CDEV
+*Draft reply:*
+> approved text here
+
+React 👍 to approve.`;
+
+  it('thumbsup with skin-tone-4 approves the draft', async () => {
+    const deps = {
+      sendMessage: vi.fn().mockResolvedValue(undefined),
+      fetchMessageText: vi.fn().mockResolvedValue(SAMPLE),
+      registeredGroups: { 'slack:CDEV': DEV } as Record<
+        string,
+        RegisteredGroup
+      >,
+      getEventPayloadById: vi.fn(
+        (): string | undefined =>
+          JSON.stringify({
+            source_channel: 'slack:CDEV',
+            source_message_id: 'ts-original',
+          }),
+      ),
+    };
+
+    const handled = await handlePipelineApprovalReaction(
+      {
+        emoji: '+1::skin-tone-4',
+        userId: 'U_ANYONE',
+        messageId: String((Date.now() / 1000).toFixed(6)),
+        chatJid: 'slack:CDEV',
+        timestamp: new Date().toISOString(),
+      },
+      deps,
+    );
+
+    expect(handled).toBe(true);
+    expect(deps.sendMessage).toHaveBeenCalledWith(
+      'slack:CDEV',
+      'approved text here',
+      { threadTs: 'ts-original' },
+    );
   });
 });
