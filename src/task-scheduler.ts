@@ -3,6 +3,12 @@ import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
 
 import { ASSISTANT_NAME, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
+import {
+  DEFAULT_EVENT_TIMEOUT_NOTIFY,
+  parseEventTtlOverrides,
+  sweepExpiredEvents,
+  type TtlRule,
+} from './event-timeout.js';
 import { isOllamaModel, resolveProfile } from './connection-profiles.js';
 import {
   ContainerOutput,
@@ -343,6 +349,29 @@ async function runTask(
 let schedulerRunning = false;
 const consecutiveFailures = new Map<string, number>();
 
+// Event TTL sweep — runs every N scheduler ticks to avoid thrashing the DB.
+// SCHEDULER_POLL_INTERVAL is typically 1s; sweeping every 60 ticks ≈ 1 min.
+const EVENT_SWEEP_EVERY_N_TICKS = 60;
+let sweepTickCount = 0;
+let sweepRules: TtlRule[] | null = null;
+
+function maybeRunEventTimeoutSweep(): void {
+  sweepTickCount += 1;
+  if (sweepTickCount < EVENT_SWEEP_EVERY_N_TICKS) return;
+  sweepTickCount = 0;
+
+  if (sweepRules === null) {
+    sweepRules = parseEventTtlOverrides(
+      process.env.PIPELINE_EVENT_TTL_OVERRIDES,
+    );
+  }
+  try {
+    sweepExpiredEvents(sweepRules, DEFAULT_EVENT_TIMEOUT_NOTIFY);
+  } catch (err) {
+    logger.error({ err }, 'Event timeout sweep threw');
+  }
+}
+
 export function startSchedulerLoop(deps: SchedulerDependencies): void {
   if (schedulerRunning) {
     logger.debug('Scheduler loop already running, skipping duplicate start');
@@ -353,6 +382,8 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
 
   const loop = async () => {
     try {
+      maybeRunEventTimeoutSweep();
+
       const dueTasks = getDueTasks();
       if (dueTasks.length > 0) {
         logger.info({ count: dueTasks.length }, 'Found due tasks');
@@ -382,4 +413,6 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
 /** @internal - for tests only. */
 export function _resetSchedulerLoopForTests(): void {
   schedulerRunning = false;
+  sweepTickCount = 0;
+  sweepRules = null;
 }

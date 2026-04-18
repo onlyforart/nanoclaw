@@ -251,11 +251,7 @@ describe('task scheduler', () => {
     expect(hasPendingEventsOfTypes(['observation.*'])).toBe(true);
 
     // Claim it — simulates mid-processing state
-    const claimed = consumeEvents(
-      ['observation.*'],
-      'pipeline:monitor',
-      10,
-    );
+    const claimed = consumeEvents(['observation.*'], 'pipeline:monitor', 10);
     expect(claimed).toHaveLength(1);
     // Orphan claim: consumeEvents ran but ackEvent never did (crash mid-run).
     // The event is now status='claimed' and will never be returned again by
