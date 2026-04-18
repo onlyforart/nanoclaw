@@ -80,6 +80,13 @@ export interface ScheduledTask {
   allowedSendTargets?: string[] | null;
   executionMode?: 'container' | 'host_pipeline';
   subscribedEventTypes?: string[] | null;
+  /**
+   * Maximum number of events a single invocation may claim via
+   * consume_events. The IPC handler caps the LLM-requested limit to
+   * this value, enforcing serial per-event processing regardless of
+   * what the prompt asks for. NULL = no cap (legacy behaviour).
+   */
+  batchSize?: number | null;
   next_run: string | null;
   last_run: string | null;
   last_result: string | null;

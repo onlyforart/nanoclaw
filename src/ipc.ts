@@ -748,10 +748,19 @@ function handlePublishEvent(
 function handleConsumeEvents(data: IpcData, deps?: IpcDeps): IpcResult {
   const eventTypes = data.eventTypes as string[] | undefined;
   const claimedBy = data.claimedBy as string | undefined;
-  const limit = (data.limit as number) ?? 50;
+  let limit = (data.limit as number) ?? 50;
 
   if (!eventTypes || !Array.isArray(eventTypes) || !claimedBy) {
     return fail('consume_events requires eventTypes (array) and claimedBy');
+  }
+
+  // Phase F2.b: enforce task-level batch_size cap on consume_events.
+  // The task row's batch_size is a structural guarantee that the LLM
+  // cannot bypass — even if the prompt asks for limit: 999, the cap
+  // applies.
+  const task = getTaskById(claimedBy);
+  if (task?.batchSize != null && task.batchSize > 0) {
+    if (limit > task.batchSize) limit = task.batchSize;
   }
 
   const events = consumeEvents(eventTypes, claimedBy, limit);

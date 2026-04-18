@@ -333,12 +333,28 @@ async function runTask(
     consecutiveFailures.delete(task.id);
   }
 
-  const nextRun = computeNextRun(task);
+  let nextRun = computeNextRun(task);
   const resultSummary = error
     ? `Error: ${error}`
     : result
       ? result.slice(0, 200)
       : 'Completed';
+
+  // Phase F2.b: if this was a batched event-driven run and more events
+  // of the subscribed types are still pending, bump next_run to now so
+  // the scheduler picks this task up on the next tick. Without this the
+  // task would wait for fallback_poll_ms before draining the backlog.
+  if (
+    !error &&
+    task.schedule_type === 'event' &&
+    task.batchSize != null &&
+    task.batchSize > 0 &&
+    task.subscribedEventTypes?.length &&
+    hasPendingEventsOfTypes(task.subscribedEventTypes)
+  ) {
+    nextRun = new Date().toISOString();
+  }
+
   updateTaskAfterRun(task.id, nextRun, resultSummary);
 }
 
