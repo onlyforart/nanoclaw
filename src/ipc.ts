@@ -20,6 +20,7 @@ import {
   updateRegisteredGroup,
   updateTask,
 } from './db.js';
+import { normaliseEventTypes } from './event-type-normaliser.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { sendWithRetry } from './outbound-retry.js';
@@ -758,12 +759,28 @@ function handlePublishEvent(
 }
 
 function handleConsumeEvents(data: IpcData, deps?: IpcDeps): IpcResult {
-  const eventTypes = data.eventTypes as string[] | undefined;
+  const rawEventTypes = data.eventTypes as string[] | undefined;
   const claimedBy = data.claimedBy as string | undefined;
   let limit = (data.limit as number) ?? 50;
 
-  if (!eventTypes || !Array.isArray(eventTypes) || !claimedBy) {
+  if (!rawEventTypes || !Array.isArray(rawEventTypes) || !claimedBy) {
     return fail('consume_events requires eventTypes (array) and claimedBy');
+  }
+
+  // Small local LLMs (e.g. gemma4) occasionally wrap event types in
+  // regex-like delimiters ("|observation.*|") or quotes. That matches
+  // zero rows and silently starves the consumer. Strip the noise.
+  const { normalised: eventTypes, anyStripped } = normaliseEventTypes(rawEventTypes);
+  if (anyStripped) {
+    logger.warn(
+      { claimedBy, rawEventTypes, normalised: eventTypes },
+      'consume_events: normalised sloppy event type(s) from caller',
+    );
+  }
+  if (eventTypes.length === 0) {
+    return fail(
+      `consume_events eventTypes were all empty or noise-only after normalisation (raw: ${JSON.stringify(rawEventTypes)})`,
+    );
   }
 
   // Phase F2.b: enforce task-level batch_size cap on consume_events.
