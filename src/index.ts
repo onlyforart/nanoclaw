@@ -54,6 +54,8 @@ import {
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
+import { scheduleDeliveryVerification } from './delivery-verification.js';
+import { publishEvent } from './db.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import {
   restoreRemoteControl,
@@ -852,6 +854,20 @@ async function main(): Promise<void> {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
       return channel.sendMessage(jid, text, options);
+    },
+    scheduleDeliveryVerification: (args) => {
+      const channel = findChannel(channels, args.channelJid);
+      if (!channel?.fetchThreadReplies) {
+        logger.debug(
+          { channelJid: args.channelJid },
+          'F6.2 skipped — no fetchThreadReplies on this channel',
+        );
+        return;
+      }
+      scheduleDeliveryVerification(args, {
+        fetchThreadReplies: (c, t) => channel.fetchThreadReplies!(c, t),
+        publishEvent,
+      });
     },
     registeredGroups: () => registeredGroups,
     registerGroup,

@@ -37,8 +37,14 @@ function seedEvents(n: number, type = 'candidate.question'): number[] {
   const ids: number[] = [];
   for (let i = 0; i < n; i++) {
     ids.push(
-      publishEvent(type, 'slack_main', 'test', JSON.stringify({ i }), null, null)
-        .id,
+      publishEvent(
+        type,
+        'slack_main',
+        'test',
+        JSON.stringify({ i }),
+        null,
+        null,
+      ).id,
     );
   }
   return ids;

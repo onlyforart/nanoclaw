@@ -236,6 +236,37 @@ export class SlackChannel implements Channel {
   }
 
   /**
+   * Fetch all replies in a thread (including the root message), for
+   * post-write delivery verification. Returns null if the channel
+   * adapter can't fetch or the thread is empty.
+   */
+  async fetchThreadReplies(
+    jid: string,
+    threadTs: string,
+  ): Promise<Array<{ ts: string; text: string | null }> | null> {
+    const channelId = jid.replace(/^slack:/, '');
+    if (!this.connected) return null;
+    try {
+      const res = await this.app.client.conversations.replies({
+        channel: channelId,
+        ts: threadTs,
+        limit: 100,
+      });
+      const msgs = res.messages ?? [];
+      return msgs.map((m) => ({
+        ts: (m.ts ?? '') as string,
+        text: (m.text ?? null) as string | null,
+      }));
+    } catch (err) {
+      logger.warn(
+        { jid, threadTs, err },
+        'Failed to fetch Slack thread replies',
+      );
+      return null;
+    }
+  }
+
+  /**
    * Fetch the text content of a specific message, given its channel JID
    * and Slack timestamp. Used by the pipeline approval reacji handler to
    * read the draft text from a team-channel PROPOSED REPLY before

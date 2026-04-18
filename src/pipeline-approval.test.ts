@@ -227,12 +227,11 @@ React 👍 to approve.`;
         string,
         RegisteredGroup
       >,
-      getEventPayloadById: vi.fn(
-        (): string | undefined =>
-          JSON.stringify({
-            source_channel: 'slack:CDEV',
-            source_message_id: 'ts-original',
-          }),
+      getEventPayloadById: vi.fn((): string | undefined =>
+        JSON.stringify({
+          source_channel: 'slack:CDEV',
+          source_message_id: 'ts-original',
+        }),
       ),
       approverUserIds,
       approvalTimeoutMs,
@@ -320,12 +319,11 @@ React 👍 to approve.`;
         string,
         RegisteredGroup
       >,
-      getEventPayloadById: vi.fn(
-        (): string | undefined =>
-          JSON.stringify({
-            source_channel: 'slack:CDEV',
-            source_message_id: 'ts-original',
-          }),
+      getEventPayloadById: vi.fn((): string | undefined =>
+        JSON.stringify({
+          source_channel: 'slack:CDEV',
+          source_message_id: 'ts-original',
+        }),
       ),
       approvalTimeoutMs,
     };
@@ -412,7 +410,9 @@ describe('F5b.2 — helper parsers', () => {
   });
 
   it('parseApproverList: csv with whitespace trimmed', () => {
-    expect(parseApproverList('U1, U2 ,U3')).toEqual(new Set(['U1', 'U2', 'U3']));
+    expect(parseApproverList('U1, U2 ,U3')).toEqual(
+      new Set(['U1', 'U2', 'U3']),
+    );
   });
 
   it('parseApprovalTimeoutMs: unset/invalid → 15 min default', () => {

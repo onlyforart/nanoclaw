@@ -32,6 +32,18 @@ export interface IpcDeps {
     text: string,
     options?: { threadTs?: string },
   ) => Promise<void>;
+  /**
+   * Schedule a best-effort post-write delivery verification (F6.2).
+   * Implementations fetch the thread after a short delay and publish a
+   * pipeline_delivery_failed event if our message isn't present. No-op
+   * when the host has no channel adapter capable of thread fetches.
+   */
+  scheduleDeliveryVerification?: (args: {
+    eventId: number;
+    channelJid: string;
+    threadTs: string;
+    expectedText: string;
+  }) => void;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   updateGroup: (
@@ -862,6 +874,17 @@ async function handleReplyToEvent(
     },
     'reply_to_event delivered',
   );
+
+  // Phase F6.2: best-effort post-write delivery verification. Skipped
+  // for channel-level replies (no thread to re-read).
+  if (sourceMessageId && deps.scheduleDeliveryVerification) {
+    deps.scheduleDeliveryVerification({
+      eventId,
+      channelJid: sourceChannel,
+      threadTs: sourceMessageId,
+      expectedText: text,
+    });
+  }
 
   return {
     success: true,

@@ -202,6 +202,14 @@ export interface Channel {
   // the pipeline approval reacji handler to read draft text from a
   // team-channel message when a 👍 is reacted.
   fetchMessageText?(jid: string, messageId: string): Promise<string | null>;
+  // Optional: fetch all replies in a thread. Used by the pipeline
+  // post-write delivery verification to confirm our reply landed.
+  // Returns null if the channel adapter can't fetch or the thread is
+  // empty.
+  fetchThreadReplies?(
+    jid: string,
+    threadTs: string,
+  ): Promise<Array<{ ts: string; text: string | null }> | null>;
 }
 
 // Callback type that channels use to deliver inbound messages
