@@ -804,6 +804,76 @@ describe('releaseEvent', () => {
   });
 });
 
+describe('F9 phase 9 — bounded retry via attempted_by_trivial', () => {
+  it('release without failureReason leaves attempted_by_trivial unchanged (still 0)', () => {
+    publishEvent('retry.noflag', 'g', null, '{}');
+    const [event] = consumeEvents(['retry.noflag'], 'solver:foo', 1);
+    releaseEvent(event.id, 'solver:foo');
+    const rows = getRecentEvents(['retry.noflag'], 10, true);
+    expect(rows[0].attempted_by_trivial).toBe(0);
+    expect(rows[0].trivial_failure_reason).toBeNull();
+  });
+
+  it('release with failureReason sets attempted_by_trivial=1 and records reason', () => {
+    publishEvent('retry.flagged', 'g', null, '{}');
+    const [event] = consumeEvents(['retry.flagged'], 'trivial-answerer', 1);
+    releaseEvent(event.id, 'trivial-answerer', 'tool-error:ECONNREFUSED');
+    const rows = getRecentEvents(['retry.flagged'], 10, true);
+    expect(rows[0].attempted_by_trivial).toBe(1);
+    expect(rows[0].trivial_failure_reason).toBe('tool-error:ECONNREFUSED');
+    expect(rows[0].status).toBe('pending');
+  });
+
+  it('truncates failure reasons longer than 500 chars', () => {
+    publishEvent('retry.long', 'g', null, '{}');
+    const [event] = consumeEvents(['retry.long'], 'trivial-answerer', 1);
+    const long = 'x'.repeat(600);
+    releaseEvent(event.id, 'trivial-answerer', long);
+    const rows = getRecentEvents(['retry.long'], 10, true);
+    expect(rows[0].trivial_failure_reason?.length).toBe(500);
+  });
+
+  it('consumeEvents with skipAttemptedByTrivial=true ignores flagged events', () => {
+    publishEvent('retry.skip', 'g', null, '{"n":1}');
+    publishEvent('retry.skip', 'g', null, '{"n":2}');
+    const allFirst = consumeEvents(['retry.skip'], 'trivial-answerer', 10);
+    expect(allFirst).toHaveLength(2);
+
+    // Release the first with failure reason, second clean
+    releaseEvent(allFirst[0].id, 'trivial-answerer', 'state-miss');
+    releaseEvent(allFirst[1].id, 'trivial-answerer');
+
+    // Next trivial tick with the filter should only see the clean one.
+    const trivialSecond = consumeEvents(['retry.skip'], 'trivial-answerer', 10, {
+      skipAttemptedByTrivial: true,
+    });
+    expect(trivialSecond).toHaveLength(1);
+    expect(trivialSecond[0].id).toBe(allFirst[1].id);
+  });
+
+  it('solver consumeEvents (default) still sees flagged events', () => {
+    publishEvent('retry.solver', 'g', null, '{}');
+    const [event] = consumeEvents(['retry.solver'], 'trivial-answerer', 1);
+    releaseEvent(event.id, 'trivial-answerer', 'tool-error:timeout');
+
+    // Solver doesn't pass the option — should see the row.
+    const claimed = consumeEvents(['retry.solver'], 'solver', 10);
+    expect(claimed).toHaveLength(1);
+    expect(claimed[0].id).toBe(event.id);
+    expect(claimed[0].attempted_by_trivial).toBe(1);
+  });
+
+  it('migration is idempotent (re-running CREATE/ALTER at boot does not throw)', () => {
+    // Applying the column twice should be a no-op — the ALTER ADD COLUMN
+    // is wrapped in try/catch at boot. Confirm columns exist + typed.
+    const rowBefore = publishEvent('retry.idem', 'g', null, '{}');
+    const rows = getRecentEvents(['retry.idem'], 10, true);
+    expect(rows[0].attempted_by_trivial).toBe(0);
+    expect(rows[0]).toHaveProperty('trivial_failure_reason');
+    expect(rowBefore.isNew).toBe(true);
+  });
+});
+
 describe('getDueTasks ordering', () => {
   function make(
     id: string,

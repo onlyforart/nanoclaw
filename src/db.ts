@@ -359,6 +359,34 @@ function createSchema(database: Database.Database): void {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_events_dedupe
       ON events(type, dedupe_key) WHERE dedupe_key IS NOT NULL;
   `);
+
+  // F9 Phase 9 — bounded-retry columns on events.
+  // attempted_by_trivial: set to 1 when the trivial-answerer claimed
+  //   an event and released it without answering. The trivial-answerer
+  //   filters on =0 so it never re-attempts an event it has already
+  //   failed on once. The solver ignores this column — it re-tries
+  //   everything because its failure modes (LLM 429/500) are usually
+  //   transient.
+  // trivial_failure_reason: short string from the F9 failure-reason
+  //   taxonomy (regex-miss, tool-error:X, template-miss:X, bind-miss:X,
+  //   state-miss, parse-error:X, ...) recorded at release time. Used
+  //   for the post-tick failure-breakdown telemetry and for operator
+  //   triage via `SELECT trivial_failure_reason FROM events …`.
+  try {
+    database.exec(
+      `ALTER TABLE events ADD COLUMN attempted_by_trivial INTEGER DEFAULT 0`,
+    );
+  } catch {
+    /* column already exists */
+  }
+  try {
+    database.exec(
+      `ALTER TABLE events ADD COLUMN trivial_failure_reason TEXT`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
   // Pipeline-specific tables (observed_messages, pipeline_intake_log,
   // observation_labels, reextraction_cache, pipeline_clusters) live in the
   // nanoclaw-pipeline plugin. See nanoclaw-pipeline/src/migrations.ts.
@@ -1204,10 +1232,18 @@ export function publishEvent(
   return { id: result.lastInsertRowid as number, isNew: true };
 }
 
+export interface ConsumeEventsOptions {
+  // F9 Phase 9 — when true, skip events already attempted by the
+  // trivial-answerer on a prior tick. Passed by the trivial-answerer
+  // only; the solver leaves it unset so it retries everything.
+  skipAttemptedByTrivial?: boolean;
+}
+
 export function consumeEvents(
   types: string[],
   claimedBy: string,
   limit: number,
+  options: ConsumeEventsOptions = {},
 ): EventRow[] {
   const now = new Date().toISOString();
 
@@ -1226,6 +1262,10 @@ export function consumeEvents(
     typeParams = types;
   }
 
+  const trivialFilter = options.skipAttemptedByTrivial
+    ? ' AND (attempted_by_trivial IS NULL OR attempted_by_trivial = 0)'
+    : '';
+
   // Atomic claim: select pending, non-expired events and update in one statement
   const rows = db
     .prepare(
@@ -1236,6 +1276,7 @@ export function consumeEvents(
           WHERE status = 'pending'
             AND ${typeFilter}
             AND (expires_at IS NULL OR expires_at > ?)
+            ${trivialFilter}
           ORDER BY created_at
           LIMIT ?
        )
@@ -1339,14 +1380,31 @@ export function ackEvent(
  * candidate.question first; if it can't handle the specific event, it
  * releases the claim so the solver picks it up on the next tick).
  */
-export function releaseEvent(eventId: number, claimedBy: string): boolean {
+export function releaseEvent(
+  eventId: number,
+  claimedBy: string,
+  failureReason?: string,
+): boolean {
+  // When the trivial-answerer releases an event, flag it so the same
+  // consumer never re-claims it on the next tick (bounded retry) and
+  // record the structured failure reason for telemetry. The solver
+  // shares this release path but never sets trivial_* columns because
+  // it doesn't pass a failureReason.
+  const truncated =
+    typeof failureReason === 'string' && failureReason.length > 500
+      ? failureReason.slice(0, 500)
+      : failureReason;
   const result = db
     .prepare(
       `UPDATE events
-          SET status = 'pending', claimed_by = NULL, claimed_at = NULL
+          SET status = 'pending',
+              claimed_by = NULL,
+              claimed_at = NULL,
+              attempted_by_trivial = CASE WHEN ? IS NOT NULL THEN 1 ELSE attempted_by_trivial END,
+              trivial_failure_reason = CASE WHEN ? IS NOT NULL THEN ? ELSE trivial_failure_reason END
         WHERE id = ? AND status = 'claimed' AND claimed_by = ?`,
     )
-    .run(eventId, claimedBy);
+    .run(truncated ?? null, truncated ?? null, truncated ?? null, eventId, claimedBy);
   return result.changes > 0;
 }
 

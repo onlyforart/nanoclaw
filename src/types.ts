@@ -126,6 +126,13 @@ export interface EventRow {
   claimed_at: string | null;
   processed_at: string | null;
   result_note: string | null;
+  // F9 phase 9 — bounded retry for the trivial-answerer.
+  // Set to 1 when the trivial-answerer releases an event with a
+  // failureReason; the trivial-answerer's consumeEvents skips rows
+  // with this flag set so it doesn't re-attempt a guaranteed-fail
+  // shape on every tick. The solver ignores the flag.
+  attempted_by_trivial: number;
+  trivial_failure_reason: string | null;
 }
 
 // --- Observed messages ---
