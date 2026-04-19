@@ -760,8 +760,9 @@ registerTool(
           .describe('Question facts, or null if the newest observation is not a question.'),
         unhandled_reason: z
           .string()
+          .nullable()
           .optional()
-          .describe('Free-form reason surfaced in the unhandled payload when nothing else matched (e.g. "urgency fyi, speech_act banter").'),
+          .describe('Free-form reason surfaced in the unhandled payload when nothing else matched (e.g. "urgency fyi, speech_act banter"). null accepted — small local LLMs often emit null for absent optional fields and we treat it as undefined server-side.'),
       })
       .optional()
       .describe('Classification facts; host decides routing and publishes exactly one candidate.* event.'),
