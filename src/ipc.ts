@@ -11,6 +11,7 @@ import {
   createTask,
   deleteTask,
   _clearCrossChannelDeliveries,
+  getEventById,
   getEventPayloadById,
   getTaskById,
   isCrossChannelDelivered,
@@ -798,7 +799,7 @@ function handleConsumeEvents(data: IpcData, deps?: IpcDeps): IpcResult {
   return { success: true, events: transformed } as any;
 }
 
-function handleAckEvent(data: IpcData): IpcResult {
+function handleAckEvent(data: IpcData, deps?: IpcDeps): IpcResult {
   const eventId = data.eventId as number | undefined;
   const status = data.status as 'done' | 'failed' | undefined;
 
@@ -806,8 +807,23 @@ function handleAckEvent(data: IpcData): IpcResult {
     return fail('ack_event requires eventId and status');
   }
 
+  // Resolve type BEFORE acking — status goes to 'done'/'failed' so
+  // the row stays addressable, but the plugin hook needs the type.
+  const before = getEventById(eventId);
   const note = (data.note as string) || undefined;
   ackEvent(eventId, status, note);
+
+  if (before && deps) {
+    try {
+      deps.plugin?.onEventAcked?.(eventId, before.type, status, deps);
+    } catch (err) {
+      logger.warn(
+        { err, eventId, eventType: before.type },
+        'onEventAcked hook threw — ignoring',
+      );
+    }
+  }
+
   return ok();
 }
 
@@ -990,7 +1006,7 @@ export async function processTaskIpc(
     case 'consume_events':
       return handleConsumeEvents(data, deps);
     case 'ack_event':
-      return handleAckEvent(data);
+      return handleAckEvent(data, deps);
     case 'read_chat_messages':
       return handleReadChatMessages(data, registeredGroups);
     case 'reply_to_event':

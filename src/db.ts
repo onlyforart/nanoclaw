@@ -380,9 +380,7 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
   try {
-    database.exec(
-      `ALTER TABLE events ADD COLUMN trivial_failure_reason TEXT`,
-    );
+    database.exec(`ALTER TABLE events ADD COLUMN trivial_failure_reason TEXT`);
   } catch {
     /* column already exists */
   }
@@ -1340,6 +1338,44 @@ export function getEventPayloadById(eventId: number): string | undefined {
   return row?.payload;
 }
 
+/**
+ * Get a full event row by ID. Used by the ack hook to inspect
+ * type + payload after acking. Returns undefined if the row
+ * doesn't exist.
+ */
+export function getEventById(eventId: number): EventRow | undefined {
+  return db.prepare('SELECT * FROM events WHERE id = ?').get(eventId) as
+    | EventRow
+    | undefined;
+}
+
+/**
+ * True iff at least one event of any of the given `types` has an
+ * observation_ids payload array that overlaps with `observationIds`.
+ *
+ * Uses json1 functions from better-sqlite3 (bundled). Used by the
+ * pipeline's silent-fail detector to check whether an observation
+ * that was just acked as 'done' was ever routed downstream.
+ */
+export function hasEventWithObservationId(
+  types: string[],
+  observationIds: number[],
+): boolean {
+  if (types.length === 0 || observationIds.length === 0) return false;
+  const typePlaceholders = types.map(() => '?').join(', ');
+  const idPlaceholders = observationIds.map(() => '?').join(', ');
+  const row = db
+    .prepare(
+      `SELECT 1
+         FROM events e, json_each(json_extract(e.payload, '$.observation_ids')) obs
+        WHERE e.type IN (${typePlaceholders})
+          AND obs.value IN (${idPlaceholders})
+        LIMIT 1`,
+    )
+    .get(...types, ...observationIds);
+  return !!row;
+}
+
 // --- Cross-channel delivery dedup ---
 
 export function isCrossChannelDelivered(key: string): boolean {
@@ -1404,7 +1440,13 @@ export function releaseEvent(
               trivial_failure_reason = CASE WHEN ? IS NOT NULL THEN ? ELSE trivial_failure_reason END
         WHERE id = ? AND status = 'claimed' AND claimed_by = ?`,
     )
-    .run(truncated ?? null, truncated ?? null, truncated ?? null, eventId, claimedBy);
+    .run(
+      truncated ?? null,
+      truncated ?? null,
+      truncated ?? null,
+      eventId,
+      claimedBy,
+    );
   return result.changes > 0;
 }
 

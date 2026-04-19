@@ -44,6 +44,22 @@ export interface PipelinePlugin {
   /** Called after a new event is published (e.g. auto-ack escalations) */
   onEventPublished?(eventType: string, payload: string, deps: IpcDeps): void;
 
+  /**
+   * Called after an event has been acked (status set to 'done' or
+   * 'failed'). The plugin can inspect it and, for example, detect a
+   * silent-fail case where an upstream event (observation.passive)
+   * was acked as 'done' without any downstream routing event having
+   * been published. Hooks run best-effort: the core ack has already
+   * committed before this is called, so exceptions here must NOT
+   * rewind it.
+   */
+  onEventAcked?(
+    eventId: number,
+    eventType: string,
+    status: 'done' | 'failed' | 'expired',
+    deps: IpcDeps,
+  ): void;
+
   // --- Event consumption (ipc.ts) ---
 
   /** Transform events before delivery to container (e.g. nonce wrapping) */
