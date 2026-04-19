@@ -1,0 +1,14 @@
+{
+  "_comment": "Single source of truth for the env-var allow-list used when spawning stdio MCP server subprocesses. Read at runtime by both the container-side invoker (mcp-tool-executor.ts) and the host-side invoker (src/host-mcp-invoker.ts). Keep these lists aligned — divergence causes tools that work from one path to fail silently from the other.",
+  "safe_keys": [
+    "PATH",
+    "HOME",
+    "NODE_ENV",
+    "TZ",
+    "LANG",
+    "LC_ALL",
+    "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH",
+    "PLAYWRIGHT_BROWSERS_PATH",
+    "AGENT_BROWSER_EXECUTABLE_PATH"
+  ]
+}

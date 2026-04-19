@@ -8,8 +8,32 @@
  * Each MCP server process is started once and reused for all tool calls.
  */
 
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+
+// MCP_SAFE_ENV_KEYS is shared with the host-side host-mcp-invoker.ts
+// via a JSON file so the two invoker paths see identical envs.
+// Loaded once at module init.
+const MCP_SAFE_ENV_KEYS: string[] = (() => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const data = JSON.parse(
+    readFileSync(join(here, 'mcp-safe-env.json'), 'utf-8'),
+  ) as { safe_keys: string[] };
+  return data.safe_keys;
+})();
+
+function buildSafeMcpEnv(overrides?: Record<string, string>): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const key of MCP_SAFE_ENV_KEYS) {
+    const v = process.env[key];
+    if (v !== undefined) env[key] = v;
+  }
+  if (overrides) Object.assign(env, overrides);
+  return env;
+}
 import {
   StreamableHTTPClientTransport,
 } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -86,13 +110,11 @@ export class McpToolExecutor {
           transportType = 'http';
         } else if (config.command) {
           // Stdio MCP server — spawn child process.
-          // Only forward safe env vars — never spread process.env wholesale.
-          const SAFE_ENV_KEYS = ['PATH', 'HOME', 'NODE_ENV', 'TZ', 'LANG', 'LC_ALL', 'PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH', 'AGENT_BROWSER_EXECUTABLE_PATH'];
-          const env: Record<string, string> = {};
-          for (const key of SAFE_ENV_KEYS) {
-            if (process.env[key]) env[key] = process.env[key]!;
-          }
-          Object.assign(env, config.env || {}, extraEnv || {});
+          // Safe-env allow-list is shared with host-mcp-invoker.ts
+          // via mcp-safe-env.ts so the two invoker paths see the
+          // same environment. Per-server `env` entries win over the
+          // allow-list defaults.
+          const env = buildSafeMcpEnv({ ...(config.env ?? {}), ...(extraEnv ?? {}) });
           transport = new StdioClientTransport({
             command: config.command,
             args: config.args || [],
