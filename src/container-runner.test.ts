@@ -112,7 +112,9 @@ import {
   runContainerAgent,
   ContainerOutput,
   filterServerTools,
+  loadMcpExclusions,
 } from './container-runner.js';
+import fs from 'fs';
 import type { RegisteredGroup } from './types.js';
 import { spawn } from 'child_process';
 
@@ -313,6 +315,70 @@ describe('filterServerTools', () => {
     const result = filterServerTools(['tool_a', 'tool_b'], allSchemas, null);
     expect(result!.tools).toEqual(['tool_a', 'tool_b']);
     expect(result!.toolSchemas).toHaveLength(2);
+  });
+});
+
+describe('loadMcpExclusions', () => {
+  const mockedExistsSync = vi.mocked(fs.existsSync);
+  const mockedReadFileSync = vi.mocked(fs.readFileSync);
+
+  beforeEach(() => {
+    mockedExistsSync.mockReset();
+    mockedReadFileSync.mockReset();
+  });
+
+  it('returns empty set when file is missing', () => {
+    mockedExistsSync.mockReturnValue(false);
+    const result = loadMcpExclusions('slack_main');
+    expect(result.size).toBe(0);
+  });
+
+  it('applies wildcard entries to every group', () => {
+    mockedExistsSync.mockReturnValue(true);
+    mockedReadFileSync.mockReturnValue(
+      JSON.stringify({ '*': ['pagepilot-explorer'] }),
+    );
+    const result = loadMcpExclusions('any_group');
+    expect([...result]).toEqual(['pagepilot-explorer']);
+  });
+
+  it('unions wildcard and per-group entries', () => {
+    mockedExistsSync.mockReturnValue(true);
+    mockedReadFileSync.mockReturnValue(
+      JSON.stringify({
+        '*': ['pagepilot-explorer'],
+        slack_main: ['some-internal-tool'],
+      }),
+    );
+    const result = loadMcpExclusions('slack_main');
+    expect(result.has('pagepilot-explorer')).toBe(true);
+    expect(result.has('some-internal-tool')).toBe(true);
+    expect(result.size).toBe(2);
+  });
+
+  it('does not apply other groups entries', () => {
+    mockedExistsSync.mockReturnValue(true);
+    mockedReadFileSync.mockReturnValue(
+      JSON.stringify({ other_group: ['some-internal-tool'] }),
+    );
+    const result = loadMcpExclusions('slack_main');
+    expect(result.size).toBe(0);
+  });
+
+  it('returns empty set on malformed JSON', () => {
+    mockedExistsSync.mockReturnValue(true);
+    mockedReadFileSync.mockReturnValue('{ not json');
+    const result = loadMcpExclusions('slack_main');
+    expect(result.size).toBe(0);
+  });
+
+  it('ignores non-string entries defensively', () => {
+    mockedExistsSync.mockReturnValue(true);
+    mockedReadFileSync.mockReturnValue(
+      JSON.stringify({ '*': ['ok', 42, null, 'also-ok'] }),
+    );
+    const result = loadMcpExclusions('slack_main');
+    expect([...result].sort()).toEqual(['also-ok', 'ok']);
   });
 });
 

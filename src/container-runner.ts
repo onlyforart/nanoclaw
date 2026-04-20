@@ -91,6 +91,36 @@ interface VolumeMount {
 }
 
 /**
+ * Load per-group MCP server exclusions from data/mcp-exclusions.json.
+ * The file is installation-specific and gitignored. Schema:
+ *   { "*": ["server-a"], "group_folder": ["server-b"] }
+ * The "*" key applies to every group; the effective exclusion set is the
+ * union of "*" entries and the group-specific entries.
+ */
+export function loadMcpExclusions(groupFolder: string): Set<string> {
+  const exclusionsPath = path.join(DATA_DIR, 'mcp-exclusions.json');
+  if (!fs.existsSync(exclusionsPath)) return new Set();
+  try {
+    const parsed = JSON.parse(fs.readFileSync(exclusionsPath, 'utf-8'));
+    const excluded = new Set<string>();
+    const wildcard = parsed['*'];
+    if (Array.isArray(wildcard)) {
+      for (const name of wildcard)
+        if (typeof name === 'string') excluded.add(name);
+    }
+    const group = parsed[groupFolder];
+    if (Array.isArray(group)) {
+      for (const name of group)
+        if (typeof name === 'string') excluded.add(name);
+    }
+    return excluded;
+  } catch (err) {
+    logger.warn({ err }, 'Failed to parse data/mcp-exclusions.json, ignoring');
+    return new Set();
+  }
+}
+
+/**
  * Filter discovered tool schemas to only those in the configured tools list,
  * optionally further restricted by a per-task allowedTools allowlist.
  * Returns null if no tools survive filtering (caller should skip the server).
@@ -418,8 +448,17 @@ async function buildVolumeMounts(
       const containerMcpDir = path.join(runBase, 'mcp-servers');
       fs.mkdirSync(containerMcpDir, { recursive: true });
 
+      const excludedServers = loadMcpExclusions(group.folder);
+
       const containerServers: Record<string, ContainerServerEntry> = {};
       for (const [name, srv] of Object.entries(mcpConfig.servers || {})) {
+        if (excludedServers.has(name)) {
+          logger.info(
+            { server: name, group: group.folder },
+            'MCP server excluded for this group (data/mcp-exclusions.json)',
+          );
+          continue;
+        }
         const entry = srv as Record<string, unknown>;
         const entryType = classifyServerEntry(entry);
 

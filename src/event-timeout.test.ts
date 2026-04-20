@@ -466,7 +466,9 @@ describe('releaseStaleClaims — orphan claim sweep (F9.3 Task D)', () => {
       .run(backdate, e1.id);
 
     const { releaseStaleClaims } = await import('./event-timeout.js');
-    const rules = [{ type_glob: 'observation.*', claim_timeout_ms: 2 * 60 * 1000 }];
+    const rules = [
+      { type_glob: 'observation.*', claim_timeout_ms: 2 * 60 * 1000 },
+    ];
     const result = releaseStaleClaims(rules);
 
     expect(result.released).toHaveLength(1);
@@ -474,7 +476,11 @@ describe('releaseStaleClaims — orphan claim sweep (F9.3 Task D)', () => {
 
     const row = getDb()
       .prepare('SELECT status, claimed_by, claimed_at FROM events WHERE id = ?')
-      .get(e1.id) as { status: string; claimed_by: string | null; claimed_at: string | null };
+      .get(e1.id) as {
+      status: string;
+      claimed_by: string | null;
+      claimed_at: string | null;
+    };
     expect(row.status).toBe('pending');
     expect(row.claimed_by).toBeNull();
     expect(row.claimed_at).toBeNull();
@@ -492,7 +498,9 @@ describe('releaseStaleClaims — orphan claim sweep (F9.3 Task D)', () => {
     consumeEvents(['observation.*'], 'pipeline:monitor', 1);
 
     const { releaseStaleClaims } = await import('./event-timeout.js');
-    const rules = [{ type_glob: 'observation.*', claim_timeout_ms: 2 * 60 * 1000 }];
+    const rules = [
+      { type_glob: 'observation.*', claim_timeout_ms: 2 * 60 * 1000 },
+    ];
     const result = releaseStaleClaims(rules);
 
     expect(result.released).toHaveLength(0);
@@ -530,8 +538,22 @@ describe('releaseStaleClaims — orphan claim sweep (F9.3 Task D)', () => {
   });
 
   it('T.33 — respects per-type claim-age thresholds (first-match-wins)', async () => {
-    const observation = publishEvent('observation.passive', 'slack_main', 'test', '{}', null, null);
-    const candidate = publishEvent('candidate.question', 'slack_main', 'test', '{}', null, null);
+    const observation = publishEvent(
+      'observation.passive',
+      'slack_main',
+      'test',
+      '{}',
+      null,
+      null,
+    );
+    const candidate = publishEvent(
+      'candidate.question',
+      'slack_main',
+      'test',
+      '{}',
+      null,
+      null,
+    );
     consumeEvents(['observation.*'], 'pipeline:monitor', 1);
     consumeEvents(['candidate.*'], 'pipeline:solver', 1);
 
@@ -545,7 +567,7 @@ describe('releaseStaleClaims — orphan claim sweep (F9.3 Task D)', () => {
     const { releaseStaleClaims } = await import('./event-timeout.js');
     const rules = [
       { type_glob: 'observation.*', claim_timeout_ms: 2 * 60 * 1000 }, // 3min > 2min → released
-      { type_glob: 'candidate.*',   claim_timeout_ms: 5 * 60 * 1000 }, // 3min < 5min → left claimed
+      { type_glob: 'candidate.*', claim_timeout_ms: 5 * 60 * 1000 }, // 3min < 5min → left claimed
     ];
     const result = releaseStaleClaims(rules);
 
@@ -553,7 +575,14 @@ describe('releaseStaleClaims — orphan claim sweep (F9.3 Task D)', () => {
   });
 
   it('T.34 — invokes hooks.onReleased per release', async () => {
-    const e1 = publishEvent('observation.passive', 'slack_main', 'test', '{}', null, null);
+    const e1 = publishEvent(
+      'observation.passive',
+      'slack_main',
+      'test',
+      '{}',
+      null,
+      null,
+    );
     consumeEvents(['observation.*'], 'pipeline:monitor', 1);
     const { getDb } = await import('./db.js');
     getDb()
@@ -562,7 +591,9 @@ describe('releaseStaleClaims — orphan claim sweep (F9.3 Task D)', () => {
 
     const onReleased = vi.fn();
     const { releaseStaleClaims } = await import('./event-timeout.js');
-    const rules = [{ type_glob: 'observation.*', claim_timeout_ms: 2 * 60 * 1000 }];
+    const rules = [
+      { type_glob: 'observation.*', claim_timeout_ms: 2 * 60 * 1000 },
+    ];
     releaseStaleClaims(rules, { onReleased });
 
     expect(onReleased).toHaveBeenCalledTimes(1);

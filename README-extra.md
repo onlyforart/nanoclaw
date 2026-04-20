@@ -483,6 +483,22 @@ Remote servers run on the host (or elsewhere on the network). At container launc
 
 The container-side config (generated at `data/sessions/{group}/mcp-servers/config.json`) strips `hostPath` and pre-resolves environment variables.
 
+### Excluding servers per group
+
+`data/mcp-exclusions.json` (installation-specific, gitignored) skips MCP servers entirely for specific groups — the server is never mounted, no tool schemas are emitted, and the cached prompt prefix shrinks accordingly.
+
+```json
+{
+  "*": ["pagepilot-explorer"],
+  "slack_main": ["some-internal-tool"]
+}
+```
+
+- `"*"` applies to every group; the effective exclusion set for a group is the union of `"*"` entries and that group's entries.
+- Keys must match `folder` in `registered_groups`.
+- Only affects servers declared in `data/mcp-servers.json`; the in-process `nanoclaw` IPC tools are controlled via each task's `allowed_tools` instead.
+- Reloaded on every container spawn — no restart needed.
+
 ## PagePilot Shared Script Library
 
 [PagePilot](https://github.com/onlyforart/pagepilot) is one of the external MCP servers (registered in `data/mcp-servers.json`). It compiles a small DSL into Playwright-based ES modules for web scraping and monitoring. NanoClaw exposes its scripts to in-container agents through a **two-layer registry**:
