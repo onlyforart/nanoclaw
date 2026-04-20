@@ -4,8 +4,10 @@ import fs from 'fs';
 
 import { ASSISTANT_NAME, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
 import {
+  DEFAULT_CLAIM_AGE_RULES,
   DEFAULT_EVENT_TIMEOUT_NOTIFY,
   parseEventTtlOverrides,
+  releaseStaleClaims,
   sweepExpiredEvents,
   type TtlRule,
 } from './event-timeout.js';
@@ -426,6 +428,11 @@ function maybeRunEventTimeoutSweep(deps: SchedulerDependencies): void {
         });
       },
     });
+    // Task D (F9.3) — release stuck claims back to pending so another
+    // consumer can try. Separate from event-TTL: this keys off
+    // claimed_at, not created_at, so a crashed consumer doesn't block
+    // the pipeline until the event expires entirely.
+    releaseStaleClaims(DEFAULT_CLAIM_AGE_RULES);
   } catch (err) {
     logger.error({ err }, 'Event timeout sweep threw');
   }

@@ -414,9 +414,7 @@ describe('sweepExpiredEvents — onExpired hook (F9.3 Task A)', () => {
     const ttlRules = [{ type_glob: 'observation.*', ttl_ms: 10 * 60 * 1000 }];
 
     // Must not throw — sweep logs + swallows hook errors.
-    expect(() =>
-      sweepExpiredEvents(ttlRules, [], { onExpired }),
-    ).not.toThrow();
+    expect(() => sweepExpiredEvents(ttlRules, [], { onExpired })).not.toThrow();
     // Both events still got fail-stamped, independent of the hook.
     const rows = getDb()
       .prepare('SELECT status FROM events WHERE id IN (?,?)')
@@ -443,5 +441,135 @@ describe('sweepExpiredEvents — onExpired hook (F9.3 Task A)', () => {
     const ttlRules = [{ type_glob: 'observation.*', ttl_ms: 10 * 60 * 1000 }];
     const swept = sweepExpiredEvents(ttlRules, []);
     expect(swept.auto_failed).toHaveLength(1);
+  });
+});
+
+describe('releaseStaleClaims — orphan claim sweep (F9.3 Task D)', () => {
+  it('T.30 — releases events claimed longer than the claim-age threshold', async () => {
+    const e1 = publishEvent(
+      'observation.passive',
+      'slack_main',
+      'test',
+      '{}',
+      null,
+      null,
+    );
+    // Claim it
+    consumeEvents(['observation.*'], 'pipeline:monitor', 1);
+
+    // Back-date claimed_at to be old (simulating crashed claimer)
+    const claimAgeMs = 5 * 60 * 1000;
+    const backdate = new Date(Date.now() - claimAgeMs).toISOString();
+    const { getDb } = await import('./db.js');
+    getDb()
+      .prepare('UPDATE events SET claimed_at = ? WHERE id = ?')
+      .run(backdate, e1.id);
+
+    const { releaseStaleClaims } = await import('./event-timeout.js');
+    const rules = [{ type_glob: 'observation.*', claim_timeout_ms: 2 * 60 * 1000 }];
+    const result = releaseStaleClaims(rules);
+
+    expect(result.released).toHaveLength(1);
+    expect(result.released[0].id).toBe(e1.id);
+
+    const row = getDb()
+      .prepare('SELECT status, claimed_by, claimed_at FROM events WHERE id = ?')
+      .get(e1.id) as { status: string; claimed_by: string | null; claimed_at: string | null };
+    expect(row.status).toBe('pending');
+    expect(row.claimed_by).toBeNull();
+    expect(row.claimed_at).toBeNull();
+  });
+
+  it('T.31 — leaves fresh claims alone', async () => {
+    const e1 = publishEvent(
+      'observation.passive',
+      'slack_main',
+      'test',
+      '{}',
+      null,
+      null,
+    );
+    consumeEvents(['observation.*'], 'pipeline:monitor', 1);
+
+    const { releaseStaleClaims } = await import('./event-timeout.js');
+    const rules = [{ type_glob: 'observation.*', claim_timeout_ms: 2 * 60 * 1000 }];
+    const result = releaseStaleClaims(rules);
+
+    expect(result.released).toHaveLength(0);
+
+    const { getDb } = await import('./db.js');
+    const row = getDb()
+      .prepare('SELECT status, claimed_by FROM events WHERE id = ?')
+      .get(e1.id) as { status: string; claimed_by: string };
+    expect(row.status).toBe('claimed');
+    expect(row.claimed_by).toBe('pipeline:monitor');
+  });
+
+  it('T.32 — never touches status!=claimed rows', async () => {
+    const e1 = publishEvent(
+      'observation.passive',
+      'slack_main',
+      'test',
+      '{}',
+      null,
+      null,
+    );
+    // Still pending, not claimed. releaseStaleClaims should not touch it
+    // even if we back-date its (non-existent) claimed_at.
+    const { releaseStaleClaims } = await import('./event-timeout.js');
+    const rules = [{ type_glob: 'observation.*', claim_timeout_ms: 1 }];
+    const result = releaseStaleClaims(rules);
+
+    expect(result.released).toHaveLength(0);
+
+    const { getDb } = await import('./db.js');
+    const row = getDb()
+      .prepare('SELECT status FROM events WHERE id = ?')
+      .get(e1.id) as { status: string };
+    expect(row.status).toBe('pending');
+  });
+
+  it('T.33 — respects per-type claim-age thresholds (first-match-wins)', async () => {
+    const observation = publishEvent('observation.passive', 'slack_main', 'test', '{}', null, null);
+    const candidate = publishEvent('candidate.question', 'slack_main', 'test', '{}', null, null);
+    consumeEvents(['observation.*'], 'pipeline:monitor', 1);
+    consumeEvents(['candidate.*'], 'pipeline:solver', 1);
+
+    const claimAgeMs = 3 * 60 * 1000;
+    const backdate = new Date(Date.now() - claimAgeMs).toISOString();
+    const { getDb } = await import('./db.js');
+    getDb()
+      .prepare('UPDATE events SET claimed_at = ? WHERE id IN (?,?)')
+      .run(backdate, observation.id, candidate.id);
+
+    const { releaseStaleClaims } = await import('./event-timeout.js');
+    const rules = [
+      { type_glob: 'observation.*', claim_timeout_ms: 2 * 60 * 1000 }, // 3min > 2min → released
+      { type_glob: 'candidate.*',   claim_timeout_ms: 5 * 60 * 1000 }, // 3min < 5min → left claimed
+    ];
+    const result = releaseStaleClaims(rules);
+
+    expect(result.released.map((r) => r.id)).toEqual([observation.id]);
+  });
+
+  it('T.34 — invokes hooks.onReleased per release', async () => {
+    const e1 = publishEvent('observation.passive', 'slack_main', 'test', '{}', null, null);
+    consumeEvents(['observation.*'], 'pipeline:monitor', 1);
+    const { getDb } = await import('./db.js');
+    getDb()
+      .prepare('UPDATE events SET claimed_at = ? WHERE id = ?')
+      .run(new Date(Date.now() - 5 * 60 * 1000).toISOString(), e1.id);
+
+    const onReleased = vi.fn();
+    const { releaseStaleClaims } = await import('./event-timeout.js');
+    const rules = [{ type_glob: 'observation.*', claim_timeout_ms: 2 * 60 * 1000 }];
+    releaseStaleClaims(rules, { onReleased });
+
+    expect(onReleased).toHaveBeenCalledTimes(1);
+    expect(onReleased).toHaveBeenCalledWith(
+      e1.id,
+      'observation.passive',
+      'pipeline:monitor',
+    );
   });
 });
