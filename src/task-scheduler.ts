@@ -406,14 +406,26 @@ const consecutiveFailures = new Map<string, number>();
 // being auto-failed ≤ the scheduler poll interval.
 let sweepRules: TtlRule[] | null = null;
 
-function maybeRunEventTimeoutSweep(): void {
+function maybeRunEventTimeoutSweep(deps: SchedulerDependencies): void {
   if (sweepRules === null) {
     sweepRules = parseEventTtlOverrides(
       process.env.PIPELINE_EVENT_TTL_OVERRIDES,
     );
   }
   try {
-    sweepExpiredEvents(sweepRules, DEFAULT_EVENT_TIMEOUT_NOTIFY);
+    sweepExpiredEvents(sweepRules, DEFAULT_EVENT_TIMEOUT_NOTIFY, {
+      // Route each TTL-auto-failed event through the plugin's
+      // onEventAcked hook so it can kick off follow-on behaviour
+      // (e.g. the observation-passive silent-fail recovery that
+      // escalates stuck questions to the solver). Best-effort: hook
+      // exceptions are logged inside sweepExpiredEvents so they can't
+      // abort the sweep.
+      onExpired: (id, type) => {
+        deps.plugin?.onEventAcked?.(id, type, 'failed', {
+          sendMessage: deps.sendMessage,
+        });
+      },
+    });
   } catch (err) {
     logger.error({ err }, 'Event timeout sweep threw');
   }
@@ -429,7 +441,7 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
 
   const loop = async () => {
     try {
-      maybeRunEventTimeoutSweep();
+      maybeRunEventTimeoutSweep(deps);
 
       const dueTasks = getDueTasks();
       if (dueTasks.length > 0) {

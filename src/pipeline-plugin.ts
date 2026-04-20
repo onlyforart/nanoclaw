@@ -45,19 +45,26 @@ export interface PipelinePlugin {
   onEventPublished?(eventType: string, payload: string, deps: IpcDeps): void;
 
   /**
-   * Called after an event has been acked (status set to 'done' or
-   * 'failed'). The plugin can inspect it and, for example, detect a
-   * silent-fail case where an upstream event (observation.passive)
-   * was acked as 'done' without any downstream routing event having
-   * been published. Hooks run best-effort: the core ack has already
-   * committed before this is called, so exceptions here must NOT
-   * rewind it.
+   * Called after an event has been acked (status transitioned to
+   * 'done', 'failed', or 'expired'). The plugin can inspect it and,
+   * for example, detect a silent-fail case where an upstream event
+   * (observation.passive) was acked as 'done' without any downstream
+   * routing event having been published, or a TTL-failed observation
+   * that needs solver fallback. Hooks run best-effort: the core ack
+   * has already committed before this is called, so exceptions here
+   * must NOT rewind it.
+   *
+   * The fourth parameter is deliberately narrow — only sendMessage
+   * is exposed because that's all any current implementation uses.
+   * This lets non-IPC callers (e.g. the scheduler's TTL sweep, which
+   * holds SchedulerDependencies not IpcDeps) invoke the hook without
+   * a shim.
    */
   onEventAcked?(
     eventId: number,
     eventType: string,
     status: 'done' | 'failed' | 'expired',
-    deps: IpcDeps,
+    deps: EventAckHookDeps,
   ): void;
 
   // --- Event consumption (ipc.ts) ---
@@ -117,6 +124,21 @@ export interface PipelinePlugin {
 
   /** SQL statements to run on startup (CREATE TABLE IF NOT EXISTS, etc.) */
   migrations?(): string[];
+}
+
+/**
+ * Narrow deps shape passed to onEventAcked. Today all it needs is
+ * sendMessage (for the ack-retry reply). Grow the type deliberately
+ * if a future hook really needs more — don't widen to full IpcDeps,
+ * because non-IPC callers (scheduler sweeps, test harnesses) would
+ * then need to synthesise stubs for fields they can't provide.
+ */
+export interface EventAckHookDeps {
+  sendMessage: (
+    jid: string,
+    text: string,
+    options?: { threadTs?: string },
+  ) => Promise<void>;
 }
 
 /**

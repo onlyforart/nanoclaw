@@ -315,3 +315,133 @@ describe('DEFAULT_EVENT_TTL_RULES', () => {
     ).toBeUndefined();
   });
 });
+
+describe('sweepExpiredEvents — onExpired hook (F9.3 Task A)', () => {
+  it('T.20 — invokes hooks.onExpired for each auto-failed event', async () => {
+    const e1 = publishEvent(
+      'observation.passive',
+      'slack_main',
+      'test',
+      JSON.stringify({ observation_id: 77 }),
+      null,
+      null,
+    );
+    const e2 = publishEvent(
+      'observation.passive',
+      'slack_main',
+      'test',
+      JSON.stringify({ observation_id: 78 }),
+      null,
+      null,
+    );
+
+    const ageMs = 15 * 60 * 1000;
+    const backdate = new Date(Date.now() - ageMs).toISOString();
+    const { getDb } = await import('./db.js');
+    getDb()
+      .prepare('UPDATE events SET created_at = ? WHERE id IN (?,?)')
+      .run(backdate, e1.id, e2.id);
+
+    const onExpired = vi.fn();
+    const ttlRules = [{ type_glob: 'observation.*', ttl_ms: 10 * 60 * 1000 }];
+    sweepExpiredEvents(ttlRules, [], { onExpired });
+
+    expect(onExpired).toHaveBeenCalledTimes(2);
+    expect(onExpired).toHaveBeenCalledWith(e1.id, 'observation.passive');
+    expect(onExpired).toHaveBeenCalledWith(e2.id, 'observation.passive');
+  });
+
+  it('T.21 — onExpired receives only successfully auto-failed events', async () => {
+    const fresh = publishEvent(
+      'observation.passive',
+      'slack_main',
+      'test',
+      '{}',
+      null,
+      null,
+    );
+    const stale = publishEvent(
+      'observation.passive',
+      'slack_main',
+      'test',
+      '{}',
+      null,
+      null,
+    );
+
+    const ageMs = 15 * 60 * 1000;
+    const { getDb } = await import('./db.js');
+    getDb()
+      .prepare('UPDATE events SET created_at = ? WHERE id = ?')
+      .run(new Date(Date.now() - ageMs).toISOString(), stale.id);
+
+    const onExpired = vi.fn();
+    const ttlRules = [{ type_glob: 'observation.*', ttl_ms: 10 * 60 * 1000 }];
+    sweepExpiredEvents(ttlRules, [], { onExpired });
+
+    expect(onExpired).toHaveBeenCalledTimes(1);
+    expect(onExpired).toHaveBeenCalledWith(stale.id, 'observation.passive');
+  });
+
+  it('T.22 — onExpired exceptions do not abort the sweep', async () => {
+    const e1 = publishEvent(
+      'observation.passive',
+      'slack_main',
+      'test',
+      '{}',
+      null,
+      null,
+    );
+    const e2 = publishEvent(
+      'observation.passive',
+      'slack_main',
+      'test',
+      '{}',
+      null,
+      null,
+    );
+
+    const ageMs = 15 * 60 * 1000;
+    const backdate = new Date(Date.now() - ageMs).toISOString();
+    const { getDb } = await import('./db.js');
+    getDb()
+      .prepare('UPDATE events SET created_at = ? WHERE id IN (?,?)')
+      .run(backdate, e1.id, e2.id);
+
+    const onExpired = vi.fn(() => {
+      throw new Error('hook went boom');
+    });
+    const ttlRules = [{ type_glob: 'observation.*', ttl_ms: 10 * 60 * 1000 }];
+
+    // Must not throw — sweep logs + swallows hook errors.
+    expect(() =>
+      sweepExpiredEvents(ttlRules, [], { onExpired }),
+    ).not.toThrow();
+    // Both events still got fail-stamped, independent of the hook.
+    const rows = getDb()
+      .prepare('SELECT status FROM events WHERE id IN (?,?)')
+      .all(e1.id, e2.id) as Array<{ status: string }>;
+    for (const r of rows) expect(r.status).toBe('failed');
+  });
+
+  it('T.23 — works when hooks are omitted (back-compat)', async () => {
+    const stale = publishEvent(
+      'observation.passive',
+      'slack_main',
+      'test',
+      '{}',
+      null,
+      null,
+    );
+    const ageMs = 15 * 60 * 1000;
+    const { getDb } = await import('./db.js');
+    getDb()
+      .prepare('UPDATE events SET created_at = ? WHERE id = ?')
+      .run(new Date(Date.now() - ageMs).toISOString(), stale.id);
+
+    // No hooks arg — must still sweep normally.
+    const ttlRules = [{ type_glob: 'observation.*', ttl_ms: 10 * 60 * 1000 }];
+    const swept = sweepExpiredEvents(ttlRules, []);
+    expect(swept.auto_failed).toHaveLength(1);
+  });
+});

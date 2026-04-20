@@ -114,15 +114,30 @@ export interface SweepResult {
   auto_failed: Array<{ id: number; type: string }>;
 }
 
+export interface SweepHooks {
+  /**
+   * Called once per event auto-failed by the sweep, after the status
+   * transition is durably committed. Used by the pipeline plugin to
+   * route observation.* TTL-expiry into its silent-fail recovery path
+   * (route the lost question through to the solver). Best-effort —
+   * exceptions are caught + logged so one misbehaving hook can't abort
+   * the sweep for the remaining victims.
+   */
+  onExpired?: (eventId: number, eventType: string) => void;
+}
+
 /**
  * Sweep expired events: auto-fail any pending/claimed event older than its
  * type's TTL. Idempotent — safe to call repeatedly. For each expired event
  * whose type matches a notify glob, publish a `pipeline_event_timeout`
- * event pointing at the original.
+ * event pointing at the original. The optional `hooks.onExpired` callback
+ * fires once per successfully-swept event so callers can wire follow-on
+ * behaviour without subclassing the sweep.
  */
 export function sweepExpiredEvents(
   rules: readonly TtlRule[],
   notifyTypeGlobs: readonly string[],
+  hooks: SweepHooks = {},
 ): SweepResult {
   const db = getDb();
   const now = Date.now();
@@ -168,6 +183,17 @@ export function sweepExpiredEvents(
       const res = failStmt.run(nowIso, note, v.id);
       if (res.changes === 0) continue; // raced with another writer
       auto_failed.push({ id: v.id, type: v.type });
+
+      if (hooks.onExpired) {
+        try {
+          hooks.onExpired(v.id, v.type);
+        } catch (err) {
+          logger.warn(
+            { err, eventId: v.id, eventType: v.type },
+            'sweepExpiredEvents onExpired hook threw — continuing',
+          );
+        }
+      }
 
       const shouldNotify = notifyTypeGlobs.some((g) =>
         typeMatchesGlob(v.type, g),
