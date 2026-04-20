@@ -83,6 +83,18 @@ export function computeNextRun(task: ScheduledTask): string | null {
   return null;
 }
 
+/**
+ * Pipeline tasks (id prefix `pipeline:`) run silently — their
+ * user-facing work happens through explicit sendMessage / reply_to_event
+ * tool calls mid-run. Any trailing assistant narrative ("Done. Processed
+ * event 294 — off-topic conversation.") is operator-noise and must not
+ * be forwarded to the task's chat_jid. Non-pipeline scheduled tasks
+ * (health checks, ad-hoc) still post their result as before.
+ */
+export function shouldForwardTaskNarrative(taskId: string): boolean {
+  return !taskId.startsWith('pipeline:');
+}
+
 export interface SchedulerDependencies {
   registeredGroups: () => Record<string, RegisteredGroup>;
   getSessions: () => Record<string, string>;
@@ -267,13 +279,15 @@ async function runTask(
       async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.usage) lastUsage = streamedOutput.usage;
         if (streamedOutput.result) {
-          const prefix =
-            !result && !isOllamaModel(effectiveModel) ? ':cloud: ' : '';
+          if (shouldForwardTaskNarrative(task.id)) {
+            const prefix =
+              !result && !isOllamaModel(effectiveModel) ? ':cloud: ' : '';
+            await deps.sendMessage(
+              task.chat_jid,
+              `${prefix}${streamedOutput.result}`,
+            );
+          }
           result = streamedOutput.result;
-          await deps.sendMessage(
-            task.chat_jid,
-            `${prefix}${streamedOutput.result}`,
-          );
           scheduleClose();
         }
         if (streamedOutput.status === 'success') {

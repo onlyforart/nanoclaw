@@ -12,6 +12,7 @@ import {
 import {
   _resetSchedulerLoopForTests,
   computeNextRun,
+  shouldForwardTaskNarrative,
   startSchedulerLoop,
 } from './task-scheduler.js';
 import type { ScheduledTask } from './types.js';
@@ -195,6 +196,21 @@ describe('task scheduler', () => {
   });
 
   // host_pipeline execution tests moved to pipeline plugin
+
+  it('shouldForwardTaskNarrative suppresses pipeline:* tasks but passes others', () => {
+    // Pipeline tasks do their user-facing work mid-run via explicit
+    // sendMessage tool calls; the trailing LLM narrative is operator
+    // noise and must not leak to the pipeline channel.
+    expect(shouldForwardTaskNarrative('pipeline:monitor')).toBe(false);
+    expect(shouldForwardTaskNarrative('pipeline:solver')).toBe(false);
+    expect(shouldForwardTaskNarrative('pipeline:responder')).toBe(false);
+
+    // Non-pipeline scheduled tasks (ad-hoc, health checks) still post
+    // their narrative as before.
+    expect(shouldForwardTaskNarrative('task-1774050219-jyxown')).toBe(true);
+    expect(shouldForwardTaskNarrative('task_price_flow_1775')).toBe(true);
+    expect(shouldForwardTaskNarrative('anything-else')).toBe(true);
+  });
 
   it('computeNextRun returns null for event-type tasks without fallback', () => {
     const task = {
