@@ -13,6 +13,7 @@ import {
   _clearCrossChannelDeliveries,
   getEventById,
   getEventPayloadById,
+  markEventReplied,
   getTaskById,
   isCrossChannelDelivered,
   recordCrossChannelDeliveryDB,
@@ -908,6 +909,12 @@ async function handleReplyToEvent(
     },
     'reply_to_event delivered',
   );
+
+  // F9.3 Task B — record the successful reply so the post-ack silent-
+  // fail detector can distinguish "acked with reply" from "acked
+  // silently". First-call wins, so retries don't clobber the original
+  // timestamp.
+  markEventReplied(eventId);
 
   // Phase F6.2: best-effort post-write delivery verification. Skipped
   // for channel-level replies (no thread to re-read).

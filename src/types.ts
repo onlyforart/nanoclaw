@@ -133,6 +133,11 @@ export interface EventRow {
   // shape on every tick. The solver ignores the flag.
   attempted_by_trivial: number;
   trivial_failure_reason: string | null;
+  // F9.3 Task B — timestamp the reply_to_event IPC handler wrote on
+  // successful delivery. null means no reply has been sent for this
+  // event. onEventAcked on candidate.question → done uses this to
+  // detect solver silent-fails (acked without a user reply).
+  replied_at: string | null;
 }
 
 // --- Observed messages ---

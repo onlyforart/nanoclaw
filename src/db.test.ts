@@ -749,6 +749,53 @@ describe('ackEvent', () => {
   });
 });
 
+describe('markEventReplied — F9.3 Task B', () => {
+  it('sets replied_at to the given timestamp', async () => {
+    const { markEventReplied } = await import('./db.js');
+    publishEvent('candidate.question', 'g', null, '{}');
+    const row = getRecentEvents(['candidate.question'], 1, true)[0];
+    expect(row.replied_at).toBeNull();
+
+    markEventReplied(row.id, '2026-04-20T10:00:00.000Z');
+
+    const after = getRecentEvents(['candidate.question'], 1, true)[0];
+    expect(after.replied_at).toBe('2026-04-20T10:00:00.000Z');
+  });
+
+  it('defaults timestamp to now when not provided', async () => {
+    const { markEventReplied } = await import('./db.js');
+    publishEvent('candidate.question', 'g', null, '{}');
+    const row = getRecentEvents(['candidate.question'], 1, true)[0];
+
+    const before = Date.now();
+    markEventReplied(row.id);
+    const after = Date.now();
+
+    const updated = getRecentEvents(['candidate.question'], 1, true)[0];
+    expect(updated.replied_at).not.toBeNull();
+    const ts = new Date(updated.replied_at!).getTime();
+    expect(ts).toBeGreaterThanOrEqual(before);
+    expect(ts).toBeLessThanOrEqual(after);
+  });
+
+  it('leaves replied_at untouched on subsequent calls (first-wins)', async () => {
+    const { markEventReplied } = await import('./db.js');
+    publishEvent('candidate.question', 'g', null, '{}');
+    const row = getRecentEvents(['candidate.question'], 1, true)[0];
+
+    markEventReplied(row.id, '2026-04-20T10:00:00.000Z');
+    markEventReplied(row.id, '2026-04-20T11:00:00.000Z');
+
+    const final = getRecentEvents(['candidate.question'], 1, true)[0];
+    expect(final.replied_at).toBe('2026-04-20T10:00:00.000Z');
+  });
+
+  it('is a no-op on a non-existent event id', async () => {
+    const { markEventReplied } = await import('./db.js');
+    expect(() => markEventReplied(999_999)).not.toThrow();
+  });
+});
+
 describe('releaseEvent', () => {
   it('releases a claimed event back to pending so another consumer can claim it', () => {
     publishEvent('rel.test', 'g', null, '{"n":1}');
@@ -844,9 +891,14 @@ describe('F9 phase 9 — bounded retry via attempted_by_trivial', () => {
     releaseEvent(allFirst[1].id, 'trivial-answerer');
 
     // Next trivial tick with the filter should only see the clean one.
-    const trivialSecond = consumeEvents(['retry.skip'], 'trivial-answerer', 10, {
-      skipAttemptedByTrivial: true,
-    });
+    const trivialSecond = consumeEvents(
+      ['retry.skip'],
+      'trivial-answerer',
+      10,
+      {
+        skipAttemptedByTrivial: true,
+      },
+    );
     expect(trivialSecond).toHaveLength(1);
     expect(trivialSecond[0].id).toBe(allFirst[1].id);
   });

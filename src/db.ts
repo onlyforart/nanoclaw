@@ -385,6 +385,17 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  // F9.3 Task B — solver-side silent-fail detection needs to know
+  // whether a reply_to_event landed for a candidate.*. Populated by
+  // the IPC reply_to_event handler on success; inspected by
+  // onEventAcked to detect "solver acked done but posted no reply"
+  // and raise a diagnostic + user-facing fallback.
+  try {
+    database.exec(`ALTER TABLE events ADD COLUMN replied_at TEXT`);
+  } catch {
+    /* column already exists */
+  }
+
   // Pipeline-specific tables (observed_messages, pipeline_intake_log,
   // observation_labels, reextraction_cache, pipeline_clusters) live in the
   // nanoclaw-pipeline plugin. See nanoclaw-pipeline/src/migrations.ts.
@@ -1336,6 +1347,23 @@ export function getEventPayloadById(eventId: number): string | undefined {
     .prepare('SELECT payload FROM events WHERE id = ?')
     .get(eventId) as { payload: string } | undefined;
   return row?.payload;
+}
+
+/**
+ * Mark an event as having received a successful reply. First-call
+ * wins: once replied_at is set it won't be overwritten, so late
+ * calls (e.g. from a retry that posted concurrently) are harmless.
+ * Silently no-ops on a non-existent event id.
+ *
+ * Used by the reply_to_event IPC handler; the pipeline's
+ * onEventAcked hook inspects the column to distinguish
+ * "acked with reply" from "acked silently".
+ */
+export function markEventReplied(eventId: number, timestamp?: string): void {
+  const ts = timestamp ?? new Date().toISOString();
+  db.prepare(
+    `UPDATE events SET replied_at = ? WHERE id = ? AND replied_at IS NULL`,
+  ).run(ts, eventId);
 }
 
 /**
