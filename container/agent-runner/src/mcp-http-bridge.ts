@@ -32,14 +32,16 @@ function log(msg: string): void {
 export interface BridgeArgs {
   url: string;
   headers: Record<string, string>;
+  timeoutMs?: number;
 }
 
 /**
  * Parse command-line arguments.
- * Accepts --url <url> and --header <name>:<value> (repeatable).
+ * Accepts --url <url>, --header <name>:<value> (repeatable), and --timeout <ms>.
  */
 export function parseArgs(argv: string[]): BridgeArgs {
   let url: string | undefined;
+  let timeoutMs: number | undefined;
   const headers: Record<string, string> = {};
 
   for (let i = 0; i < argv.length; i++) {
@@ -51,6 +53,11 @@ export function parseArgs(argv: string[]): BridgeArgs {
       if (colonIdx > 0) {
         headers[val.slice(0, colonIdx)] = val.slice(colonIdx + 1);
       }
+    } else if (argv[i] === '--timeout' && i + 1 < argv.length) {
+      const parsed = parseInt(argv[++i], 10);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        timeoutMs = parsed;
+      }
     }
   }
 
@@ -58,7 +65,7 @@ export function parseArgs(argv: string[]): BridgeArgs {
     throw new Error('--url is required');
   }
 
-  return { url, headers };
+  return { url, headers, timeoutMs };
 }
 
 /**
@@ -69,6 +76,7 @@ export function parseArgs(argv: string[]): BridgeArgs {
 export async function createBridge(
   url: string,
   headers: Record<string, string>,
+  timeoutMs?: number,
 ): Promise<{ client: Client; server: Server }> {
   // Connect to the remote HTTP server as a client
   const httpTransport = new StreamableHTTPClientTransport(
@@ -101,7 +109,9 @@ export async function createBridge(
     const { name, arguments: args } = request.params;
     log(`Proxying tools/call: ${name}`);
     try {
-      const result = await client.callTool({ name, arguments: args });
+      const result = timeoutMs !== undefined
+        ? await client.callTool({ name, arguments: args }, undefined, { timeout: timeoutMs })
+        : await client.callTool({ name, arguments: args });
       return { content: result.content };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -129,7 +139,7 @@ if (isMain) {
   (async () => {
     try {
       const args = parseArgs(process.argv.slice(2));
-      await createBridge(args.url, args.headers);
+      await createBridge(args.url, args.headers, args.timeoutMs);
     } catch (err) {
       log(`Fatal: ${err instanceof Error ? err.message : String(err)}`);
       process.exit(1);

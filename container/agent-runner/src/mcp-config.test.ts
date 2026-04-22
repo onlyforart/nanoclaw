@@ -154,4 +154,50 @@ describe('buildSdkMcpServers', () => {
     expect(args).toEqual([bridgePath, '--url', 'http://localhost:3201/mcp']);
     expect(args).not.toContain('--header');
   });
+
+  it('appends --timeout to HTTP bridge args when timeoutMs is provided', () => {
+    const config = {
+      'eks-kubectl': {
+        type: 'http' as const,
+        url: 'http://172.17.0.1:3201/mcp',
+        tools: ['list_pods'],
+      },
+    };
+
+    const { mcpServers } = buildSdkMcpServers(config, bridgePath, 900_000);
+    const args = (mcpServers['eks-kubectl'] as { args: string[] }).args;
+
+    expect(args).toContain('--timeout');
+    expect(args[args.indexOf('--timeout') + 1]).toBe('900000');
+  });
+
+  it('omits --timeout when timeoutMs is undefined', () => {
+    const config = {
+      'eks-kubectl': {
+        type: 'http' as const,
+        url: 'http://172.17.0.1:3201/mcp',
+        tools: ['list_pods'],
+      },
+    };
+
+    const { mcpServers } = buildSdkMcpServers(config, bridgePath);
+    const args = (mcpServers['eks-kubectl'] as { args: string[] }).args;
+
+    expect(args).not.toContain('--timeout');
+  });
+
+  it('does not add --timeout to stdio entries', () => {
+    const config = {
+      'domain-tools': {
+        command: 'node',
+        args: ['/server.js'],
+        tools: ['check_venue_status'],
+      },
+    };
+
+    const { mcpServers } = buildSdkMcpServers(config, bridgePath, 900_000);
+    const args = (mcpServers['domain-tools'] as { args: string[] }).args;
+
+    expect(args).not.toContain('--timeout');
+  });
 });

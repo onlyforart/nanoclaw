@@ -445,7 +445,11 @@ async function runQuery(
     try {
       const mcpConfig = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf-8'));
       const bridgePath = path.join(path.dirname(mcpServerPath), 'mcp-http-bridge.js');
-      const result = buildSdkMcpServers(mcpConfig, bridgePath);
+      const result = buildSdkMcpServers(
+        mcpConfig,
+        bridgePath,
+        toolCallTimeout(containerInput.timeoutMs),
+      );
       additionalMcpServers = result.mcpServers;
       additionalMcpTools = result.mcpTools;
     } catch (err) {

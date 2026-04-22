@@ -38,6 +38,7 @@ function log(msg: string): void {
 export function buildSdkMcpServers(
   mcpConfig: Record<string, McpConfigEntry>,
   bridgePath: string,
+  timeoutMs?: number,
 ): BuildResult {
   const mcpServers: Record<string, StdioServerEntry> = {};
   const mcpTools: string[] = [];
@@ -50,6 +51,9 @@ export function buildSdkMcpServers(
         for (const [k, v] of Object.entries(server.headers)) {
           args.push('--header', `${k}:${v}`);
         }
+      }
+      if (timeoutMs !== undefined) {
+        args.push('--timeout', String(timeoutMs));
       }
       mcpServers[name] = { command: 'node', args };
     } else if (server.command) {

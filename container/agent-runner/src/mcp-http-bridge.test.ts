@@ -109,6 +109,24 @@ describe('mcp-http-bridge', () => {
         'Authorization': 'Bearer abc:def:ghi',
       });
     });
+
+    it('parses --timeout as a millisecond integer', () => {
+      const result = parseArgs([
+        '--url', 'http://localhost:3201/mcp',
+        '--timeout', '900000',
+      ]);
+      expect(result.timeoutMs).toBe(900000);
+    });
+
+    it('leaves timeoutMs undefined when --timeout is absent', () => {
+      const result = parseArgs(['--url', 'http://localhost:3201/mcp']);
+      expect(result.timeoutMs).toBeUndefined();
+    });
+
+    it('ignores --timeout without a value', () => {
+      const result = parseArgs(['--url', 'http://localhost:3201/mcp', '--timeout']);
+      expect(result.timeoutMs).toBeUndefined();
+    });
   });
 
   describe('createBridge', () => {
@@ -157,6 +175,46 @@ describe('mcp-http-bridge', () => {
 
       expect(stdioTransportInstances).toHaveLength(1);
       expect(mockServerConnect).toHaveBeenCalled();
+    });
+
+    it('forwards timeoutMs to client.callTool on tools/call requests', async () => {
+      mockClientCallTool.mockResolvedValue({ content: [] });
+
+      await createBridge('http://host.docker.internal:3201/mcp', {}, 900_000);
+
+      // The second setRequestHandler registration is tools/call
+      const callToolHandler = mockSetRequestHandler.mock.calls[1][1] as (
+        req: { params: { name: string; arguments: Record<string, unknown> } },
+      ) => Promise<unknown>;
+
+      await callToolHandler({
+        params: { name: 'slow_tool', arguments: { k: 'v' } },
+      });
+
+      expect(mockClientCallTool).toHaveBeenCalledWith(
+        { name: 'slow_tool', arguments: { k: 'v' } },
+        undefined,
+        { timeout: 900_000 },
+      );
+    });
+
+    it('omits the timeout option when timeoutMs is undefined', async () => {
+      mockClientCallTool.mockResolvedValue({ content: [] });
+
+      await createBridge('http://host.docker.internal:3201/mcp', {});
+
+      const callToolHandler = mockSetRequestHandler.mock.calls[1][1] as (
+        req: { params: { name: string; arguments: Record<string, unknown> } },
+      ) => Promise<unknown>;
+
+      await callToolHandler({
+        params: { name: 'tool', arguments: {} },
+      });
+
+      expect(mockClientCallTool).toHaveBeenCalledWith({
+        name: 'tool',
+        arguments: {},
+      });
     });
   });
 });
