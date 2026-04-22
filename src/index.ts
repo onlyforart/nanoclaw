@@ -57,6 +57,7 @@ import { startIpcWatcher } from './ipc.js';
 import { scheduleDeliveryVerification } from './delivery-verification.js';
 import { publishEvent } from './db.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
+import { shouldPersistSession } from './session-persistence.js';
 import {
   restoreRemoteControl,
   startRemoteControl,
@@ -395,9 +396,9 @@ async function runAgent(
   // Wrap onOutput to track session ID from streamed results
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
-        if (output.newSessionId) {
-          sessions[group.folder] = output.newSessionId;
-          setSession(group.folder, output.newSessionId);
+        if (shouldPersistSession(output)) {
+          sessions[group.folder] = output.newSessionId!;
+          setSession(group.folder, output.newSessionId!);
         }
         await onOutput(output);
       }
@@ -429,9 +430,9 @@ async function runAgent(
       wrappedOnOutput,
     );
 
-    if (output.newSessionId) {
-      sessions[group.folder] = output.newSessionId;
-      setSession(group.folder, output.newSessionId);
+    if (shouldPersistSession(output)) {
+      sessions[group.folder] = output.newSessionId!;
+      setSession(group.folder, output.newSessionId!);
     }
 
     if (output.status === 'error') {
