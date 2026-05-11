@@ -85,6 +85,54 @@ These features are unique to this fork:
 - **Plugin system** — extensible hook interface for pipeline plugins. See below for details.
 - **Observation pipeline** — cross-channel monitoring system, installed as a plugin from a private repo. See below for details.
 
+## Slack: Socket Mode is mandatory (do NOT run install-slack.sh)
+
+This fork uses the **v1 Socket Mode** Slack adapter (`@slack/bolt` via
+`src/channels/slack.ts` + `src/channels/slack-bolt-shim.ts`). Upstream
+NanoClaw has moved to a webhook-only Chat-SDK shim (`@chat-adapter/slack`)
+delivered via the `channels` branch; this fork deliberately does NOT
+follow that change.
+
+**Why Socket Mode:** the upstream webhook path requires a public ingress
+(Slack's Events API posting back to our host). This install is behind
+corporate network boundaries and that ingress doesn't exist. Socket Mode
+uses an outbound WebSocket from our host to Slack — works through any
+egress that allows HTTPS — and is the production reality this install
+has run on since day one.
+
+**What you must NEVER do:**
+
+- **Do not run `setup/install-slack.sh`** (or the post-v2 worktree
+  equivalent). The script fetches `origin/channels`, overwrites
+  `src/channels/slack.ts` with the upstream webhook shim, and installs
+  `@chat-adapter/slack`. That's a hard production regression.
+- **Do not run the `/add-slack` skill** for the same reason.
+- **Do not "fix" `src/channels/slack.ts` to match upstream** during
+  conflict resolution after a `git merge upstream/main`. The fork-port
+  is the right code; conflicts go the **fork** way.
+
+**Guard rails in place:**
+
+- The `setup/install-slack.sh` script has a refusal guard at the top that
+  exits non-zero unless `NANOCLAW_FORK_OVERRIDE_INSTALL_SLACK` is set to
+  the explicit acknowledgement string. (See the script for the full
+  bypass incantation if you ever truly need it.)
+- `.claude/skills/add-slack/SKILL.md` carries a DO NOT RUN banner at the
+  top with a pointer back to this section.
+- `src/channels/slack.ts` line 2 explicitly states "fork-only Socket
+  Mode port".
+
+**Authentication:** Socket Mode needs both `SLACK_BOT_TOKEN` and
+`SLACK_APP_TOKEN` in `.env`. The bot token (`xoxb-…`) is the normal Bot
+User OAuth Token from the Slack app config; the app token (`xapp-…`) is
+the Socket Mode connection token — generate it under
+*Settings → Basic Information → App-Level Tokens* with the
+`connections:write` scope.
+
+**If a fresh checkout looks like the Slack adapter is "missing":** it is
+not. Run `pnpm install && pnpm run build` — the adapter source IS the
+committed code at `src/channels/slack.ts`.
+
 ## Plugin System
 
 NanoClaw supports pipeline plugins via the `PipelinePlugin` hook interface (`src/pipeline-plugin.ts`). Plugins are separately compiled and deployed by copying compiled JS into `dist/pipeline/`. A `plugin.json` manifest declares the API version; nanoclaw validates it at startup and rejects mismatches.
