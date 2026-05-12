@@ -222,28 +222,42 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
     // Process the query while concurrently polling for new messages
     const skippedSet = new Set(skipped);
     const processingIds = ids.filter((id) => !commandIds.includes(id) && !skippedSet.has(id));
-    const startMs = Date.now();
-    let runError: string | undefined;
-    let usage:
-      | {
-          model?: string;
-          inputTokens: number;
-          outputTokens: number;
-          cacheReadInputTokens: number;
-          cacheCreationInputTokens: number;
-        }
-      | undefined;
+
+    // run_report tagging — when the batch is driven by a scheduled task,
+    // capture its id so processQuery can emit run_report per LLM call.
+    // processQuery doesn't return per-task in v2 (follow-ups keep it open
+    // indefinitely), so per-task accounting has to happen inline at the
+    // 'usage' event.
+    let scheduledTaskId: string | undefined;
+    if (routingFields.isScheduledTask) {
+      const triggerCandidates = keep.filter((m) => m.trigger === 1);
+      const taskCandidates = (triggerCandidates.length > 0 ? triggerCandidates : keep).filter(
+        (m) => m.kind === 'task',
+      );
+      const taskMsg = taskCandidates.length
+        ? taskCandidates.reduce((a, b) => ((a.seq ?? 0) > (b.seq ?? 0) ? a : b))
+        : null;
+      scheduledTaskId = taskMsg?.id ?? processingIds[0];
+    }
+
     try {
-      const result = await processQuery(query, routing, processingIds, config.providerName, engineKind);
+      const result = await processQuery(
+        query,
+        routing,
+        processingIds,
+        config.providerName,
+        engineKind,
+        {
+          isScheduledTaskBatch: !!routingFields.isScheduledTask,
+          scheduledTaskId,
+        },
+      );
       if (result.continuation && result.continuation !== continuation) {
         setContinuation(config.providerName, result.continuation, engineKind);
       }
-      usage = result.usage;
-      runError = result.errored;
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       log(`Query error: ${errMsg}`);
-      runError = errMsg;
 
       // Stale/corrupt continuation recovery: ask the provider whether
       // this error means the stored continuation is unusable, and clear
@@ -262,43 +276,6 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
         thread_id: routing.threadId,
         content: JSON.stringify({ text: `Error: ${errMsg}` }),
       });
-    }
-
-    // Emit a run_report when this batch was driven by a scheduled task.
-    // The host reads kind='run_report' messages from messages_out and
-    // inserts to `container_task_run_logs` for the webui's per-group
-    // token-usage chart. Routing.isScheduledTask is set by pickRoutingFields
-    // when the primary triggering message had kind='task'.
-    if (routingFields.isScheduledTask) {
-      const triggerCandidates = keep.filter((m) => m.trigger === 1);
-      const taskCandidates = (triggerCandidates.length > 0 ? triggerCandidates : keep).filter(
-        (m) => m.kind === 'task',
-      );
-      const taskMsg = taskCandidates.length
-        ? taskCandidates.reduce((a, b) => ((a.seq ?? 0) > (b.seq ?? 0) ? a : b))
-        : null;
-      const taskId = taskMsg?.id ?? processingIds[0] ?? generateId();
-      const payload = {
-        task_id: taskId,
-        run_at: new Date(startMs).toISOString(),
-        duration_ms: Date.now() - startMs,
-        status: runError ? 'error' : 'success',
-        error: runError ?? null,
-        model: usage?.model ?? routingFields.model ?? null,
-        input_tokens: usage?.inputTokens ?? 0,
-        output_tokens: usage?.outputTokens ?? 0,
-        cache_read_input_tokens: usage?.cacheReadInputTokens ?? 0,
-        cache_creation_input_tokens: usage?.cacheCreationInputTokens ?? 0,
-      };
-      try {
-        writeMessageOut({
-          id: generateId(),
-          kind: 'run_report',
-          content: JSON.stringify(payload),
-        });
-      } catch (err) {
-        log(`run_report emit failed: ${err instanceof Error ? err.message : String(err)}`);
-      }
     }
 
     // Ensure completed even if processQuery ended without a result event
@@ -366,6 +343,7 @@ async function processQuery(
   initialBatchIds: string[],
   providerName: string,
   engineKind: EngineKind,
+  opts?: { isScheduledTaskBatch?: boolean; scheduledTaskId?: string },
 ): Promise<QueryResult> {
   let queryContinuation: string | undefined;
   let done = false;
@@ -377,6 +355,9 @@ async function processQuery(
     cacheCreationInputTokens: 0,
   };
   let errored: string | undefined;
+  const isScheduledTaskBatch = !!opts?.isScheduledTaskBatch;
+  const scheduledTaskId = opts?.scheduledTaskId;
+  let iterationStartMs = Date.now();
 
   // Concurrent polling: push follow-ups into the active query as they arrive.
   // We do NOT force-end the stream on silence — keeping the query open is
@@ -440,6 +421,36 @@ async function processQuery(
         usage.cacheReadInputTokens += event.cacheReadInputTokens;
         usage.cacheCreationInputTokens += event.cacheCreationInputTokens;
         if (event.model) usage.model = event.model;
+        // Emit run_report inline whenever the batch was driven by a
+        // scheduled task. processQuery doesn't naturally return per-task
+        // in v2 — the container keeps the same query open across multiple
+        // task firings (each scheduled task is pushed in as a follow-up),
+        // so the only reliable per-iteration trigger is the usage event
+        // the provider emits after each runAnthropicApiChat call. Emit
+        // once per LLM call; the host aggregates per-group-per-day in
+        // webui/db.getGroupDailyTokensByModel.
+        if (isScheduledTaskBatch) {
+          try {
+            writeMessageOut({
+              id: generateId(),
+              kind: 'run_report',
+              content: JSON.stringify({
+                task_id: scheduledTaskId,
+                run_at: new Date(iterationStartMs).toISOString(),
+                duration_ms: Date.now() - iterationStartMs,
+                status: 'success',
+                model: event.model ?? null,
+                input_tokens: event.inputTokens,
+                output_tokens: event.outputTokens,
+                cache_read_input_tokens: event.cacheReadInputTokens,
+                cache_creation_input_tokens: event.cacheCreationInputTokens,
+              }),
+            });
+          } catch (err) {
+            log(`run_report emit failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+          iterationStartMs = Date.now();
+        }
       } else if (event.type === 'error') {
         errored = event.message;
       } else if (event.type === 'result') {
