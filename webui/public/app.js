@@ -560,47 +560,45 @@ const AppGroupDetail = {
 
       <div v-if="loading" class="text-gray-400 text-sm">Loading...</div>
       <div v-else>
-        <tab-bar :tabs="tabs" :active="activeTab" @select="selectTab" />
-
-        <!-- Channels Tab (Q7=β: surface v2 wirings + messaging-groups) -->
-        <div v-if="activeTab === 'channels'">
-          <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
-            <h3 class="text-lg font-semibold mb-1">Wired Channels</h3>
-            <p class="text-sm text-gray-400 mb-4">
-              Channels this agent group responds in. Per-wiring agent settings
-              (model, max tool rounds, etc.) override the agent group defaults.
-            </p>
-            <div v-if="!group?.wirings?.length" class="text-sm text-gray-500 py-6">
-              No wired channels.
-            </div>
-            <table v-else class="w-full text-sm">
-              <thead>
-                <tr class="text-left text-xs uppercase text-gray-500 border-b border-gray-200 dark:border-gray-700">
-                  <th class="py-2 pr-3">Channel</th>
-                  <th class="py-2 pr-3">Platform ID</th>
-                  <th class="py-2 pr-3">Engage</th>
-                  <th class="py-2 pr-3">Session</th>
-                  <th class="py-2 pr-3">Model</th>
-                  <th class="py-2 pr-3">Main</th>
-                  <th class="py-2 pr-3">Pipeline replies blocked</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="w in group.wirings" :key="w.id"
-                  class="border-b border-gray-100 dark:border-gray-800 last:border-b-0">
-                  <td class="py-2 pr-3"><a :href="'#/messaging-groups/' + w.messagingGroupId"
-                    class="text-blue-600 hover:underline">{{ w.messagingGroupName || w.channelType }}</a></td>
-                  <td class="py-2 pr-3 font-mono text-xs text-gray-500">{{ w.platformId }}</td>
-                  <td class="py-2 pr-3">{{ w.engageMode || '—' }}<span v-if="w.engagePattern" class="text-xs text-gray-500"> · {{ w.engagePattern }}</span></td>
-                  <td class="py-2 pr-3">{{ w.sessionMode }}</td>
-                  <td class="py-2 pr-3 font-mono text-xs">{{ w.model || '—' }}</td>
-                  <td class="py-2 pr-3"><span v-if="w.isMain" class="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 font-semibold">YES</span></td>
-                  <td class="py-2 pr-3"><span v-if="w.pipelineRepliesBlocked" class="text-xs text-amber-600 dark:text-amber-400">blocked</span></td>
-                </tr>
-              </tbody>
-            </table>
+        <!-- Channels panel — always visible above the tab bar -->
+        <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 mb-6">
+          <h3 class="text-lg font-semibold mb-1">Wired Channels</h3>
+          <p class="text-sm text-gray-400 mb-4">
+            Channels this agent group responds in. Per-wiring agent settings
+            (model, max tool rounds, etc.) override the agent group defaults.
+          </p>
+          <div v-if="!group?.wirings?.length" class="text-sm text-gray-500 py-6">
+            No wired channels.
           </div>
+          <table v-else class="w-full text-sm">
+            <thead>
+              <tr class="text-left text-xs uppercase text-gray-500 border-b border-gray-200 dark:border-gray-700">
+                <th class="py-2 pr-3">Channel</th>
+                <th class="py-2 pr-3">Platform ID</th>
+                <th class="py-2 pr-3">Engage</th>
+                <th class="py-2 pr-3">Session</th>
+                <th class="py-2 pr-3">Model</th>
+                <th class="py-2 pr-3">Main</th>
+                <th class="py-2 pr-3">Pipeline replies blocked</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="w in group.wirings" :key="w.id"
+                class="border-b border-gray-100 dark:border-gray-800 last:border-b-0">
+                <td class="py-2 pr-3"><a :href="'#/messaging-groups/' + w.messagingGroupId"
+                  class="text-blue-600 hover:underline">{{ w.messagingGroupName || w.channelType }}</a></td>
+                <td class="py-2 pr-3 font-mono text-xs text-gray-500">{{ w.platformId }}</td>
+                <td class="py-2 pr-3">{{ w.engageMode || '—' }}<span v-if="w.engagePattern" class="text-xs text-gray-500"> · {{ w.engagePattern }}</span></td>
+                <td class="py-2 pr-3">{{ w.sessionMode }}</td>
+                <td class="py-2 pr-3 font-mono text-xs">{{ w.model || '—' }}</td>
+                <td class="py-2 pr-3"><span v-if="w.isMain" class="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 font-semibold">YES</span></td>
+                <td class="py-2 pr-3"><span v-if="w.pipelineRepliesBlocked" class="text-xs text-amber-600 dark:text-amber-400">blocked</span></td>
+              </tr>
+            </tbody>
+          </table>
         </div>
+
+        <tab-bar :tabs="tabs" :active="activeTab" @select="selectTab" />
 
         <!-- Settings Tab -->
         <div v-if="activeTab === 'settings'">
@@ -908,7 +906,6 @@ const AppGroupDetail = {
     const newTaskScheduleHint = computed(() => scheduleHintText(newTask.scheduleType, newTask.scheduleValue));
 
     const tabs = computed(() => [
-      { key: 'channels', label: 'Channels', count: group.value?.wirings?.length ?? 0 },
       { key: 'tasks', label: 'Tasks', count: tasks.value.length },
       { key: 'prompts', label: 'Prompts' },
       { key: 'settings', label: 'Settings' },
