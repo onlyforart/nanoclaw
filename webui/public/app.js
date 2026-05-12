@@ -416,8 +416,21 @@ const AppGlobalPrompts = {
         <div v-if="activeTab === 'global'">
           <div class="mb-6">
             <label class="block text-sm font-medium mb-2">CLAUDE.md</label>
+            <p class="text-xs text-gray-400 mb-2">Global system prompt. Per-group <code class="font-mono">CLAUDE.md</code> files <code class="font-mono">@</code>-import this.</p>
             <textarea v-model="claude"
-              class="w-full h-72 px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 font-mono text-sm leading-relaxed resize-y focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"></textarea>
+              class="w-full h-48 px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 font-mono text-sm leading-relaxed resize-y focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"></textarea>
+          </div>
+          <div class="mb-6">
+            <label class="block text-sm font-medium mb-2">CLAUDE.local.md</label>
+            <p class="text-xs text-gray-400 mb-2">Global operator memory. Optional — usually most operator notes live on individual groups.</p>
+            <textarea v-model="claudeLocal"
+              class="w-full h-48 px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 font-mono text-sm leading-relaxed resize-y focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"></textarea>
+          </div>
+          <div class="mb-6">
+            <label class="block text-sm font-medium mb-2">Resolved (read-only)</label>
+            <p class="text-xs text-gray-400 mb-2">Global CLAUDE.md with all <code class="font-mono">@./...</code> imports inlined.</p>
+            <textarea :value="claudeResolved" readonly
+              class="w-full h-72 px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 font-mono text-xs leading-relaxed resize-y outline-none"></textarea>
           </div>
           <div class="mb-6">
             <label class="block text-sm font-medium mb-2">OLLAMA.md</label>
@@ -448,6 +461,8 @@ const AppGlobalPrompts = {
   `,
   setup() {
     const claude = ref('');
+    const claudeLocal = ref('');
+    const claudeResolved = ref('');
     const ollama = ref('');
     const channelOverrides = Vue.reactive({});
     const newChannel = ref('');
@@ -467,6 +482,8 @@ const AppGlobalPrompts = {
       try {
         const data = await api('/prompts/global');
         claude.value = data.claude;
+        claudeLocal.value = data.claudeLocal || '';
+        claudeResolved.value = data.claudeResolved || '';
         ollama.value = data.ollama || '';
         if (data.channelOverrides) {
           Object.assign(channelOverrides, data.channelOverrides);
@@ -486,20 +503,22 @@ const AppGlobalPrompts = {
     const save = async () => {
       saving.value = true;
       try {
-        await api('/prompts/global', {
+        const result = await api('/prompts/global', {
           method: 'PUT',
           body: {
             claude: claude.value,
+            claudeLocal: claudeLocal.value,
             ollama: ollama.value || undefined,
             channelOverrides,
           },
         });
+        claudeResolved.value = result.claudeResolved || '';
         showToast('Global prompts saved');
       } catch (e) { showToast(e.message, 'error'); }
       saving.value = false;
     };
 
-    return { claude, ollama, channelOverrides, newChannel, activeTab, tabs, loading, saving, save, addOverride };
+    return { claude, claudeLocal, claudeResolved, ollama, channelOverrides, newChannel, activeTab, tabs, loading, saving, save, addOverride };
   },
 };
 
@@ -630,8 +649,21 @@ const AppGroupDetail = {
         <div v-if="activeTab === 'prompts'">
           <div class="mb-6">
             <label class="block text-sm font-medium mb-2">CLAUDE.md</label>
+            <p class="text-xs text-gray-400 mb-2">The file the agent loads. Usually a list of <code class="font-mono">@./...</code> imports; the SDK inlines them at read time.</p>
             <textarea v-model="claude"
-              class="w-full h-72 px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 font-mono text-sm leading-relaxed resize-y focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"></textarea>
+              class="w-full h-48 px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 font-mono text-sm leading-relaxed resize-y focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"></textarea>
+          </div>
+          <div class="mb-6">
+            <label class="block text-sm font-medium mb-2">CLAUDE.local.md</label>
+            <p class="text-xs text-gray-400 mb-2">Per-group operator memory. Loaded each session, writable by the agent. Fill in group-specific routing, escalation, monitored systems, etc.</p>
+            <textarea v-model="claudeLocal"
+              class="w-full h-48 px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 font-mono text-sm leading-relaxed resize-y focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"></textarea>
+          </div>
+          <div class="mb-6">
+            <label class="block text-sm font-medium mb-2">Resolved (read-only)</label>
+            <p class="text-xs text-gray-400 mb-2">CLAUDE.md with all <code class="font-mono">@./...</code> imports inlined — what the agent actually sees. Symlinks into <code class="font-mono">/app/...</code> are remapped to their host paths.</p>
+            <textarea :value="claudeResolved" readonly
+              class="w-full h-96 px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 font-mono text-xs leading-relaxed resize-y outline-none"></textarea>
           </div>
           <div class="mb-6">
             <label class="block text-sm font-medium mb-2">OLLAMA.md</label>
@@ -829,6 +861,8 @@ const AppGroupDetail = {
     const group = ref(null);
     const tasks = ref([]);
     const claude = ref('');
+    const claudeLocal = ref('');
+    const claudeResolved = ref('');
     const ollama = ref('');
     const loading = ref(true);
     const saving = ref(false);
@@ -881,6 +915,8 @@ const AppGroupDetail = {
         form.threadingMode = g.threadingMode || 'temporal';
         form.pipelineRepliesBlocked = g.pipelineRepliesBlocked ?? false;
         claude.value = p.claude;
+        claudeLocal.value = p.claudeLocal || '';
+        claudeResolved.value = p.claudeResolved || '';
         ollama.value = p.ollama || '';
         tasks.value = t;
         tokenUsage.value = tu;
@@ -925,10 +961,11 @@ const AppGroupDetail = {
     const savePrompts = async () => {
       saving.value = true;
       try {
-        await api(`/agent-groups/${props.folder}/prompts`, {
+        const result = await api(`/agent-groups/${props.folder}/prompts`, {
           method: 'PUT',
-          body: { claude: claude.value, ollama: ollama.value || undefined },
+          body: { claude: claude.value, claudeLocal: claudeLocal.value, ollama: ollama.value || undefined },
         });
+        claudeResolved.value = result.claudeResolved || '';
         showToast('Prompts saved');
       } catch (e) { showToast(e.message, 'error'); }
       saving.value = false;
@@ -1065,7 +1102,7 @@ const AppGroupDetail = {
       return hasCostData.value ? base + 48 : base;
     });
 
-    return { group, tasks, claude, ollama, loading, saving, activeTab, form, tabs, showNewTask, newTask, newTaskScheduleError, newTaskScheduleHint, selectTab, createNewTask, saveSettings, savePrompts, navigate, tokenUsage, visibleTokenUsage, chartMax, chartBarHeight, chartYLabels, formatTokens, formatCost, barTooltip, hasCostData, costMax, costY, costLineSegments, costYLabels, chartWidth, chartContainerRef };
+    return { group, tasks, claude, claudeLocal, claudeResolved, ollama, loading, saving, activeTab, form, tabs, showNewTask, newTask, newTaskScheduleError, newTaskScheduleHint, selectTab, createNewTask, saveSettings, savePrompts, navigate, tokenUsage, visibleTokenUsage, chartMax, chartBarHeight, chartYLabels, formatTokens, formatCost, barTooltip, hasCostData, costMax, costY, costLineSegments, costYLabels, chartWidth, chartContainerRef };
   },
 };
 
