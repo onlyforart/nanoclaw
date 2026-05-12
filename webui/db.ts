@@ -441,29 +441,69 @@ interface DailyModelTokenRow {
 }
 
 export function getGroupDailyTokensByModel(groupFolder: string, days: number = 30): DailyModelTokenRow[] {
+  // Two sources of per-day token data per group:
+  //   - pipeline_task_run_logs JOIN pipeline_scheduled_tasks (host-pipeline)
+  //   - container_task_run_logs                              (every container
+  //                                                           scheduled-task run
+  //                                                           in this group)
+  //
+  // We aggregate as one CTE-joined query so the daily buckets are unified.
   // Per-wiring model lives on messaging_group_agents (is_main wiring); fall
-  // back to task.model.
-  return db
+  // back to task.model for pipeline rows, and to log.model for container rows.
+  // The webui's container_task_run_logs table is created by migration #015;
+  // tests that don't apply it will see this table missing — the LEFT JOIN
+  // tolerates that via a guard below.
+  const tableExists = !!db
     .prepare(
-      `SELECT date(r.run_at) as date,
-              COALESCE(NULLIF(t.model, ''), mga.model) as model,
-              SUM(COALESCE(r.input_tokens, 0)) as input_tokens,
-              SUM(COALESCE(r.output_tokens, 0)) as output_tokens,
-              SUM(COALESCE(r.cache_read_input_tokens, 0)) as cache_read,
-              SUM(COALESCE(r.cache_creation_input_tokens, 0)) as cache_creation,
-              SUM(r.cost_usd) as actual_cost,
-              COUNT(r.cost_usd) as rows_with_cost,
-              COUNT(*) as total_rows
-       FROM pipeline_task_run_logs r
-       JOIN pipeline_scheduled_tasks t ON r.task_id = t.id
-       LEFT JOIN agent_groups ag ON t.group_folder = ag.folder
-       LEFT JOIN messaging_group_agents mga ON mga.agent_group_id = ag.id AND mga.is_main = 1
-       WHERE t.group_folder = ?
-         AND r.run_at >= date('now', ? || ' days')
-       GROUP BY date(r.run_at), COALESCE(NULLIF(t.model, ''), mga.model)
-       ORDER BY date(r.run_at)`,
+      `SELECT 1 FROM sqlite_master WHERE type='table' AND name='container_task_run_logs'`,
     )
-    .all(groupFolder, -(days - 1)) as DailyModelTokenRow[];
+    .get();
+
+  const pipelineSql = `
+    SELECT date(r.run_at) as date,
+           COALESCE(NULLIF(t.model, ''), mga.model) as model,
+           SUM(COALESCE(r.input_tokens, 0)) as input_tokens,
+           SUM(COALESCE(r.output_tokens, 0)) as output_tokens,
+           SUM(COALESCE(r.cache_read_input_tokens, 0)) as cache_read,
+           SUM(COALESCE(r.cache_creation_input_tokens, 0)) as cache_creation,
+           SUM(r.cost_usd) as actual_cost,
+           COUNT(r.cost_usd) as rows_with_cost,
+           COUNT(*) as total_rows
+    FROM pipeline_task_run_logs r
+    JOIN pipeline_scheduled_tasks t ON r.task_id = t.id
+    LEFT JOIN agent_groups ag ON t.group_folder = ag.folder
+    LEFT JOIN messaging_group_agents mga ON mga.agent_group_id = ag.id AND mga.is_main = 1
+    WHERE t.group_folder = ?
+      AND r.run_at >= date('now', ? || ' days')
+    GROUP BY date(r.run_at), COALESCE(NULLIF(t.model, ''), mga.model)
+  `;
+
+  const containerSql = tableExists
+    ? `
+    UNION ALL
+    SELECT date(c.run_at) as date,
+           COALESCE(NULLIF(c.model, ''), mga.model) as model,
+           SUM(COALESCE(c.input_tokens, 0)) as input_tokens,
+           SUM(COALESCE(c.output_tokens, 0)) as output_tokens,
+           SUM(COALESCE(c.cache_read_input_tokens, 0)) as cache_read,
+           SUM(COALESCE(c.cache_creation_input_tokens, 0)) as cache_creation,
+           SUM(c.cost_usd) as actual_cost,
+           COUNT(c.cost_usd) as rows_with_cost,
+           COUNT(*) as total_rows
+    FROM container_task_run_logs c
+    LEFT JOIN agent_groups ag ON c.group_folder = ag.folder
+    LEFT JOIN messaging_group_agents mga ON mga.agent_group_id = ag.id AND mga.is_main = 1
+    WHERE c.group_folder = ?
+      AND c.run_at >= date('now', ? || ' days')
+    GROUP BY date(c.run_at), COALESCE(NULLIF(c.model, ''), mga.model)
+  `
+    : '';
+
+  const sql = `${pipelineSql}${containerSql} ORDER BY date`;
+  const params = tableExists
+    ? [groupFolder, -(days - 1), groupFolder, -(days - 1)]
+    : [groupFolder, -(days - 1)];
+  return db.prepare(sql).all(...params) as DailyModelTokenRow[];
 }
 
 // ---------------------------------------------------------------------------

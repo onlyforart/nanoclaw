@@ -256,6 +256,45 @@ async function deliverMessage(
     return;
   }
 
+  // Container task run report — log centrally, never deliver to a channel.
+  // The container engine emits one of these after every scheduled-task
+  // completion (regardless of which channel the task addressed). Host
+  // delivery records it to `container_task_run_logs` so the webui can
+  // chart token usage / cost per agent group. See migration #015.
+  if (msg.kind === 'run_report') {
+    try {
+      const folderRow = getDb()
+        .prepare('SELECT folder FROM agent_groups WHERE id = ?')
+        .get(session.agent_group_id) as { folder: string } | undefined;
+      const { insertContainerTaskRunLog } = await import('./db/container-task-run-logs.js');
+      insertContainerTaskRunLog({
+        task_id: typeof content.task_id === 'string' ? content.task_id : msg.id,
+        agent_group_id: session.agent_group_id,
+        group_folder: folderRow?.folder ?? session.agent_group_id,
+        run_at: typeof content.run_at === 'string' ? content.run_at : new Date().toISOString(),
+        duration_ms: typeof content.duration_ms === 'number' ? content.duration_ms : 0,
+        status: content.status === 'error' ? 'error' : 'success',
+        result: typeof content.result === 'string' ? content.result : null,
+        error: typeof content.error === 'string' ? content.error : null,
+        model: typeof content.model === 'string' ? content.model : null,
+        input_tokens: typeof content.input_tokens === 'number' ? content.input_tokens : null,
+        output_tokens: typeof content.output_tokens === 'number' ? content.output_tokens : null,
+        cache_read_input_tokens:
+          typeof content.cache_read_input_tokens === 'number'
+            ? content.cache_read_input_tokens
+            : null,
+        cache_creation_input_tokens:
+          typeof content.cache_creation_input_tokens === 'number'
+            ? content.cache_creation_input_tokens
+            : null,
+        cost_usd: typeof content.cost_usd === 'number' ? content.cost_usd : null,
+      });
+    } catch (err) {
+      log.warn('failed to record run_report', { id: msg.id, err: String(err) });
+    }
+    return;
+  }
+
   // Agent-to-agent — route to target session via the agent-to-agent module.
   // Guarded by the channel_type check. If the module isn't installed the
   // `agent_destinations` table won't exist and `routeAgentMessage`'s permission

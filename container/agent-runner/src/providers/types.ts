@@ -105,4 +105,19 @@ export type ProviderEvent =
    * event (tool call, thinking, partial message, anything) so the
    * poll-loop's idle timer stays honest during long tool runs.
    */
-  | { type: 'activity' };
+  | { type: 'activity' }
+  /**
+   * Per-iteration token-usage report. Providers SHOULD emit one of these
+   * after each underlying LLM call so the poll-loop can aggregate totals
+   * and write a `run_report` message on scheduled-task completion. The
+   * Claude SDK provider currently doesn't expose usage, so its emission
+   * is best-effort; the Anthropic-API engine + Ollama paths always emit.
+   */
+  | {
+      type: 'usage';
+      model?: string;
+      inputTokens: number;
+      outputTokens: number;
+      cacheReadInputTokens: number;
+      cacheCreationInputTokens: number;
+    };

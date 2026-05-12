@@ -222,14 +222,28 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
     // Process the query while concurrently polling for new messages
     const skippedSet = new Set(skipped);
     const processingIds = ids.filter((id) => !commandIds.includes(id) && !skippedSet.has(id));
+    const startMs = Date.now();
+    let runError: string | undefined;
+    let usage:
+      | {
+          model?: string;
+          inputTokens: number;
+          outputTokens: number;
+          cacheReadInputTokens: number;
+          cacheCreationInputTokens: number;
+        }
+      | undefined;
     try {
       const result = await processQuery(query, routing, processingIds, config.providerName, engineKind);
       if (result.continuation && result.continuation !== continuation) {
         setContinuation(config.providerName, result.continuation, engineKind);
       }
+      usage = result.usage;
+      runError = result.errored;
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       log(`Query error: ${errMsg}`);
+      runError = errMsg;
 
       // Stale/corrupt continuation recovery: ask the provider whether
       // this error means the stored continuation is unusable, and clear
@@ -248,6 +262,43 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
         thread_id: routing.threadId,
         content: JSON.stringify({ text: `Error: ${errMsg}` }),
       });
+    }
+
+    // Emit a run_report when this batch was driven by a scheduled task.
+    // The host reads kind='run_report' messages from messages_out and
+    // inserts to `container_task_run_logs` for the webui's per-group
+    // token-usage chart. Routing.isScheduledTask is set by pickRoutingFields
+    // when the primary triggering message had kind='task'.
+    if (routingFields.isScheduledTask) {
+      const triggerCandidates = keep.filter((m) => m.trigger === 1);
+      const taskCandidates = (triggerCandidates.length > 0 ? triggerCandidates : keep).filter(
+        (m) => m.kind === 'task',
+      );
+      const taskMsg = taskCandidates.length
+        ? taskCandidates.reduce((a, b) => ((a.seq ?? 0) > (b.seq ?? 0) ? a : b))
+        : null;
+      const taskId = taskMsg?.id ?? processingIds[0] ?? generateId();
+      const payload = {
+        task_id: taskId,
+        run_at: new Date(startMs).toISOString(),
+        duration_ms: Date.now() - startMs,
+        status: runError ? 'error' : 'success',
+        error: runError ?? null,
+        model: usage?.model ?? routingFields.model ?? null,
+        input_tokens: usage?.inputTokens ?? 0,
+        output_tokens: usage?.outputTokens ?? 0,
+        cache_read_input_tokens: usage?.cacheReadInputTokens ?? 0,
+        cache_creation_input_tokens: usage?.cacheCreationInputTokens ?? 0,
+      };
+      try {
+        writeMessageOut({
+          id: generateId(),
+          kind: 'run_report',
+          content: JSON.stringify(payload),
+        });
+      } catch (err) {
+        log(`run_report emit failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
 
     // Ensure completed even if processQuery ended without a result event
@@ -293,6 +344,20 @@ function formatMessagesWithCommands(messages: MessageInRow[], nativeSlashCommand
 
 interface QueryResult {
   continuation?: string;
+  /**
+   * Accumulated token usage across every iteration the provider reported.
+   * Always present (defaults to zero). Used by the caller to emit a
+   * `run_report` message when the triggering message was a scheduled task.
+   */
+  usage: {
+    model?: string;
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadInputTokens: number;
+    cacheCreationInputTokens: number;
+  };
+  /** Set if the stream produced an error event. Used for run_report.status. */
+  errored?: string;
 }
 
 async function processQuery(
@@ -304,6 +369,14 @@ async function processQuery(
 ): Promise<QueryResult> {
   let queryContinuation: string | undefined;
   let done = false;
+  const usage = {
+    model: undefined as string | undefined,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
+  };
+  let errored: string | undefined;
 
   // Concurrent polling: push follow-ups into the active query as they arrive.
   // We do NOT force-end the stream on silence — keeping the query open is
@@ -361,6 +434,14 @@ async function processQuery(
         // effectively orphaned and the next message started a blank
         // Claude session with no prior context.
         setContinuation(providerName, event.continuation, engineKind);
+      } else if (event.type === 'usage') {
+        usage.inputTokens += event.inputTokens;
+        usage.outputTokens += event.outputTokens;
+        usage.cacheReadInputTokens += event.cacheReadInputTokens;
+        usage.cacheCreationInputTokens += event.cacheCreationInputTokens;
+        if (event.model) usage.model = event.model;
+      } else if (event.type === 'error') {
+        errored = event.message;
       } else if (event.type === 'result') {
         // A result — with or without text — means the turn is done. Mark
         // the initial batch completed now so the host sweep doesn't see
@@ -379,7 +460,7 @@ async function processQuery(
     clearInterval(pollHandle);
   }
 
-  return { continuation: queryContinuation };
+  return { continuation: queryContinuation, usage, errored };
 }
 
 function handleEvent(event: ProviderEvent, _routing: RoutingContext): void {

@@ -155,6 +155,14 @@ export class AnthropicApiProvider implements AgentProvider {
             });
 
             history = result.messages;
+            events.push({
+              type: 'usage',
+              model,
+              inputTokens: result.inputTokens ?? 0,
+              outputTokens: result.outputTokens ?? 0,
+              cacheReadInputTokens: result.cacheReadInputTokens ?? 0,
+              cacheCreationInputTokens: result.cacheCreationInputTokens ?? 0,
+            });
             events.push({ type: 'result', text: result.response });
 
             const next = await waitForFollowup();
