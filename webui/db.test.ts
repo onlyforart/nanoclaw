@@ -570,10 +570,13 @@ describe('updateGroup (v1-compat → messaging_group_agents primary wiring)', ()
 // ---------------------------------------------------------------------------
 
 describe('getTasksByGroup', () => {
-  it('excludes pipeline:* tasks', () => {
+  it('includes pipeline:* tasks running for the group', () => {
+    // pipeline:* tasks are owned by the pipeline plugin but execute in
+    // a specific group's session — they belong in the group's task list
+    // alongside any container-mode tasks. The Pipeline overview also
+    // surfaces them, which is fine (different navigation surface).
     const tasks = getTasksByGroup('whatsapp_main');
-    expect(tasks).toHaveLength(2);
-    expect(tasks.every((t) => !t.id.startsWith('pipeline:'))).toBe(true);
+    expect(tasks.some((t) => t.id.startsWith('pipeline:'))).toBe(true);
   });
 
   it('returns empty array for group with no tasks', () => {

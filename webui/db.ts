@@ -125,10 +125,17 @@ export interface TaskRunRow {
 // ---------------------------------------------------------------------------
 
 export function getAllAgentGroups(): AgentGroupRow[] {
+  // pipeline-monitor / pipeline-responder / pipeline-solver are system agent
+  // groups that host the pipeline plugin's container-mode tasks. They aren't
+  // user-facing chat surfaces and shouldn't appear in the agent-groups list
+  // (which drives the sidebar nav + dashboard) — they're surfaced on the
+  // Pipeline page instead.
   return db
     .prepare(
       `SELECT id, name, folder, agent_provider, created_at
-       FROM agent_groups ORDER BY name`,
+       FROM agent_groups
+       WHERE folder NOT LIKE 'pipeline-%'
+       ORDER BY name`,
     )
     .all() as AgentGroupRow[];
 }
@@ -354,11 +361,12 @@ export function createTask(task: {
 }
 
 export function getTasksByGroup(groupFolder: string): TaskRow[] {
-  // pipeline_scheduled_tasks: host-pipeline tasks owned by the pipeline plugin.
+  // pipeline_scheduled_tasks: tasks owned by the pipeline plugin running for
+  // this group. Both pipeline:* system tasks and any user-scheduled rows are
+  // included so the agent-group detail page is a complete view of "tasks
+  // running here."
   const pipelineRows = db
-    .prepare(
-      `${TASK_SELECT} WHERE group_folder = ? AND id NOT LIKE 'pipeline:%' ORDER BY next_run`,
-    )
+    .prepare(`${TASK_SELECT} WHERE group_folder = ? ORDER BY next_run`)
     .all(groupFolder) as TaskRow[];
 
   // Container-mode tasks live in per-session inbound.db `messages_in` rows
@@ -499,7 +507,115 @@ export function getContainerTasksByGroup(groupFolder: string): TaskRow[] {
 }
 
 export function getTaskById(id: string): TaskRow | undefined {
-  return db.prepare(`${TASK_SELECT} WHERE id = ?`).get(id) as TaskRow | undefined;
+  const pipelineRow = db
+    .prepare(`${TASK_SELECT} WHERE id = ?`)
+    .get(id) as TaskRow | undefined;
+  if (pipelineRow) return pipelineRow;
+  // Container task — definition lives in a session inbound.db. Resolve the
+  // owning agent group via v1's series convention (id == series_id at row
+  // creation, then the row id passed here may be a recurrence instance —
+  // try matching either way).
+  return findContainerTaskById(id);
+}
+
+function findContainerTaskById(id: string): TaskRow | undefined {
+  const hasSessions = !!db
+    .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'`)
+    .get();
+  if (!hasSessions) return undefined;
+  const sessions = db
+    .prepare(`SELECT agent_group_id, id FROM sessions`)
+    .all() as Array<{ agent_group_id: string; id: string }>;
+  for (const s of sessions) {
+    const inboundPath = path.join(DEFAULT_SESSIONS_DIR, s.agent_group_id, s.id, 'inbound.db');
+    if (!fs.existsSync(inboundPath)) continue;
+    let sdb: Database.Database;
+    try {
+      sdb = new Database(inboundPath, { readonly: true, fileMustExist: true });
+    } catch {
+      continue;
+    }
+    try {
+      // Match either an exact id or its series template — clicking a task in
+      // the list passes the series-template id (id == series_id), but
+      // existing v1 URLs may pass an instance id.
+      const row = sdb
+        .prepare(
+          `SELECT id, timestamp, status, process_after, recurrence, series_id,
+                  model, use_agent_sdk, content
+           FROM messages_in
+           WHERE kind = 'task' AND (id = ? OR series_id = ?)
+           ORDER BY (CASE WHEN id = series_id THEN 0 ELSE 1 END) LIMIT 1`,
+        )
+        .get(id, id) as
+        | {
+            id: string;
+            timestamp: string;
+            status: string;
+            process_after: string | null;
+            recurrence: string | null;
+            series_id: string | null;
+            model: string | null;
+            use_agent_sdk: number | null;
+            content: string;
+          }
+        | undefined;
+      if (!row) continue;
+      const ag = db
+        .prepare('SELECT folder FROM agent_groups WHERE id = ?')
+        .get(s.agent_group_id) as { folder: string } | undefined;
+      const mainChat = db
+        .prepare(
+          `SELECT mg.platform_id, mg.channel_type
+           FROM messaging_group_agents mga
+           JOIN messaging_groups mg ON mg.id = mga.messaging_group_id
+           WHERE mga.agent_group_id = ? AND mga.is_main = 1
+           LIMIT 1`,
+        )
+        .get(s.agent_group_id) as { platform_id?: string; channel_type?: string } | undefined;
+      const chatJid =
+        mainChat?.platform_id && mainChat?.channel_type
+          ? `${mainChat.channel_type}:${mainChat.platform_id}`
+          : '';
+      let prompt = '';
+      let contextMode = 'isolated';
+      try {
+        const parsed = JSON.parse(row.content) as { prompt?: string; context_mode?: string };
+        prompt = parsed.prompt ?? '';
+        if (parsed.context_mode) contextMode = parsed.context_mode;
+      } catch {
+        /* leave prompt empty */
+      }
+      return {
+        id: row.id,
+        group_folder: ag?.folder ?? '',
+        chat_jid: chatJid,
+        prompt,
+        schedule_type: row.recurrence ? 'cron' : 'once',
+        schedule_value: row.recurrence ?? row.process_after ?? '',
+        context_mode: contextMode,
+        model: row.model,
+        temperature: null,
+        timezone: null,
+        max_tool_rounds: null,
+        timeout_ms: null,
+        use_agent_sdk: row.use_agent_sdk ?? 0,
+        allowed_tools: null,
+        allowed_send_targets: null,
+        execution_mode: 'container',
+        subscribed_event_types: null,
+        fallback_poll_ms: null,
+        next_run: row.process_after,
+        last_run: null,
+        last_result: null,
+        status: row.status,
+        created_at: row.timestamp,
+      };
+    } finally {
+      sdb.close();
+    }
+  }
+  return undefined;
 }
 
 export function updateTask(
@@ -638,7 +754,7 @@ export function getGroupDailyTokensByModel(groupFolder: string, days: number = 3
   `
     : '';
 
-  const sql = `${pipelineSql}${containerSql} ORDER BY date`;
+  const sql = `${pipelineSql}${containerSql} ORDER BY date DESC`;
   const params = tableExists
     ? [groupFolder, -(days - 1), groupFolder, -(days - 1)]
     : [groupFolder, -(days - 1)];

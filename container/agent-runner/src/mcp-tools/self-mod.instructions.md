@@ -22,4 +22,4 @@ Use **`add_mcp_server`** to add an MCP server to your configuration. Browse avai
 add_mcp_server({ name: "memory", command: "pnpm", args: ["dlx", "@modelcontextprotocol/server-memory"] })
 ```
 
-Do not ask the user to give you credentials. Credentials are managed by the user in the OneCLI agent vault. Add a "placeholder" string instead of the credential, and ask the user to add the credential to the vault. You can make a test request before the secret is added and the vault proxy will respond with the local url of the vault dashboard on the user's machine and a link to a form for adding that specific credential.
+Do not ask the user to give you credentials. Credentials are managed by the user in the credential vault. Add a "placeholder" string instead of the credential, and ask the user to add the credential to the vault. You can make a test request before the secret is added and the vault proxy will respond with the local url of the vault dashboard on the user's machine and a link to a form for adding that specific credential.

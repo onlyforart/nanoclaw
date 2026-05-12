@@ -11,7 +11,7 @@ You can deploy web applications to Vercel using the `vercel` CLI.
 
 ## Auth
 
-Auth is handled by OneCLI — the HTTPS_PROXY injects the real token into API requests automatically. The Vercel CLI requires a token to be present to skip its local credential check, so **always pass `--token placeholder`** on every command. OneCLI replaces this with the real token at the proxy level.
+Auth is handled by the credential proxy — the HTTPS_PROXY injects the real token into API requests automatically. The Vercel CLI requires a token to be present to skip its local credential check, so **always pass `--token placeholder`** on every command. The proxy replaces this with the real token at the proxy level.
 
 Before any Vercel operation, verify auth:
 
@@ -19,11 +19,11 @@ Before any Vercel operation, verify auth:
 vercel whoami --token placeholder
 ```
 
-If this fails with an auth error, ask the user to add a Vercel token to OneCLI. They can create one at https://vercel.com/account/tokens and register it via `onecli secrets create` on the host. Once added, retry `vercel whoami`.
+If this fails with an auth error, ask the user to add a Vercel token to the credential vault. They can create one at https://vercel.com/account/tokens and register it on the host's vault. Once added, retry `vercel whoami`.
 
 ## Deploying
 
-Always use `--yes` to skip interactive prompts and `--token placeholder` for auth (OneCLI replaces with real token).
+Always use `--yes` to skip interactive prompts and `--token placeholder` for auth (the credential proxy replaces with the real token).
 
 ```bash
 # Deploy to production
@@ -86,7 +86,7 @@ echo "value" | vercel env add VAR_NAME production --token placeholder
 | `Error: Rate limited` | Wait and retry. Don't loop — report to user |
 | `Error: You have reached your project limit` | User needs to upgrade Vercel plan or delete unused projects |
 | `ENOTFOUND api.vercel.com` | Network issue. Check proxy connectivity |
-| Auth error after `vercel whoami` | Credential may be expired. Ask the user to refresh the Vercel token in OneCLI |
+| Auth error after `vercel whoami` | Credential may be expired. Ask the user to refresh the Vercel token in the credential vault |
 
 ## Building Websites — Delegate to Frontend Engineer
 
