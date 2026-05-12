@@ -764,7 +764,62 @@ export function getGroupDailyTokensByModel(groupFolder: string, days: number = 3
 // ---------------------------------------------------------------------------
 
 export function getPipelineTasks(): TaskRow[] {
-  return db.prepare(`${TASK_SELECT} WHERE id LIKE 'pipeline:%' ORDER BY id`).all() as TaskRow[];
+  // v2 host-pipeline rows (sanitiser, trivial-answerer).
+  const hostPipelineRows = db
+    .prepare(`${TASK_SELECT} WHERE id LIKE 'pipeline:%' ORDER BY id`)
+    .all() as TaskRow[];
+
+  // v2 container-mode pipeline agents are standalone agent_groups
+  // (pipeline-monitor / pipeline-responder / pipeline-solver). They run
+  // event-driven inside their own session and don't have rows in
+  // pipeline_scheduled_tasks. v1's Pipeline overview surfaced them as
+  // pipeline tasks; synthesize TaskRow entries here so the v2 webui
+  // matches that behaviour.
+  const containerAgents = db
+    .prepare(
+      `SELECT id, folder, name, agent_provider, created_at
+       FROM agent_groups
+       WHERE folder LIKE 'pipeline-%'
+       ORDER BY folder`,
+    )
+    .all() as Array<{
+    id: string;
+    folder: string;
+    name: string;
+    agent_provider: string | null;
+    created_at: string;
+  }>;
+
+  const synthesized: TaskRow[] = containerAgents.map((ag) => {
+    const taskId = `pipeline:${ag.folder.replace(/^pipeline-/, '')}`;
+    return {
+      id: taskId,
+      group_folder: ag.folder,
+      chat_jid: '',
+      prompt: '', // Container task definition lives in the agent's container.json + CLAUDE.local.md; not surfaced here.
+      schedule_type: 'event',
+      schedule_value: '',
+      context_mode: 'isolated',
+      model: null,
+      temperature: null,
+      timezone: null,
+      max_tool_rounds: null,
+      timeout_ms: null,
+      use_agent_sdk: 0,
+      allowed_tools: null,
+      allowed_send_targets: null,
+      execution_mode: 'container',
+      subscribed_event_types: null,
+      fallback_poll_ms: null,
+      next_run: null,
+      last_run: null,
+      last_result: null,
+      status: 'active',
+      created_at: ag.created_at,
+    };
+  });
+
+  return [...hostPipelineRows, ...synthesized];
 }
 
 export interface PipelineTokenUsageRow {
@@ -787,7 +842,7 @@ export function getPipelineTokenUsage(days: number = 30): PipelineTokenUsageRow[
        WHERE r.task_id LIKE 'pipeline:%'
          AND r.run_at >= date('now', ? || ' days')
        GROUP BY date(r.run_at), r.task_id
-       ORDER BY date(r.run_at)`,
+       ORDER BY date(r.run_at) DESC`,
     )
     .all(-(days - 1)) as PipelineTokenUsageRow[];
 }
