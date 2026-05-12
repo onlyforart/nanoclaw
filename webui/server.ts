@@ -31,10 +31,16 @@ import {
   handleDeleteTask,
   handleGetTaskRuns,
 } from './routes/tasks.js';
-// Pipeline-coupled routes (events, intake, observations, pipeline, clusters)
-// are present in webui/routes/ but UNMOUNTED for Commit 1 (subset C only:
-// groups + tasks + prompts). They will be activated by a follow-up step
-// once the Q7=β agent-group-primary UX settles.
+import { handleGetEvents } from './routes/events.js';
+import { handleGetIntakeLogs } from './routes/intake.js';
+import {
+  handleGetObservations,
+  handleGetObservation,
+  handlePatchLabel,
+  handleExportEvalSet,
+} from './routes/observations.js';
+import { handleGetPipeline } from './routes/pipeline.js';
+import { handleGetClusters, handleGetCluster } from './routes/clusters.js';
 
 const startTime = Date.now();
 
@@ -218,13 +224,79 @@ export function createApp(groupsDir: string, publicDir?: string): http.Server {
     },
 
     // Containers — deferred to EKS phase (K.1.f step 9, Q5; see
-    // project_webui_postcutover Deferred-2).
+    // project_webui_postcutover Deferred-2). containers route handler
+    // was retired from main; reintroduce alongside the EKS work.
 
-    // Pipeline-coupled routes (events, intake-logs, observations,
-    // pipeline, clusters) are intentionally NOT mounted in Commit 1.
-    // Their handler files exist in webui/routes/ and the db.ts queries
-    // they call are already v2-correct; a follow-up step adds the
-    // mount entries once the Q7=β agent-group-primary UX settles.
+    // Pipeline overview
+    {
+      method: 'GET',
+      compiled: compilePath('/api/v1/pipeline'),
+      handler: (_params, _req, query) => handleGetPipeline(query),
+    },
+
+    // Clusters
+    {
+      method: 'GET',
+      compiled: compilePath('/api/v1/clusters'),
+      handler: (_params, _req, query) => handleGetClusters(query),
+    },
+    {
+      method: 'GET',
+      compiled: compilePath('/api/v1/clusters/:id'),
+      handler: (params) => {
+        const id = parseInt(params.id, 10);
+        if (!Number.isFinite(id)) throw new HttpError(400, 'Invalid cluster id');
+        return handleGetCluster(id);
+      },
+    },
+
+    // Events
+    {
+      method: 'GET',
+      compiled: compilePath('/api/v1/events'),
+      handler: (_params, _req, query) => handleGetEvents(query),
+    },
+
+    // Intake logs
+    {
+      method: 'GET',
+      compiled: compilePath('/api/v1/intake-logs'),
+      handler: (_params, _req, query) => handleGetIntakeLogs(query),
+    },
+
+    // Observations — export-eval-set must be mounted before /:id so the
+    // 'export-eval-set' literal doesn't get matched as an id.
+    {
+      method: 'GET',
+      compiled: compilePath('/api/v1/observations/export-eval-set'),
+      handler: () => handleExportEvalSet(),
+    },
+    {
+      method: 'GET',
+      compiled: compilePath('/api/v1/observations'),
+      handler: (_params, _req, query) => handleGetObservations(query),
+    },
+    {
+      method: 'GET',
+      compiled: compilePath('/api/v1/observations/:id'),
+      handler: (params) => {
+        const id = parseInt(params.id, 10);
+        if (!Number.isFinite(id)) throw new HttpError(400, 'Invalid observation id');
+        const result = handleGetObservation(id);
+        if (!result) throw new HttpError(404, 'Observation not found');
+        return result;
+      },
+    },
+    {
+      method: 'PATCH',
+      compiled: compilePath('/api/v1/observations/:id/label'),
+      handler: async (params, req) => {
+        const id = parseInt(params.id, 10);
+        if (!Number.isFinite(id)) throw new HttpError(400, 'Invalid observation id');
+        const body = (await parseJsonBody(req)) as any;
+        return handlePatchLabel(id, body);
+      },
+    },
   ];
 
   const server = http.createServer(async (req, res) => {

@@ -243,6 +243,30 @@ const AppSidebar = {
           <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons.list}</svg>
           Messaging Groups
         </a>
+        <a href="#/pipeline"
+          :class="isActive('/pipeline') ? 'bg-gray-800 text-white border-l-3 border-blue-500' : 'hover:bg-white/10 hover:text-gray-200 border-l-3 border-transparent'"
+          class="flex items-center gap-3 px-3 py-2 rounded-r-lg text-sm font-medium transition-colors">
+          <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons.dashboard}</svg>
+          Pipeline
+        </a>
+        <a href="#/observations"
+          :class="isActive('/observations') ? 'bg-gray-800 text-white border-l-3 border-blue-500' : 'hover:bg-white/10 hover:text-gray-200 border-l-3 border-transparent'"
+          class="flex items-center gap-3 px-3 py-2 rounded-r-lg text-sm font-medium transition-colors">
+          <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons.prompts}</svg>
+          Observations
+        </a>
+        <a href="#/clusters"
+          :class="isActive('/clusters') ? 'bg-gray-800 text-white border-l-3 border-blue-500' : 'hover:bg-white/10 hover:text-gray-200 border-l-3 border-transparent'"
+          class="flex items-center gap-3 px-3 py-2 rounded-r-lg text-sm font-medium transition-colors">
+          <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons.prompts}</svg>
+          Clusters
+        </a>
+        <a href="#/events"
+          :class="isActive('/events') ? 'bg-gray-800 text-white border-l-3 border-blue-500' : 'hover:bg-white/10 hover:text-gray-200 border-l-3 border-transparent'"
+          class="flex items-center gap-3 px-3 py-2 rounded-r-lg text-sm font-medium transition-colors">
+          <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons.list}</svg>
+          Events
+        </a>
 
         <!-- Agent groups section -->
         <div class="pt-5 pb-2">
@@ -2429,6 +2453,12 @@ const app = createApp({
           <app-messaging-group-detail v-if="route.view === 'messaging-group-detail'" :id="route.id" :key="route.id" />
           <app-group-detail v-if="route.view === 'group-detail'" :folder="route.folder" :initial-tab="route.tab" :key="route.folder + (route.tab || '')" />
           <app-task-detail v-if="route.view === 'task-detail'" :task-id="route.id" :key="route.id" @group-loaded="taskGroupFolder = $event" />
+          <app-pipeline v-if="route.view === 'pipeline'" />
+          <app-events v-if="route.view === 'events'" />
+          <app-observations v-if="route.view === 'observations'" />
+          <app-observation-detail v-if="route.view === 'observation-detail'" :id="route.id" :key="route.id" />
+          <app-clusters v-if="route.view === 'clusters'" />
+          <app-cluster-detail v-if="route.view === 'cluster-detail'" :id="route.id" :key="route.id" />
           <div v-if="route.view === 'not-found'" class="text-center py-20 text-gray-400">
             <p class="text-lg">Page not found</p>
           </div>
@@ -2453,6 +2483,14 @@ const app = createApp({
       if (path === '/messaging-groups') return { view: 'messaging-groups' };
       const mgd = path.match(/^\/messaging-groups\/(.+)$/);
       if (mgd) return { view: 'messaging-group-detail', id: mgd[1] };
+      if (path === '/events') return { view: 'events' };
+      if (path === '/pipeline') return { view: 'pipeline' };
+      if (path === '/observations') return { view: 'observations' };
+      const om = path.match(/^\/observations\/(\d+)$/);
+      if (om) return { view: 'observation-detail', id: parseInt(om[1], 10) };
+      if (path === '/clusters') return { view: 'clusters' };
+      const cm = path.match(/^\/clusters\/(\d+)$/);
+      if (cm) return { view: 'cluster-detail', id: parseInt(cm[1], 10) };
       const gm = path.match(/^\/agent-groups\/([^/]+)$/);
       if (gm) return { view: 'group-detail', folder: gm[1], tab: params.get('tab') };
       const tm = path.match(/^\/tasks\/([^/]+)$/);
@@ -2502,6 +2540,12 @@ app.component('app-group-detail', AppGroupDetail);
 app.component('app-task-detail', AppTaskDetail);
 app.component('app-messaging-groups', AppMessagingGroups);
 app.component('app-messaging-group-detail', AppMessagingGroupDetail);
+app.component('app-pipeline', AppPipeline);
+app.component('app-events', AppEvents);
+app.component('app-observations', AppObservations);
+app.component('app-observation-detail', AppObservationDetail);
+app.component('app-clusters', AppClusters);
+app.component('app-cluster-detail', AppClusterDetail);
 app.component('tab-bar', TabBar);
 app.component('status-badge', StatusBadge);
 
