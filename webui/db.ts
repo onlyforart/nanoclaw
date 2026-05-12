@@ -1,7 +1,9 @@
 import Database from 'better-sqlite3';
+import fs from 'node:fs';
 import path from 'node:path';
 
 const DEFAULT_DB_PATH = path.join(process.cwd(), 'data', 'v2.db');
+const DEFAULT_SESSIONS_DIR = path.join(process.cwd(), 'data', 'v2-sessions');
 
 let db: Database.Database;
 
@@ -352,11 +354,148 @@ export function createTask(task: {
 }
 
 export function getTasksByGroup(groupFolder: string): TaskRow[] {
-  return db
+  // pipeline_scheduled_tasks: host-pipeline tasks owned by the pipeline plugin.
+  const pipelineRows = db
     .prepare(
       `${TASK_SELECT} WHERE group_folder = ? AND id NOT LIKE 'pipeline:%' ORDER BY next_run`,
     )
     .all(groupFolder) as TaskRow[];
+
+  // Container-mode tasks live in per-session inbound.db `messages_in` rows
+  // with kind='task'. Walk every session for the agent group, open each
+  // inbound.db read-only, collect the task rows, dedup by id (a recurring
+  // task fires once per recurrence — only surface the series template).
+  const containerRows = getContainerTasksByGroup(groupFolder);
+
+  return [...pipelineRows, ...containerRows];
+}
+
+/**
+ * Read v2 container-mode scheduled-task definitions from per-session
+ * inbound.db files. Returns rows shaped to match `TaskRow` so the
+ * upstream formatter can consume them indistinguishably from
+ * pipeline-scheduled-task rows.
+ *
+ * Defaults: messages_in.recurrence holds a cron string for recurring
+ * tasks, NULL for one-shots. We map `recurrence ? 'cron' : 'once'` and
+ * pull schedule_value from recurrence (or process_after for one-shots).
+ * Several TaskRow fields aren't stored on messages_in — temperature,
+ * max_tool_rounds, timeout_ms, etc. — so they return null.
+ */
+export function getContainerTasksByGroup(groupFolder: string): TaskRow[] {
+  // The `sessions` table lives in v2.db central. Test environments that
+  // create a stripped schema (webui/test-helpers.ts) may omit it — guard
+  // against that so the function degrades to an empty list instead of
+  // throwing.
+  const hasSessions = !!db
+    .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'`)
+    .get();
+  if (!hasSessions) return [];
+
+  const ag = db
+    .prepare('SELECT id FROM agent_groups WHERE folder = ?')
+    .get(groupFolder) as { id: string } | undefined;
+  if (!ag) return [];
+
+  const sessions = db
+    .prepare(`SELECT id FROM sessions WHERE agent_group_id = ?`)
+    .all(ag.id) as Array<{ id: string }>;
+
+  // Resolve chat_jid for display: agent_group's main wiring messaging group.
+  const mainChat = db
+    .prepare(
+      `SELECT mg.platform_id, mg.channel_type
+       FROM messaging_group_agents mga
+       JOIN messaging_groups mg ON mg.id = mga.messaging_group_id
+       WHERE mga.agent_group_id = ? AND mga.is_main = 1
+       LIMIT 1`,
+    )
+    .get(ag.id) as { platform_id?: string; channel_type?: string } | undefined;
+  const chatJid =
+    mainChat?.platform_id && mainChat?.channel_type
+      ? `${mainChat.channel_type}:${mainChat.platform_id}`
+      : '';
+
+  const tasks: TaskRow[] = [];
+  const seen = new Set<string>();
+  for (const s of sessions) {
+    const inboundPath = path.join(DEFAULT_SESSIONS_DIR, ag.id, s.id, 'inbound.db');
+    if (!fs.existsSync(inboundPath)) continue;
+    let sdb: Database.Database;
+    try {
+      sdb = new Database(inboundPath, { readonly: true, fileMustExist: true });
+    } catch {
+      continue;
+    }
+    try {
+      const rows = sdb
+        .prepare(
+          // Series templates: rows where id == series_id (the original task);
+          // OR rows where series_id is null (one-shots). Avoids surfacing
+          // every individual recurrence instance.
+          `SELECT id, timestamp, status, process_after, recurrence, series_id,
+                  model, use_agent_sdk, content
+           FROM messages_in
+           WHERE kind = 'task'
+             AND (series_id IS NULL OR series_id = id)`,
+        )
+        .all() as Array<{
+        id: string;
+        timestamp: string;
+        status: string;
+        process_after: string | null;
+        recurrence: string | null;
+        series_id: string | null;
+        model: string | null;
+        use_agent_sdk: number | null;
+        content: string;
+      }>;
+      for (const r of rows) {
+        if (seen.has(r.id)) continue;
+        seen.add(r.id);
+        let prompt = '';
+        let contextMode = 'isolated';
+        try {
+          const parsed = JSON.parse(r.content) as {
+            prompt?: string;
+            context_mode?: string;
+          };
+          prompt = parsed.prompt ?? '';
+          if (parsed.context_mode) contextMode = parsed.context_mode;
+        } catch {
+          /* leave prompt empty */
+        }
+        tasks.push({
+          id: r.id,
+          group_folder: groupFolder,
+          chat_jid: chatJid,
+          prompt,
+          schedule_type: r.recurrence ? 'cron' : 'once',
+          schedule_value: r.recurrence ?? r.process_after ?? '',
+          context_mode: contextMode,
+          model: r.model,
+          temperature: null,
+          timezone: null,
+          max_tool_rounds: null,
+          timeout_ms: null,
+          use_agent_sdk: r.use_agent_sdk ?? 0,
+          allowed_tools: null,
+          allowed_send_targets: null,
+          execution_mode: 'container',
+          subscribed_event_types: null,
+          fallback_poll_ms: null,
+          next_run: r.process_after,
+          last_run: null,
+          last_result: null,
+          status: r.status,
+          created_at: r.timestamp,
+        });
+      }
+    } finally {
+      sdb.close();
+    }
+  }
+  return tasks;
 }
 
 export function getTaskById(id: string): TaskRow | undefined {
