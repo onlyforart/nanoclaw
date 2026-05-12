@@ -712,9 +712,29 @@ export function getGroupDailyTokensByModel(groupFolder: string, days: number = 3
     )
     .get();
 
+  // Group model fallback: prefer the is_main wiring's model (most agent
+  // groups have one), but accept ANY wiring's model when is_main isn't set
+  // (v1-migrated groups left is_main=0 on every wiring — a known migrator
+  // gap). Without this, rows where the task itself has no model column
+  // attribute drop to NULL, findPricing returns null, and cost goes
+  // unrecorded (visible as ~half the cost vs v1 for slack_main).
+  const groupModelCte = `
+    WITH ag_model AS (
+      SELECT ag.folder,
+             COALESCE(
+               MAX(CASE WHEN mga.is_main = 1 AND mga.model != '' THEN mga.model END),
+               MAX(CASE WHEN mga.model != '' THEN mga.model END)
+             ) AS model
+      FROM agent_groups ag
+      LEFT JOIN messaging_group_agents mga ON mga.agent_group_id = ag.id
+      GROUP BY ag.folder
+    )
+  `;
+
   const pipelineSql = `
+    ${groupModelCte}
     SELECT date(r.run_at) as date,
-           COALESCE(NULLIF(t.model, ''), mga.model) as model,
+           COALESCE(NULLIF(t.model, ''), ag_model.model) as model,
            SUM(COALESCE(r.input_tokens, 0)) as input_tokens,
            SUM(COALESCE(r.output_tokens, 0)) as output_tokens,
            SUM(COALESCE(r.cache_read_input_tokens, 0)) as cache_read,
@@ -724,18 +744,17 @@ export function getGroupDailyTokensByModel(groupFolder: string, days: number = 3
            COUNT(*) as total_rows
     FROM pipeline_task_run_logs r
     JOIN pipeline_scheduled_tasks t ON r.task_id = t.id
-    LEFT JOIN agent_groups ag ON t.group_folder = ag.folder
-    LEFT JOIN messaging_group_agents mga ON mga.agent_group_id = ag.id AND mga.is_main = 1
+    LEFT JOIN ag_model ON t.group_folder = ag_model.folder
     WHERE t.group_folder = ?
       AND r.run_at >= date('now', ? || ' days')
-    GROUP BY date(r.run_at), COALESCE(NULLIF(t.model, ''), mga.model)
+    GROUP BY date(r.run_at), COALESCE(NULLIF(t.model, ''), ag_model.model)
   `;
 
   const containerSql = tableExists
     ? `
     UNION ALL
     SELECT date(c.run_at) as date,
-           COALESCE(NULLIF(c.model, ''), mga.model) as model,
+           COALESCE(NULLIF(c.model, ''), ag_model.model) as model,
            SUM(COALESCE(c.input_tokens, 0)) as input_tokens,
            SUM(COALESCE(c.output_tokens, 0)) as output_tokens,
            SUM(COALESCE(c.cache_read_input_tokens, 0)) as cache_read,
@@ -744,11 +763,10 @@ export function getGroupDailyTokensByModel(groupFolder: string, days: number = 3
            COUNT(c.cost_usd) as rows_with_cost,
            COUNT(*) as total_rows
     FROM container_task_run_logs c
-    LEFT JOIN agent_groups ag ON c.group_folder = ag.folder
-    LEFT JOIN messaging_group_agents mga ON mga.agent_group_id = ag.id AND mga.is_main = 1
+    LEFT JOIN ag_model ON c.group_folder = ag_model.folder
     WHERE c.group_folder = ?
       AND c.run_at >= date('now', ? || ' days')
-    GROUP BY date(c.run_at), COALESCE(NULLIF(c.model, ''), mga.model)
+    GROUP BY date(c.run_at), COALESCE(NULLIF(c.model, ''), ag_model.model)
   `
     : '';
 
