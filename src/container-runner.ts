@@ -532,6 +532,17 @@ async function buildContainerArgs(
   // Host gateway
   args.push(...hostGatewayArgs());
 
+  // NO_PROXY bypass for local host-side services. The OneCLI gateway proxy
+  // lives in its own docker network and can't forward to the default docker
+  // bridge (172.17.0.1) from there — so any HTTP MCP server the operator
+  // runs locally (eks-kubectl, custom remote-mcp endpoints, etc.) fails
+  // with a hung proxy connection even though the container has a direct
+  // route via host-gateway. Bypass the proxy for those targets so they
+  // connect direct; outbound credentialed traffic (Anthropic, ServiceNow,
+  // etc.) continues to route through the proxy as designed.
+  args.push('-e', 'NO_PROXY=172.17.0.1,host.docker.internal,localhost,127.0.0.1');
+  args.push('-e', 'no_proxy=172.17.0.1,host.docker.internal,localhost,127.0.0.1');
+
   // Per-agent-group env overrides + blocked hosts. Applied AFTER OneCLI so
   // per-group `env` wins over gateway-managed values on duplicate keys, and
   // blockedHosts (e.g. `api.anthropic.com` for Ollama-routed groups) take
