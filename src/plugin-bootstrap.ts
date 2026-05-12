@@ -22,6 +22,7 @@ import {
 import { createSession, findSessionForAgent } from './db/sessions.js';
 import { initGroupFilesystem } from './group-init.js';
 import { log } from './log.js';
+import { initSessionFolder } from './session-manager.js';
 import type {
   AgentGroup,
   EngageMode,
@@ -180,6 +181,13 @@ export function bootstrapAgentGroup(input: BootstrapAgentGroupInput): BootstrapA
       messagingGroupId: messagingGroup.id,
     });
   }
+
+  // Initialize the on-disk session folder + inbound/outbound DBs.
+  // resolveSession() does this for chat-driven sessions; plugin-bootstrap
+  // needs to mirror it so plugin-created sessions (pipeline-monitor,
+  // pipeline-solver, ...) are immediately usable by writeSessionMessage
+  // and by subsequent container spawns. Idempotent — re-creates nothing.
+  initSessionFolder(input.agentGroupId, session.id);
 
   return { agentGroup, messagingGroup, session };
 }

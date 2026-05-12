@@ -13,45 +13,43 @@
  *     messaging_groups row with a different id, the existing row is
  *     reused (no UNIQUE-violation throw).
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import Database from 'better-sqlite3';
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 
 import { closeDb, initTestDb, runMigrations } from './db/index.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { getMessagingGroup, getMessagingGroupByPlatform } from './db/messaging-groups.js';
 import { findSessionForAgent } from './db/sessions.js';
+import { inboundDbPath, outboundDbPath, sessionDir } from './session-manager.js';
 import { bootstrapAgentGroup } from './plugin-bootstrap.js';
 
-let tmpDir: string;
-let origCwd: string;
-let origGroupsDir: string | undefined;
-let origDataDir: string | undefined;
+// Override DATA_DIR + GROUPS_DIR so filesystem effects land under a test dir.
+// vi.mock is hoisted, so the path literals must be inlined here (cannot
+// reference a top-level const).
+vi.mock('./config.js', async () => {
+  const actual = await vi.importActual<typeof import('./config.js')>('./config.js');
+  return {
+    ...actual,
+    DATA_DIR: '/tmp/nanoclaw-plugin-bootstrap-test',
+    GROUPS_DIR: '/tmp/nanoclaw-plugin-bootstrap-test/groups',
+  };
+});
+
+const TEST_DIR = '/tmp/nanoclaw-plugin-bootstrap-test';
 
 beforeEach(() => {
-  origCwd = process.cwd();
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-bootstrap-test-'));
-  // Force config.ts to resolve GROUPS_DIR / DATA_DIR under tmpDir.
-  origGroupsDir = process.env.NANOCLAW_GROUPS_DIR;
-  origDataDir = process.env.NANOCLAW_DATA_DIR;
-  process.env.NANOCLAW_GROUPS_DIR = path.join(tmpDir, 'groups');
-  process.env.NANOCLAW_DATA_DIR = path.join(tmpDir, 'data');
-  fs.mkdirSync(process.env.NANOCLAW_GROUPS_DIR, { recursive: true });
-  fs.mkdirSync(process.env.NANOCLAW_DATA_DIR, { recursive: true });
-  process.chdir(tmpDir);
+  if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true });
+  fs.mkdirSync(TEST_DIR, { recursive: true });
+  fs.mkdirSync(path.join(TEST_DIR, 'groups'), { recursive: true });
   const db = initTestDb();
   runMigrations(db);
 });
 
 afterEach(() => {
   closeDb();
-  process.chdir(origCwd);
-  if (origGroupsDir === undefined) delete process.env.NANOCLAW_GROUPS_DIR;
-  else process.env.NANOCLAW_GROUPS_DIR = origGroupsDir;
-  if (origDataDir === undefined) delete process.env.NANOCLAW_DATA_DIR;
-  else process.env.NANOCLAW_DATA_DIR = origDataDir;
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true });
 });
 
 const SAMPLE_INPUT = {
@@ -104,14 +102,50 @@ describe('bootstrapAgentGroup — first run creates all rows', () => {
     expect(sess?.id).toBe('sess-pipeline-monitor');
   });
 
-  // Filesystem init coverage: GROUPS_DIR / DATA_DIR are resolved at
-  // config.ts import time from process.cwd(), so a per-test chdir
-  // can't redirect them without module-mocking. Filesystem-level
-  // assertions are exercised by the existing initGroupFilesystem
-  // tests + the §4.5 step 17 pipeline e2e smoke. Bootstrap's role
-  // here is just "delegated to initGroupFilesystem with the right
-  // input shape" — the call happens (B1 doesn't throw), and that's
-  // structurally sufficient.
+  it('B5 — creates session inbound.db on disk with messages_in schema applied', () => {
+    bootstrapAgentGroup(SAMPLE_INPUT);
+    const inPath = inboundDbPath('pipeline-monitor', 'sess-pipeline-monitor');
+    expect(fs.existsSync(inPath)).toBe(true);
+
+    const inDb = new Database(inPath, { readonly: true });
+    try {
+      const tables = (
+        inDb.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>
+      )
+        .map((r) => r.name)
+        .sort();
+      // messages_in is the minimum required surface; full schema is asserted
+      // by session-manager tests. Bootstrap's job is "make this DB usable".
+      expect(tables).toContain('messages_in');
+      expect(tables).toContain('destinations');
+      expect(tables).toContain('session_routing');
+    } finally {
+      inDb.close();
+    }
+  });
+
+  it('B5b — creates session outbound.db on disk so the container can connect on first wake', () => {
+    bootstrapAgentGroup(SAMPLE_INPUT);
+    const outPath = outboundDbPath('pipeline-monitor', 'sess-pipeline-monitor');
+    expect(fs.existsSync(outPath)).toBe(true);
+
+    const outDb = new Database(outPath, { readonly: true });
+    try {
+      const tables = (
+        outDb.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>
+      ).map((r) => r.name);
+      expect(tables).toContain('messages_out');
+      expect(tables).toContain('processing_ack');
+    } finally {
+      outDb.close();
+    }
+  });
+
+  it('B5c — creates session outbox directory', () => {
+    bootstrapAgentGroup(SAMPLE_INPUT);
+    const outbox = path.join(sessionDir('pipeline-monitor', 'sess-pipeline-monitor'), 'outbox');
+    expect(fs.existsSync(outbox)).toBe(true);
+  });
 });
 
 describe('bootstrapAgentGroup — idempotency', () => {
@@ -121,6 +155,24 @@ describe('bootstrapAgentGroup — idempotency', () => {
     expect(second.agentGroup.id).toBe(first.agentGroup.id);
     expect(second.messagingGroup.id).toBe(first.messagingGroup.id);
     expect(second.session.id).toBe(first.session.id);
+  });
+
+  it('B6b — re-running re-creates on-disk DBs when session row exists but files were deleted', () => {
+    // This is the production-recovery case: a pre-fix install created the
+    // session row in the central DB but never the on-disk DBs. Re-running
+    // bootstrap must heal the filesystem without depending on a fresh insert.
+    bootstrapAgentGroup(SAMPLE_INPUT);
+    const inPath = inboundDbPath('pipeline-monitor', 'sess-pipeline-monitor');
+    const outPath = outboundDbPath('pipeline-monitor', 'sess-pipeline-monitor');
+    expect(fs.existsSync(inPath)).toBe(true);
+
+    // Simulate the broken state: row exists in central DB, files are gone.
+    fs.rmSync(sessionDir('pipeline-monitor', 'sess-pipeline-monitor'), { recursive: true });
+    expect(fs.existsSync(inPath)).toBe(false);
+
+    bootstrapAgentGroup(SAMPLE_INPUT);
+    expect(fs.existsSync(inPath)).toBe(true);
+    expect(fs.existsSync(outPath)).toBe(true);
   });
 
   it('B7 — re-bootstrap preserves the original created_at timestamps', () => {
