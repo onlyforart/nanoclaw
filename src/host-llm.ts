@@ -41,6 +41,8 @@ export interface LlmResponse {
   response: string;
   inputTokens: number;
   outputTokens: number;
+  cacheReadInputTokens: number;
+  cacheCreationInputTokens: number;
   costUSD: number | null;
 }
 
@@ -214,6 +216,8 @@ async function callOllama(request: LlmRequest, options?: LlmCallOptions): Promis
     response,
     inputTokens: data.prompt_eval_count ?? 0,
     outputTokens: data.eval_count ?? 0,
+    cacheReadInputTokens: 0, // Ollama doesn't expose prompt caching
+    cacheCreationInputTokens: 0,
     costUSD: null,
   };
 }
@@ -258,6 +262,8 @@ async function callAnthropic(request: LlmRequest): Promise<LlmResponse> {
     usage: {
       input_tokens: number;
       output_tokens: number;
+      cache_read_input_tokens?: number;
+      cache_creation_input_tokens?: number;
     };
   };
 
@@ -274,6 +280,8 @@ async function callAnthropic(request: LlmRequest): Promise<LlmResponse> {
     response,
     inputTokens: data.usage.input_tokens,
     outputTokens: data.usage.output_tokens,
+    cacheReadInputTokens: data.usage.cache_read_input_tokens ?? 0,
+    cacheCreationInputTokens: data.usage.cache_creation_input_tokens ?? 0,
     costUSD: null,
   };
 }

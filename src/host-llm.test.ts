@@ -153,6 +153,8 @@ describe('callExtractionLLM — ollama path', () => {
       response: '{"foo":"bar"}',
       inputTokens: 12,
       outputTokens: 7,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
       costUSD: null,
     });
   });
@@ -293,6 +295,49 @@ describe('callExtractionLLM — anthropic path', () => {
     expect(result.inputTokens).toBe(2);
     expect(result.outputTokens).toBe(3);
     expect(result.costUSD).toBeNull();
+  });
+
+  it('captures cache_read + cache_creation tokens from Anthropic usage block', async () => {
+    messagesCreateMock.mockResolvedValue({
+      content: [{ type: 'text', text: 'ok' }],
+      usage: {
+        input_tokens: 1500,
+        output_tokens: 200,
+        cache_read_input_tokens: 12000,
+        cache_creation_input_tokens: 800,
+      },
+    });
+
+    const { initHostLlm, getHostLlm } = await import('./host-llm.js');
+    await initHostLlm();
+    const result = await getHostLlm().callExtractionLLM({
+      model: 'anthropic:haiku',
+      system: 's',
+      user: 'u',
+    });
+
+    expect(result.inputTokens).toBe(1500);
+    expect(result.outputTokens).toBe(200);
+    expect(result.cacheReadInputTokens).toBe(12000);
+    expect(result.cacheCreationInputTokens).toBe(800);
+  });
+
+  it('defaults missing cache fields to 0', async () => {
+    messagesCreateMock.mockResolvedValue({
+      content: [{ type: 'text', text: 'ok' }],
+      usage: { input_tokens: 5, output_tokens: 7 },
+    });
+
+    const { initHostLlm, getHostLlm } = await import('./host-llm.js');
+    await initHostLlm();
+    const result = await getHostLlm().callExtractionLLM({
+      model: 'anthropic:haiku',
+      system: 's',
+      user: 'u',
+    });
+
+    expect(result.cacheReadInputTokens).toBe(0);
+    expect(result.cacheCreationInputTokens).toBe(0);
   });
 
   it('passes tool_use schema through with name + description + input_schema', async () => {

@@ -268,7 +268,10 @@ export function handleGetAgentGroupTokenUsage(folder: string, days: number = 30)
     let rowCost: number | null = null;
     if (row.actual_cost != null && row.rows_with_cost === row.total_rows) {
       rowCost = row.actual_cost;
-    } else if ((row.cache_read > 0 || row.cache_creation > 0) && (row.input_tokens > 0 || row.output_tokens > 0)) {
+    } else if (row.input_tokens > 0 || row.output_tokens > 0) {
+      // Compute from pricing whenever we have tokens — cache columns may be
+      // zero (Ollama, or Anthropic call without prompt caching) and we still
+      // want a cost figure.
       const pricing = findPricing(row.model, pricingTable);
       if (pricing) {
         rowCost = computeCost(pricing, row.input_tokens, row.output_tokens, row.cache_read, row.cache_creation);
