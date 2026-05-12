@@ -17,6 +17,16 @@ import {
 } from './slack-bolt-shim.js';
 import { markdownToBlocks, markdownToSlackPayload } from './slack-blocks.js';
 
+/**
+ * Strip the `slack:` channel-type prefix that v2 stores on platform_id
+ * (e.g. `slack:C0ALE6G9FGB` → `C0ALE6G9FGB`). The bolt-shim / Slack Web API
+ * expects the raw channel ID; passing the prefixed form returns
+ * `channel_not_found` even when the bot is a member.
+ */
+function toSlackChannelId(platformId: string): string {
+  return platformId.startsWith('slack:') ? platformId.slice('slack:'.length) : platformId;
+}
+
 interface QueuedMessage {
   platformId: string;
   threadId: string | null;
@@ -108,7 +118,7 @@ export function createSlackAdapterWithShim(shim: BoltShim): ChannelAdapter {
       });
     } catch (err) {
       log.warn('Slack reaction_added handler threw', {
-        channel: platformId,
+        channel: toSlackChannelId(platformId),
         messageId,
         emoji,
         err,
@@ -144,7 +154,7 @@ export function createSlackAdapterWithShim(shim: BoltShim): ChannelAdapter {
   ): Promise<string | undefined> {
     if (!connected) {
       log.warn('Slack disconnected, dropping ask_question (not queueable)', {
-        channel: platformId,
+        channel: toSlackChannelId(platformId),
         questionId: content.questionId,
       });
       return undefined;
@@ -161,7 +171,7 @@ export function createSlackAdapterWithShim(shim: BoltShim): ChannelAdapter {
       rawOptions.length === 0
     ) {
       log.warn('Slack ask_question: missing required fields', {
-        channel: platformId,
+        channel: toSlackChannelId(platformId),
         questionId,
       });
       return undefined;
@@ -178,7 +188,7 @@ export function createSlackAdapterWithShim(shim: BoltShim): ChannelAdapter {
 
     if (options.length === 0) {
       log.warn('Slack ask_question: no valid options', {
-        channel: platformId,
+        channel: toSlackChannelId(platformId),
         questionId,
       });
       return undefined;
@@ -191,7 +201,7 @@ export function createSlackAdapterWithShim(shim: BoltShim): ChannelAdapter {
 
     try {
       const result = await shim.postMessage({
-        channel: platformId,
+        channel: toSlackChannelId(platformId),
         ...(threadId ? { threadTs: threadId } : {}),
         blocks,
         text: fallback.slice(0, 4000),
@@ -199,7 +209,7 @@ export function createSlackAdapterWithShim(shim: BoltShim): ChannelAdapter {
       return result.ts;
     } catch (err) {
       log.error('Slack ask_question post failed', {
-        channel: platformId,
+        channel: toSlackChannelId(platformId),
         questionId,
         err,
       });
@@ -210,7 +220,7 @@ export function createSlackAdapterWithShim(shim: BoltShim): ChannelAdapter {
   async function deliverEdit(platformId: string, content: Record<string, unknown>): Promise<string | undefined> {
     if (!connected) {
       log.warn('Slack disconnected, dropping edit (not queueable)', {
-        channel: platformId,
+        channel: toSlackChannelId(platformId),
         messageId: content.messageId,
       });
       return undefined;
@@ -223,21 +233,21 @@ export function createSlackAdapterWithShim(shim: BoltShim): ChannelAdapter {
     const text = extractText(content);
     if (!text) {
       log.warn('Slack edit: missing text/markdown', {
-        channel: platformId,
+        channel: toSlackChannelId(platformId),
         messageId,
       });
       return undefined;
     }
     try {
       await shim.editMessage({
-        channel: platformId,
+        channel: toSlackChannelId(platformId),
         ts: messageId,
         blocks: markdownToBlocks(text),
         text: text.slice(0, 4000),
       });
       return messageId;
     } catch (err) {
-      log.error('Slack edit failed', { channel: platformId, messageId, err });
+      log.error('Slack edit failed', { channel: toSlackChannelId(platformId), messageId, err });
       return undefined;
     }
   }
@@ -245,7 +255,7 @@ export function createSlackAdapterWithShim(shim: BoltShim): ChannelAdapter {
   async function deliverReaction(platformId: string, content: Record<string, unknown>): Promise<string | undefined> {
     if (!connected) {
       log.warn('Slack disconnected, dropping reaction (not queueable)', {
-        channel: platformId,
+        channel: toSlackChannelId(platformId),
         messageId: content.messageId,
       });
       return undefined;
@@ -258,21 +268,21 @@ export function createSlackAdapterWithShim(shim: BoltShim): ChannelAdapter {
     }
     if (typeof emoji !== 'string') {
       log.warn('Slack reaction: missing emoji', {
-        channel: platformId,
+        channel: toSlackChannelId(platformId),
         messageId,
       });
       return undefined;
     }
     try {
       await shim.addReaction({
-        channel: platformId,
+        channel: toSlackChannelId(platformId),
         timestamp: messageId,
         emoji,
       });
       return undefined;
     } catch (err) {
       log.error('Slack reaction failed', {
-        channel: platformId,
+        channel: toSlackChannelId(platformId),
         messageId,
         emoji,
         err,
@@ -319,7 +329,7 @@ export function createSlackAdapterWithShim(shim: BoltShim): ChannelAdapter {
       }),
     ).catch((err) => {
       log.error('Slack onInbound handler threw', {
-        channel: platformId,
+        channel: toSlackChannelId(platformId),
         ts: e.ts,
         err,
       });
@@ -335,13 +345,13 @@ export function createSlackAdapterWithShim(shim: BoltShim): ChannelAdapter {
         const item = outgoingQueue.shift()!;
         const payload = markdownToSlackPayload(item.text);
         await shim.postMessage({
-          channel: item.platformId,
+          channel: toSlackChannelId(item.platformId),
           ...(item.threadId ? { threadTs: item.threadId } : {}),
           blocks: payload.blocks,
           text: payload.text,
         });
         log.info('Queued Slack message sent', {
-          channel: item.platformId,
+          channel: toSlackChannelId(item.platformId),
           length: item.text.length,
         });
       }
@@ -411,7 +421,7 @@ export function createSlackAdapterWithShim(shim: BoltShim): ChannelAdapter {
       try {
         const oldestTs = String(new Date(oldestTimestamp).getTime() / 1000);
         const msgs = await shim.fetchChannelHistory({
-          channel: platformId,
+          channel: toSlackChannelId(platformId),
           oldestTs,
           limit: 100,
           inclusive: false,
@@ -432,7 +442,7 @@ export function createSlackAdapterWithShim(shim: BoltShim): ChannelAdapter {
         return out;
       } catch (err) {
         log.warn('Failed to backfill Slack channel history', {
-          channel: platformId,
+          channel: toSlackChannelId(platformId),
           oldestTimestamp,
           err,
         });
@@ -447,13 +457,13 @@ export function createSlackAdapterWithShim(shim: BoltShim): ChannelAdapter {
       if (!connected) return null;
       try {
         const replies = await shim.fetchThreadReplies({
-          channel: platformId,
+          channel: toSlackChannelId(platformId),
           threadTs: threadId,
         });
         return replies.map((r) => ({ id: r.ts, text: r.text ?? null }));
       } catch (err) {
         log.warn('Failed to fetch Slack thread replies', {
-          channel: platformId,
+          channel: toSlackChannelId(platformId),
           threadId,
           err,
         });
@@ -465,14 +475,14 @@ export function createSlackAdapterWithShim(shim: BoltShim): ChannelAdapter {
       if (!connected) return null;
       try {
         const msg = await shim.fetchHistoryMessage({
-          channel: platformId,
+          channel: toSlackChannelId(platformId),
           ts: messageId,
         });
         if (!msg || msg.ts !== messageId) return null;
         return msg.text ?? null;
       } catch (err) {
         log.warn('Failed to fetch Slack message text', {
-          channel: platformId,
+          channel: toSlackChannelId(platformId),
           messageId,
           err,
         });
@@ -497,7 +507,7 @@ export function createSlackAdapterWithShim(shim: BoltShim): ChannelAdapter {
       const text = extractText(message.content);
       if (!text) {
         log.warn('Slack deliver: unsupported content shape, skipping', {
-          channel: platformId,
+          channel: toSlackChannelId(platformId),
           kind: message.kind,
         });
         return undefined;
@@ -506,7 +516,7 @@ export function createSlackAdapterWithShim(shim: BoltShim): ChannelAdapter {
       if (!connected) {
         outgoingQueue.push({ platformId, threadId, text });
         log.info('Slack disconnected, message queued', {
-          channel: platformId,
+          channel: toSlackChannelId(platformId),
           queueSize: outgoingQueue.length,
         });
         return undefined;
@@ -515,17 +525,17 @@ export function createSlackAdapterWithShim(shim: BoltShim): ChannelAdapter {
       try {
         const payload = markdownToSlackPayload(text);
         const result = await shim.postMessage({
-          channel: platformId,
+          channel: toSlackChannelId(platformId),
           ...(threadId ? { threadTs: threadId } : {}),
           blocks: payload.blocks,
           text: payload.text,
         });
-        log.info('Slack message sent', { channel: platformId, length: text.length });
+        log.info('Slack message sent', { channel: toSlackChannelId(platformId), length: text.length });
         return result.ts;
       } catch (err) {
         outgoingQueue.push({ platformId, threadId, text });
         log.warn('Failed to send Slack message, queued', {
-          channel: platformId,
+          channel: toSlackChannelId(platformId),
           err,
           queueSize: outgoingQueue.length,
         });
