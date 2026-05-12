@@ -10,7 +10,13 @@ import {
   HttpError,
   type CompiledRoute,
 } from './router.js';
-import { handleGetGroups, handleGetGroup, handlePatchGroup, handleGetGroupTokenUsage } from './routes/groups.js';
+import {
+  handleGetAgentGroups,
+  handleGetAgentGroup,
+  handlePatchAgentGroup,
+  handleGetAgentGroupTokenUsage,
+} from './routes/agent-groups.js';
+import { handleGetMessagingGroups, handleGetMessagingGroup } from './routes/messaging-groups.js';
 import {
   handleGetGlobalPrompts,
   handlePutGlobalPrompts,
@@ -25,12 +31,10 @@ import {
   handleDeleteTask,
   handleGetTaskRuns,
 } from './routes/tasks.js';
-import { handleGetContainers } from './routes/containers.js';
-import { handleGetEvents } from './routes/events.js';
-import { handleGetIntakeLogs } from './routes/intake.js';
-import { handleGetObservations, handleGetObservation, handlePatchLabel, handleExportEvalSet } from './routes/observations.js';
-import { handleGetPipeline } from './routes/pipeline.js';
-import { handleGetClusters, handleGetCluster } from './routes/clusters.js';
+// Pipeline-coupled routes (events, intake, observations, pipeline, clusters)
+// are present in webui/routes/ but UNMOUNTED for Commit 1 (subset C only:
+// groups + tasks + prompts). They will be activated by a follow-up step
+// once the Q7=β agent-group-primary UX settles.
 
 const startTime = Date.now();
 
@@ -74,40 +78,54 @@ export function createApp(groupsDir: string, publicDir?: string): http.Server {
       }),
     },
 
-    // Groups
+    // Agent groups (Q7=β agent-group-primary)
     {
       method: 'GET',
-      compiled: compilePath('/api/v1/groups'),
-      handler: () => handleGetGroups(),
+      compiled: compilePath('/api/v1/agent-groups'),
+      handler: () => handleGetAgentGroups(),
     },
     {
       method: 'GET',
-      compiled: compilePath('/api/v1/groups/:folder'),
+      compiled: compilePath('/api/v1/agent-groups/:folder'),
       handler: (params) => {
-        const result = handleGetGroup(params.folder);
-        if (!result) throw new HttpError(isValidFolder(params.folder) ? 404 : 400, isValidFolder(params.folder) ? 'Group not found' : 'Invalid folder name');
+        const result = handleGetAgentGroup(params.folder);
+        if (!result) throw new HttpError(isValidFolder(params.folder) ? 404 : 400, isValidFolder(params.folder) ? 'Agent group not found' : 'Invalid folder name');
         return result;
       },
     },
     {
       method: 'PATCH',
-      compiled: compilePath('/api/v1/groups/:folder'),
+      compiled: compilePath('/api/v1/agent-groups/:folder'),
       handler: async (params, req) => {
         const body = (await parseJsonBody(req)) as any;
-        const result = handlePatchGroup(params.folder, body);
-        if (!result) throw new HttpError(404, 'Group not found');
+        const result = handlePatchAgentGroup(params.folder, body);
+        if (!result) throw new HttpError(404, 'Agent group not found');
+        return result;
+      },
+    },
+    {
+      method: 'GET',
+      compiled: compilePath('/api/v1/agent-groups/:folder/token-usage'),
+      handler: (params, _req, query) => {
+        const days = query.days ? parseInt(query.days, 10) : 30;
+        const result = handleGetAgentGroupTokenUsage(params.folder, days);
+        if (!result) throw new HttpError(isValidFolder(params.folder) ? 404 : 400, isValidFolder(params.folder) ? 'Agent group not found' : 'Invalid folder name');
         return result;
       },
     },
 
-    // Token usage
+    // Messaging groups (secondary navigation; reverse-wirings on detail)
     {
       method: 'GET',
-      compiled: compilePath('/api/v1/groups/:folder/token-usage'),
-      handler: (params, _req, query) => {
-        const days = query.days ? parseInt(query.days, 10) : 30;
-        const result = handleGetGroupTokenUsage(params.folder, days);
-        if (!result) throw new HttpError(isValidFolder(params.folder) ? 404 : 400, isValidFolder(params.folder) ? 'Group not found' : 'Invalid folder name');
+      compiled: compilePath('/api/v1/messaging-groups'),
+      handler: () => handleGetMessagingGroups(),
+    },
+    {
+      method: 'GET',
+      compiled: compilePath('/api/v1/messaging-groups/:id'),
+      handler: (params) => {
+        const result = handleGetMessagingGroup(params.id);
+        if (!result) throw new HttpError(404, 'Messaging group not found');
         return result;
       },
     },
@@ -128,33 +146,33 @@ export function createApp(groupsDir: string, publicDir?: string): http.Server {
     },
     {
       method: 'GET',
-      compiled: compilePath('/api/v1/groups/:folder/prompts'),
+      compiled: compilePath('/api/v1/agent-groups/:folder/prompts'),
       handler: (params) => {
         const result = handleGetGroupPrompts(groupsDir, params.folder);
-        if (!result) throw new HttpError(404, 'Group not found');
+        if (!result) throw new HttpError(404, 'Agent group not found');
         return result;
       },
     },
     {
       method: 'PUT',
-      compiled: compilePath('/api/v1/groups/:folder/prompts'),
+      compiled: compilePath('/api/v1/agent-groups/:folder/prompts'),
       handler: async (params, req) => {
         const body = (await parseJsonBody(req)) as any;
         const result = handlePutGroupPrompts(groupsDir, params.folder, body);
-        if (!result) throw new HttpError(404, 'Group not found');
+        if (!result) throw new HttpError(404, 'Agent group not found');
         return result;
       },
     },
 
-    // Tasks
+    // Tasks (scoped under agent-groups; /api/v1/tasks/:id paths unchanged)
     {
       method: 'GET',
-      compiled: compilePath('/api/v1/groups/:folder/tasks'),
+      compiled: compilePath('/api/v1/agent-groups/:folder/tasks'),
       handler: (params) => handleGetGroupTasks(params.folder),
     },
     {
       method: 'POST',
-      compiled: compilePath('/api/v1/groups/:folder/tasks'),
+      compiled: compilePath('/api/v1/agent-groups/:folder/tasks'),
       handler: async (params, req) => {
         const body = (await parseJsonBody(req)) as any;
         const result = handleCreateTask(params.folder, body);
@@ -199,74 +217,14 @@ export function createApp(groupsDir: string, publicDir?: string): http.Server {
       },
     },
 
-    // Containers
-    {
-      method: 'GET',
-      compiled: compilePath('/api/v1/containers'),
-      handler: () => handleGetContainers(),
-    },
+    // Containers — deferred to EKS phase (K.1.f step 9, Q5; see
+    // project_webui_postcutover Deferred-2).
 
-    // Events
-    {
-      method: 'GET',
-      compiled: compilePath('/api/v1/events'),
-      handler: (_params, _req, query) => handleGetEvents(query),
-    },
-
-    // Intake logs
-    {
-      method: 'GET',
-      compiled: compilePath('/api/v1/intake-logs'),
-      handler: (_params, _req, query) => handleGetIntakeLogs(query),
-    },
-
-    // Observations + labels
-    {
-      method: 'GET',
-      compiled: compilePath('/api/v1/observations/export-eval-set'),
-      handler: () => handleExportEvalSet(),
-    },
-    {
-      method: 'GET',
-      compiled: compilePath('/api/v1/observations'),
-      handler: (_params, _req, query) => handleGetObservations(query),
-    },
-    {
-      method: 'GET',
-      compiled: compilePath('/api/v1/observations/:id'),
-      handler: (params) => handleGetObservation(parseInt(params.id, 10)),
-    },
-    {
-      method: 'PATCH',
-      compiled: compilePath('/api/v1/observations/:id/label'),
-      handler: async (params, req) => {
-        const body = await parseJsonBody(req);
-        return handlePatchLabel(parseInt(params.id, 10), body as any);
-      },
-    },
-
-    // Pipeline
-    {
-      method: 'GET',
-      compiled: compilePath('/api/v1/pipeline'),
-      handler: (_params, _req, query) => handleGetPipeline(query),
-    },
-
-    // Clusters
-    {
-      method: 'GET',
-      compiled: compilePath('/api/v1/clusters'),
-      handler: (_params, _req, query) => handleGetClusters(query),
-    },
-    {
-      method: 'GET',
-      compiled: compilePath('/api/v1/clusters/:id'),
-      handler: (params) => {
-        const id = parseInt(params.id, 10);
-        if (Number.isNaN(id)) throw new HttpError(400, 'invalid id');
-        return handleGetCluster(id);
-      },
-    },
+    // Pipeline-coupled routes (events, intake-logs, observations,
+    // pipeline, clusters) are intentionally NOT mounted in Commit 1.
+    // Their handler files exist in webui/routes/ and the db.ts queries
+    // they call are already v2-correct; a follow-up step adds the
+    // mount entries once the Q7=β agent-group-primary UX settles.
   ];
 
   const server = http.createServer(async (req, res) => {

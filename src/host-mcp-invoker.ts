@@ -13,13 +13,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import {
-  getDefaultEnvironment,
-  StdioClientTransport,
-} from '@modelcontextprotocol/sdk/client/stdio.js';
+import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
 import { DATA_DIR } from './config.js';
-import { logger } from './logger.js';
+import { log } from './log.js';
 import type { StdioMcpServerEntry } from './remote-mcp.js';
 
 // Shared env-var allow-list — see container/agent-runner/src/mcp-safe-env.json
@@ -34,23 +31,8 @@ const MCP_SAFE_ENV_KEYS: string[] = (() => {
   // is nanoclaw/src/ — same relative path works.
   const here = path.dirname(fileURLToPath(import.meta.url));
   const candidates = [
-    path.join(
-      here,
-      '..',
-      'container',
-      'agent-runner',
-      'src',
-      'mcp-safe-env.json',
-    ),
-    path.join(
-      here,
-      '..',
-      '..',
-      'container',
-      'agent-runner',
-      'src',
-      'mcp-safe-env.json',
-    ),
+    path.join(here, '..', 'container', 'agent-runner', 'src', 'mcp-safe-env.json'),
+    path.join(here, '..', '..', 'container', 'agent-runner', 'src', 'mcp-safe-env.json'),
   ];
   for (const p of candidates) {
     if (fs.existsSync(p)) {
@@ -60,9 +42,9 @@ const MCP_SAFE_ENV_KEYS: string[] = (() => {
       return data.safe_keys;
     }
   }
-  logger.error(
-    { candidates },
+  log.error(
     'mcp-safe-env.json not found — falling back to a narrow default; playwright-using MCP servers may fail to locate browsers',
+    { candidates },
   );
   return ['PATH', 'HOME', 'NODE_ENV'];
 })();
@@ -103,7 +85,7 @@ function loadMcpServersFile(): McpServersFile {
     const parsed = JSON.parse(raw);
     return { servers: parsed.servers ?? {} };
   } catch (err) {
-    logger.error({ configPath, err }, 'Failed to load mcp-servers.json');
+    log.error('Failed to load mcp-servers.json', { configPath, err });
     return { servers: {} };
   }
 }
@@ -117,10 +99,7 @@ function resolveStdioServer(serverName: string): HostStdioEntry {
   const { servers } = loadMcpServersFile();
   const entry = servers[serverName];
   if (!entry) {
-    throw new McpInvokerError(
-      `MCP server "${serverName}" not found in mcp-servers.json`,
-      'server-not-found',
-    );
+    throw new McpInvokerError(`MCP server "${serverName}" not found in mcp-servers.json`, 'server-not-found');
   }
   if ('url' in entry) {
     throw new McpInvokerError(
@@ -129,10 +108,7 @@ function resolveStdioServer(serverName: string): HostStdioEntry {
     );
   }
   if (typeof entry.hostPath !== 'string' || typeof entry.command !== 'string') {
-    throw new McpInvokerError(
-      `MCP server "${serverName}" entry is missing hostPath or command`,
-      'server-not-stdio',
-    );
+    throw new McpInvokerError(`MCP server "${serverName}" entry is missing hostPath or command`, 'server-not-stdio');
   }
   // Optional `hostEnv` field (not part of the container-runner schema)
   // lets local invocations inject env vars the MCP server needs but
@@ -151,10 +127,7 @@ function resolveStdioServer(serverName: string): HostStdioEntry {
   return { entry: entry as unknown as StdioMcpServerEntry, hostEnv };
 }
 
-export function toolIsAllowed(
-  entry: Pick<StdioMcpServerEntry, 'tools'>,
-  toolName: string,
-): boolean {
+export function toolIsAllowed(entry: Pick<StdioMcpServerEntry, 'tools'>, toolName: string): boolean {
   const tools = entry.tools;
   if (Array.isArray(tools)) return tools.includes(toolName);
   return Object.values(tools).some((list) => list.includes(toolName));
@@ -173,17 +146,11 @@ export function parseToolResult(result: unknown): unknown {
   };
   if (r?.isError) {
     const text = r.content?.[0]?.text ?? '(no text)';
-    throw new McpInvokerError(
-      `MCP tool returned isError=true: ${text.slice(0, 500)}`,
-      'tool-error',
-    );
+    throw new McpInvokerError(`MCP tool returned isError=true: ${text.slice(0, 500)}`, 'tool-error');
   }
   const first = r?.content?.[0];
   if (!first || first.type !== 'text' || typeof first.text !== 'string') {
-    throw new McpInvokerError(
-      'MCP tool response missing text content part',
-      'malformed-response',
-    );
+    throw new McpInvokerError('MCP tool response missing text content part', 'malformed-response');
   }
   try {
     return JSON.parse(first.text);
@@ -205,16 +172,10 @@ export function parseToolResult(result: unknown): unknown {
 // scripts) routinely take 60–90 s on a live page. Fast health-probe
 // MCP tools return in under 5 s and aren't affected by the raised
 // ceiling.
-export async function invokeMcpTool(
-  params: InvokeMcpToolArgs,
-  timeoutMs = 120_000,
-): Promise<unknown> {
+export async function invokeMcpTool(params: InvokeMcpToolArgs, timeoutMs = 120_000): Promise<unknown> {
   const { entry, hostEnv } = resolveStdioServer(params.server);
   if (!toolIsAllowed(entry, params.name)) {
-    throw new McpInvokerError(
-      `Tool "${params.name}" is not listed for server "${params.server}"`,
-      'tool-not-allowed',
-    );
+    throw new McpInvokerError(`Tool "${params.name}" is not listed for server "${params.server}"`, 'tool-not-allowed');
   }
 
   // Build env from the shared MCP_SAFE_ENV_KEYS allow-list plus
@@ -239,10 +200,7 @@ export async function invokeMcpTool(
     env: envPayload,
   });
 
-  const client = new Client(
-    { name: 'nanoclaw-host-invoker', version: '0.1.0' },
-    { capabilities: {} },
-  );
+  const client = new Client({ name: 'nanoclaw-host-invoker', version: '0.1.0' }, { capabilities: {} });
 
   try {
     await client.connect(transport);
@@ -252,20 +210,12 @@ export async function invokeMcpTool(
     // a small buffer so the outer Promise.race fires first with a
     // clearer error message.
     const result = await Promise.race([
-      client.callTool(
-        { name: params.name, arguments: params.args ?? {} },
-        undefined,
-        { timeout: timeoutMs + 5_000 },
-      ),
+      client.callTool({ name: params.name, arguments: params.args ?? {} }, undefined, {
+        timeout: timeoutMs + 5_000,
+      }),
       new Promise<never>((_, reject) =>
         setTimeout(
-          () =>
-            reject(
-              new McpInvokerError(
-                `MCP tool call timed out after ${timeoutMs} ms`,
-                'transport-error',
-              ),
-            ),
+          () => reject(new McpInvokerError(`MCP tool call timed out after ${timeoutMs} ms`, 'transport-error')),
           timeoutMs,
         ),
       ),
@@ -274,10 +224,7 @@ export async function invokeMcpTool(
   } catch (err) {
     if (err instanceof McpInvokerError) throw err;
     const message = err instanceof Error ? err.message : String(err);
-    throw new McpInvokerError(
-      `MCP transport error: ${message}`,
-      'transport-error',
-    );
+    throw new McpInvokerError(`MCP transport error: ${message}`, 'transport-error');
   } finally {
     try {
       await client.close();

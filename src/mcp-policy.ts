@@ -10,7 +10,7 @@ import fs from 'fs';
 import path from 'path';
 import { parse as parseYaml } from 'yaml';
 
-import { logger } from './logger.js';
+import { log } from './log.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -153,7 +153,7 @@ export function loadPolicies(policyDir: string): PolicySet {
         const content = fs.readFileSync(filePath, 'utf-8');
         const parsed = parseYaml(content);
         if (!parsed || typeof parsed !== 'object') {
-          logger.warn({ file: filePath }, 'Malformed policy file, skipping');
+          log.warn('Malformed policy file, skipping', { file: filePath });
           continue;
         }
 
@@ -166,18 +166,12 @@ export function loadPolicies(policyDir: string): PolicySet {
         };
 
         tierMap.set(tierName, rule);
-        logger.debug(
-          { server: serverName, tier: tierName },
-          'Loaded MCP policy',
-        );
+        log.debug('Loaded MCP policy', { server: serverName, tier: tierName });
       } catch (err) {
-        logger.warn(
-          {
-            file: filePath,
-            err: err instanceof Error ? err.message : String(err),
-          },
-          'Failed to parse policy file',
-        );
+        log.warn('Failed to parse policy file', {
+          file: filePath,
+          err: err instanceof Error ? err.message : String(err),
+        });
       }
     }
 

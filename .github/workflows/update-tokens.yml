@@ -8,6 +8,7 @@ on:
 
 jobs:
   update-tokens:
+    if: github.repository == 'qwibitai/nanoclaw'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/create-github-app-token@v1
@@ -38,7 +39,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git commit -m "docs: update token count to ${{ steps.tokens.outputs.badge }}"
-          for i in 1 2 3; do
-            git pull --rebase && git push && break
-            sleep 2
-          done
+          git pull --rebase
+          git push

@@ -6,54 +6,17 @@ import os from 'node:os';
 
 import { initDb, closeDb } from '../db.js';
 import { HttpError } from '../router.js';
+import { createV2Schema } from '../test-helpers.js';
 import { handleGetClusters, handleGetCluster } from './clusters.js';
 
 let tmpDir: string;
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'webui-clusters-test-'));
-  const dbPath = path.join(tmpDir, 'messages.db');
+  const dbPath = path.join(tmpDir, 'v2.db');
 
   const db = new Database(dbPath);
-  db.exec(`
-    CREATE TABLE pipeline_clusters (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      source_channel TEXT NOT NULL,
-      cluster_key TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'active',
-      summary TEXT NOT NULL,
-      observation_ids TEXT NOT NULL,
-      observation_count INTEGER NOT NULL DEFAULT 0,
-      last_observation_at TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      resolved_at TEXT,
-      UNIQUE(source_channel, cluster_key)
-    );
-    CREATE TABLE observed_messages (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      source_chat_jid TEXT,
-      source_message_id TEXT,
-      source_type TEXT NOT NULL DEFAULT 'passive_channel',
-      raw_text TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
-    CREATE TABLE events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      type TEXT NOT NULL,
-      source_group TEXT,
-      source_task_id TEXT,
-      payload TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending',
-      dedupe_key TEXT,
-      ttl_seconds INTEGER,
-      claimed_by TEXT,
-      claimed_at TEXT,
-      created_at TEXT NOT NULL,
-      processed_at TEXT,
-      result_note TEXT
-    );
-  `);
+  createV2Schema(db);
 
   // 3 clusters: active (newest), resolved (middle), expired (oldest)
   const insert = db.prepare(

@@ -1,0 +1,31 @@
+{
+  "_comment": "MCP server registry. Two entry kinds: stdio (local subprocess) and remote (HTTP endpoint). Field schemas match src/remote-mcp.ts: StdioMcpServerEntry + RemoteMcpServerEntry. Copy this file to data/mcp-servers.json (drop the .example suffix) and replace the example entries with your installation's servers. Consumed at runtime by src/host-mcp-invoker.ts (host-side tool calls — used by pipeline trivial-answerer) and by src/container-runner.ts (composes each container's mcp config). Per-agent-group filtering happens via that group's container.json mcpServers field, not via a separate exclusions overlay (v1's data/mcp-exclusions.json was retired during the v2 migration — see plan-k1f-step11-config-schemas.md).",
+
+  "servers": {
+    "_comment_stdio": "Example stdio server. hostPath + command + args run the subprocess. tools is either a flat array (all-or-nothing read access) or { read: [...], write: [...] } for access-level distinctions. env exports host env vars into the subprocess. hostEnv pins host-side env values applied only when this server is invoked.",
+    "example-stdio-server": {
+      "hostPath": "/absolute/path/to/my-mcp-server",
+      "command": "node",
+      "args": ["build/index.js"],
+      "tools": ["read_resource", "write_resource"],
+      "env": ["MY_API_KEY"],
+      "hostEnv": {
+        "MY_API_KEY": "from-onecli-vault-or-env"
+      },
+      "skill": "SKILL.md"
+    },
+
+    "_comment_remote": "Example remote (HTTP) server. url is the MCP endpoint. tools can be flat or read/write split. proxy:true routes through the mcp-auth-proxy (data/mcp-policies/*.yaml define per-group capability tiers). headers pass through verbatim — use for static auth tokens (rotate via the proxy, not via this file, for any value that's a secret).",
+    "example-remote-server": {
+      "url": "https://example.com/mcp",
+      "tools": {
+        "read":  ["list_items", "get_item"],
+        "write": ["create_item", "delete_item"]
+      },
+      "headers": {
+        "Authorization": "Bearer YOUR-TOKEN-HERE"
+      },
+      "skill": "SKILL.md"
+    }
+  }
+}

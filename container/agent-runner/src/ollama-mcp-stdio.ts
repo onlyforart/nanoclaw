@@ -20,27 +20,30 @@ import type { Message, Tool } from 'ollama';
 import fs from 'fs';
 import path from 'path';
 
+import {
+  normalizeArgs,
+  generateSessionId,
+  cleanUserMessage,
+  extractServerNameFromMcpName,
+  mapToolCallsToMcp,
+  serializeToolCallsNeeded,
+  pickLastAssistantContent,
+  parseToolConfig,
+  checkSessionLimits,
+  type McpServerEntry,
+} from './ollama-mcp-stdio-helpers.js';
+
 const OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://host.docker.internal:11434';
+// v2: per-session under sessDir mount; v1 used a per-group mount. The dir is
+// auto-created on first write (best-effort, no impact on functionality if it fails).
 const OLLAMA_STATUS_FILE = '/workspace/ipc/ollama_status.json';
-const MCP_CONFIG_PATH = '/workspace/mcp-servers-config/config.json';
+// v2: tool schemas live in container.json (written by host-side resolveMcpServers),
+// not v1's /workspace/mcp-servers-config/config.json. The .mcpServers field has
+// the same shape as v1's root config.
+const MCP_CONFIG_PATH = '/workspace/agent/container.json';
 
 const DEFAULT_MAX_ITERATIONS = 10;
 const TOTAL_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
-
-interface ToolSchema {
-  name: string;
-  description?: string;
-  inputSchema: unknown;
-}
-
-interface McpServerEntry {
-  command: string;
-  args: string[];
-  tools: string[];
-  env?: Record<string, string>;
-  skill?: string;
-  toolSchemas?: ToolSchema[];
-}
 
 interface OllamaSession {
   messages: Message[];
@@ -54,15 +57,6 @@ interface OllamaSession {
 
 function log(msg: string): void {
   console.error(`[OLLAMA] ${msg}`);
-}
-
-/** Normalize tool call arguments — some models return a JSON string instead of an object */
-function normalizeArgs(raw: unknown): Record<string, unknown> {
-  if (typeof raw === 'string') {
-    try { return JSON.parse(raw); } catch { return {}; }
-  }
-  if (raw && typeof raw === 'object') return raw as Record<string, unknown>;
-  return {};
 }
 
 function writeStatus(status: string, detail?: string): void {
@@ -104,45 +98,35 @@ function loadToolSchemas(): void {
 
   try {
     const raw = fs.readFileSync(MCP_CONFIG_PATH, 'utf-8');
-    const config: Record<string, McpServerEntry> = JSON.parse(raw);
+    // v2: container.json has top-level fields (timeoutMs, mcpServers, ...).
+    // Server entries live under .mcpServers, not at the root as in v1.
+    const parsed = JSON.parse(raw) as { mcpServers?: Record<string, McpServerEntry> };
+    const config: Record<string, McpServerEntry> = parsed.mcpServers ?? {};
 
+    // Skill loading remains here — fs-coupled and entry-point-only.
     for (const [name, entry] of Object.entries(config)) {
-      if (!entry.toolSchemas || entry.toolSchemas.length === 0) continue;
-
-      // Load skill if present
-      if (entry.skill) {
-        const serverPath = `/workspace/mcp-servers/${name}`;
-        const candidates = [
-          path.resolve(serverPath, entry.skill),
-          `/home/node/.claude/skills/${name}/SKILL.md`,
-        ];
-        for (const candidate of candidates) {
-          if (fs.existsSync(candidate)) {
-            try {
-              const skillRaw = fs.readFileSync(candidate, 'utf-8');
-              serverSkills.set(name, skillRaw.replace(/^---\n[\s\S]*?\n---\n/, '').trim());
-              break;
-            } catch { /* continue */ }
-          }
+      if (!entry.skill) continue;
+      const serverPath = `/workspace/mcp-servers/${name}`;
+      const candidates = [
+        path.resolve(serverPath, entry.skill),
+        `/home/node/.claude/skills/${name}/SKILL.md`,
+      ];
+      for (const candidate of candidates) {
+        if (fs.existsSync(candidate)) {
+          try {
+            const skillRaw = fs.readFileSync(candidate, 'utf-8');
+            serverSkills.set(name, skillRaw.replace(/^---\n[\s\S]*?\n---\n/, '').trim());
+            break;
+          } catch { /* continue */ }
         }
       }
-
-      for (const schema of entry.toolSchemas) {
-        const ollamaToolName = `${name}__${schema.name}`;
-        const mcpToolName = `mcp__${name}__${schema.name}`;
-
-        toolNameMap.set(ollamaToolName, { mcpTool: mcpToolName, serverName: name });
-
-        allTools.push({
-          type: 'function',
-          function: {
-            name: ollamaToolName,
-            description: schema.description ?? '',
-            parameters: schema.inputSchema as Tool['function']['parameters'],
-          },
-        });
-      }
     }
+
+    // Pure tool registration — delegates to the helper for spec-encoded
+    // mapping behaviour.
+    const { tools, toolNameMap: parsedMap } = parseToolConfig(config);
+    allTools = tools;
+    for (const [k, v] of parsedMap) toolNameMap.set(k, v);
 
     log(`Loaded ${allTools.length} tool schema(s) from config`);
     for (const tool of allTools) {
@@ -158,10 +142,6 @@ loadToolSchemas();
 // --- Session Management ---
 
 const sessions = new Map<string, OllamaSession>();
-
-function generateSessionId(): string {
-  return `ollama_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-}
 
 // --- Ollama Client ---
 
@@ -247,13 +227,7 @@ server.tool(
         messages.push({ role: 'system', content: args.system });
       }
 
-      // Rewrite "You have access to X tools" → "Use X tools" so the model
-      // treats it as an instruction rather than a capability question
-      const cleanedMessage = args.message
-        .replace(/you have access to (the )?/gi, 'Use ')
-        .trim();
-
-      messages.push({ role: 'user', content: cleanedMessage });
+      messages.push({ role: 'user', content: cleanUserMessage(args.message) });
 
       log(`  Calling ollama.chat with ${allTools.length} tools`);
 
@@ -284,23 +258,15 @@ server.tool(
           iterations: 1,
         });
 
-        const toolCalls = response.message.tool_calls.map((tc) => {
-          const ollamaName = tc.function.name;
-          const mapping = toolNameMap.get(ollamaName);
-          return {
-            mcpTool: mapping?.mcpTool ?? ollamaName,
-            arguments: normalizeArgs(tc.function.arguments),
-          };
-        });
+        const toolCalls = mapToolCallsToMcp(response.message.tool_calls, toolNameMap);
 
         log(`  Ollama wants ${toolCalls.length} tool call(s), returning to Claude (session: ${sessionId})`);
 
-        const result = JSON.stringify({
-          status: 'tool_calls_needed',
+        const result = serializeToolCallsNeeded(
           sessionId,
           toolCalls,
-          instructions: 'Execute each tool call using the mcpTool name and arguments, then call mcp__ollama__ollama_chat_continue with the sessionId and toolResults array. Each toolResult should have { toolName (the mcpTool name), result (the text result) }.',
-        }, null, 2);
+          'Execute each tool call using the mcpTool name and arguments, then call mcp__ollama__ollama_chat_continue with the sessionId and toolResults array. Each toolResult should have { toolName (the mcpTool name), result (the text result) }.',
+        );
 
         return { content: [{ type: 'text' as const, text: result }] };
       }
@@ -347,10 +313,8 @@ server.tool(
     try {
       // Inject skill instructions for servers being called for the first time
       for (const tr of args.toolResults) {
-        // Find the server name from the tool name (mcp__{server}__{tool})
-        const parts = tr.toolName.match(/^mcp__([^_]+)__/);
-        if (parts) {
-          const serverName = parts[1];
+        const serverName = extractServerNameFromMcpName(tr.toolName);
+        if (serverName) {
           const skill = session.skills.get(serverName);
           if (skill && !skill.injected) {
             session.messages.push({ role: 'system', content: skill.content });
@@ -365,25 +329,18 @@ server.tool(
       session.iterations++;
 
       // Check safety limits
-      if (session.iterations > session.maxIterations) {
-        const lastContent = session.messages
-          .filter((m) => m.role === 'assistant' && m.content)
-          .pop()?.content || 'Max iterations reached with no final response.';
+      const limit = checkSessionLimits(session, TOTAL_TIMEOUT_MS);
+      if (limit.exceeded) {
+        const fallback =
+          limit.reason === 'iterations'
+            ? 'Max iterations reached with no final response.'
+            : 'Timeout reached with no final response.';
+        const lastContent = pickLastAssistantContent(session.messages, fallback);
         sessions.delete(args.sessionId);
         const elapsed = ((Date.now() - session.startTime) / 1000).toFixed(1);
+        const tag = limit.reason === 'iterations' ? 'max iterations reached' : 'timeout';
         return {
-          content: [{ type: 'text' as const, text: `${lastContent}\n\n[${session.model} | ${elapsed}s | ${session.iterations} rounds | max iterations reached]` }],
-        };
-      }
-
-      if (Date.now() - session.startTime > TOTAL_TIMEOUT_MS) {
-        const lastContent = session.messages
-          .filter((m) => m.role === 'assistant' && m.content)
-          .pop()?.content || 'Timeout reached with no final response.';
-        sessions.delete(args.sessionId);
-        const elapsed = ((Date.now() - session.startTime) / 1000).toFixed(1);
-        return {
-          content: [{ type: 'text' as const, text: `${lastContent}\n\n[${session.model} | ${elapsed}s | ${session.iterations} rounds | timeout]` }],
+          content: [{ type: 'text' as const, text: `${lastContent}\n\n[${session.model} | ${elapsed}s | ${session.iterations} rounds | ${tag}]` }],
         };
       }
 
@@ -399,23 +356,15 @@ server.tool(
 
       // If Ollama wants more tool calls, return them
       if (response.message.tool_calls?.length) {
-        const toolCalls = response.message.tool_calls.map((tc) => {
-          const ollamaName = tc.function.name;
-          const mapping = toolNameMap.get(ollamaName);
-          return {
-            mcpTool: mapping?.mcpTool ?? ollamaName,
-            arguments: normalizeArgs(tc.function.arguments),
-          };
-        });
+        const toolCalls = mapToolCallsToMcp(response.message.tool_calls, toolNameMap);
 
         log(`  Ollama wants ${toolCalls.length} more tool call(s) (round ${session.iterations})`);
 
-        const result = JSON.stringify({
-          status: 'tool_calls_needed',
-          sessionId: args.sessionId,
+        const result = serializeToolCallsNeeded(
+          args.sessionId,
           toolCalls,
-          instructions: 'Execute each tool call, then call mcp__ollama__ollama_chat_continue again with the sessionId and toolResults.',
-        }, null, 2);
+          'Execute each tool call, then call mcp__ollama__ollama_chat_continue again with the sessionId and toolResults.',
+        );
 
         return { content: [{ type: 'text' as const, text: result }] };
       }

@@ -1,326 +1,409 @@
 /**
- * Tests for MCP authorization proxy (Step 11).
+ * Tests for src/mcp-auth-proxy.ts.
  *
- * Tests derived from the specification (docs/REMOTE-MCP-SERVERS.md).
+ * Encodes the role spec — HTTP reverse proxy that intercepts MCP
+ * `tools/call` requests, evaluates them against per-group policies,
+ * and forwards allowed traffic to the upstream MCP server.
+ *
+ * These are integration tests against a real http listener (cheap
+ * — `port: 0` picks any free port) plus a fake upstream that
+ * records the requests it receives. That way we exercise the
+ * actual request/response shaping, header propagation, and the
+ * JSON-RPC error envelope rather than mocking the http module.
  */
-import { describe, it, expect, afterEach } from 'vitest';
-import http from 'http';
-import {
-  startMcpAuthProxy,
-  type McpAuthProxyConfig,
-} from './mcp-auth-proxy.js';
-import {
-  loadPolicies,
-  type PolicySet,
-  type PolicyAssignments,
-} from './mcp-policy.js';
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { createServer, IncomingMessage, Server, ServerResponse } from 'node:http';
 
-// Helper to make HTTP requests to the proxy
-function proxyRequest(
-  port: number,
-  serverName: string,
-  body: unknown,
-  headers: Record<string, string> = {},
-): Promise<{ status: number; body: unknown }> {
-  return new Promise((resolve, reject) => {
-    const data = JSON.stringify(body);
-    const req = http.request(
-      {
-        hostname: '127.0.0.1',
-        port,
-        path: `/${serverName}`,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(data),
-          ...headers,
-        },
-      },
-      (res) => {
-        let responseBody = '';
-        res.on('data', (chunk) => (responseBody += chunk));
-        res.on('end', () => {
-          try {
-            resolve({
-              status: res.statusCode!,
-              body: JSON.parse(responseBody),
-            });
-          } catch {
-            resolve({ status: res.statusCode!, body: responseBody });
-          }
-        });
-      },
-    );
-    req.on('error', reject);
-    req.write(data);
-    req.end();
-  });
+import { startMcpAuthProxy, type McpAuthProxyConfig } from './mcp-auth-proxy.js';
+import type { PolicyRule, PolicySet, PolicyAssignments } from './mcp-policy.js';
+
+// =============================================================================
+// Fake upstream MCP server — records requests, returns canned responses
+// =============================================================================
+
+interface UpstreamHandle {
+  url: string;
+  requests: Array<{
+    method: string;
+    headers: Record<string, string | string[] | undefined>;
+    body: string;
+  }>;
+  close: () => Promise<void>;
 }
 
-// Mock upstream MCP server
-function createMockUpstream(): {
-  server: http.Server;
-  port: number;
-  requests: Array<{ method: string; body: unknown }>;
-  start: () => Promise<number>;
-  stop: () => Promise<void>;
-} {
-  const requests: Array<{ method: string; body: unknown }> = [];
-  const server = http.createServer((req, res) => {
-    let body = '';
-    req.on('data', (chunk) => (body += chunk));
+async function startFakeUpstream(
+  responder: (req: IncomingMessage, body: string, res: ServerResponse) => void = (req, body, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { received: body } }));
+  },
+): Promise<UpstreamHandle> {
+  const requests: UpstreamHandle['requests'] = [];
+
+  const server: Server = createServer((req, res) => {
+    let data = '';
+    req.on('data', (chunk) => (data += chunk));
     req.on('end', () => {
-      const parsed = JSON.parse(body);
-      requests.push({ method: parsed.method, body: parsed });
-      // Return a valid MCP response
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(
-        JSON.stringify({
-          jsonrpc: '2.0',
-          id: parsed.id,
-          result: {
-            content: [{ type: 'text', text: 'mock response' }],
-          },
-        }),
-      );
+      requests.push({ method: req.method ?? 'GET', headers: req.headers, body: data });
+      responder(req, data, res);
     });
   });
 
+  await new Promise<void>((resolve, reject) => {
+    server.on('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+
+  const port = (server.address() as { port: number }).port;
   return {
-    server,
-    port: 0,
+    url: `http://127.0.0.1:${port}`,
     requests,
-    start: () =>
-      new Promise((resolve) => {
-        server.listen(0, '127.0.0.1', () => {
-          const addr = server.address() as { port: number };
-          resolve(addr.port);
-        });
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
       }),
-    stop: () => new Promise((resolve) => server.close(() => resolve())),
   };
 }
 
-describe('MCP Authorization Proxy', () => {
-  let proxy: http.Server | null = null;
-  let proxyPort: number;
-  let mockUpstream: ReturnType<typeof createMockUpstream>;
-  let upstreamPort: number;
-  let tmpDir: string;
+// =============================================================================
+// Policy fixtures
+// =============================================================================
 
-  async function setupProxy(
-    overrides: Partial<McpAuthProxyConfig> = {},
-  ): Promise<void> {
-    mockUpstream = createMockUpstream();
-    upstreamPort = await mockUpstream.start();
+function buildPolicySet(map: Record<string, Record<string, PolicyRule>>): PolicySet {
+  const policies = new Map<string, Map<string, PolicyRule>>();
+  for (const [server, tiers] of Object.entries(map)) {
+    const tierMap = new Map<string, PolicyRule>();
+    for (const [name, rule] of Object.entries(tiers)) tierMap.set(name, rule);
+    policies.set(server, tierMap);
+  }
+  return { policies };
+}
 
-    // Create policy files
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nanoclaw-proxy-test-'));
-    const mongoDir = path.join(tmpDir, 'mongodb');
-    fs.mkdirSync(mongoDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(mongoDir, 'readonly.yaml'),
-      `tools:\n  allow:\n    - find\n    - aggregate\n    - count\n`,
-    );
-    fs.writeFileSync(
-      path.join(mongoDir, 'admin.yaml'),
-      `tools:\n  allow: ["*"]\n`,
-    );
+function makeAssignments(tier: string, perGroup: Record<string, string> = {}): PolicyAssignments {
+  return { defaultTier: tier, groups: perGroup };
+}
 
-    const policies = loadPolicies(tmpDir);
+// =============================================================================
+// Lifecycle helpers
+// =============================================================================
 
-    const assignments = new Map<string, PolicyAssignments>();
-    assignments.set('mongodb', {
-      defaultTier: 'readonly',
-      groups: { main: 'admin' },
+let proxy: { server: Server; port: number } | null = null;
+let upstream: UpstreamHandle | null = null;
+
+async function startProxy(config: McpAuthProxyConfig): Promise<string> {
+  proxy = await startMcpAuthProxy(0, '127.0.0.1', config);
+  return `http://127.0.0.1:${proxy.port}`;
+}
+
+afterEach(async () => {
+  if (proxy) {
+    await new Promise<void>((resolve, reject) => proxy!.server.close((err) => (err ? reject(err) : resolve())));
+    proxy = null;
+  }
+  if (upstream) {
+    await upstream.close();
+    upstream = null;
+  }
+});
+
+// =============================================================================
+// startMcpAuthProxy — listener + URL routing
+// =============================================================================
+
+describe('startMcpAuthProxy', () => {
+  it('returns the actual port when port=0 is requested', async () => {
+    upstream = await startFakeUpstream();
+    proxy = await startMcpAuthProxy(0, '127.0.0.1', {
+      upstreams: new Map([['srv', upstream.url]]),
+      policies: buildPolicySet({}),
+      assignments: new Map(),
     });
 
-    const config: McpAuthProxyConfig = {
-      upstreams: new Map([['mongodb', `http://127.0.0.1:${upstreamPort}`]]),
-      policies,
-      assignments,
-      ...overrides,
-    };
+    expect(proxy.port).toBeGreaterThan(0);
+    expect(typeof proxy.server.listen).toBe('function');
+  });
+});
 
-    const result = await startMcpAuthProxy(0, '127.0.0.1', config);
-    proxy = result.server;
-    proxyPort = result.port;
+describe('mcp-auth-proxy — request routing (preconditions)', () => {
+  it('returns 400 "Missing server name" for the root path', async () => {
+    upstream = await startFakeUpstream();
+    const proxyUrl = await startProxy({
+      upstreams: new Map([['srv', upstream.url]]),
+      policies: buildPolicySet({}),
+      assignments: new Map(),
+    });
+
+    const res = await fetch(proxyUrl, { method: 'POST', body: '{}' });
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as { error: string };
+    expect(json.error).toMatch(/Missing server name/);
+  });
+
+  it('returns 404 "Unknown server" for an unregistered upstream name', async () => {
+    upstream = await startFakeUpstream();
+    const proxyUrl = await startProxy({
+      upstreams: new Map([['srv', upstream.url]]),
+      policies: buildPolicySet({}),
+      assignments: new Map(),
+    });
+
+    const res = await fetch(`${proxyUrl}/missing`, { method: 'POST', body: '{}' });
+    expect(res.status).toBe(404);
+    const json = (await res.json()) as { error: string };
+    expect(json.error).toMatch(/Unknown server: missing/);
+  });
+
+  it('returns 400 "Invalid JSON body" when the body is not parseable', async () => {
+    upstream = await startFakeUpstream();
+    const proxyUrl = await startProxy({
+      upstreams: new Map([['srv', upstream.url]]),
+      policies: buildPolicySet({}),
+      assignments: new Map(),
+    });
+
+    const res = await fetch(`${proxyUrl}/srv`, { method: 'POST', body: 'not-json' });
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as { error: string };
+    expect(json.error).toMatch(/Invalid JSON/);
+  });
+});
+
+describe('mcp-auth-proxy — non tools/call methods (passthrough)', () => {
+  it('forwards "initialize" verbatim to upstream without checking policy or group header', async () => {
+    upstream = await startFakeUpstream();
+    const proxyUrl = await startProxy({
+      upstreams: new Map([['srv', upstream.url]]),
+      policies: buildPolicySet({}), // no policies — would normally block tools/call
+      assignments: new Map(),
+    });
+
+    const initBody = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize' });
+    const res = await fetch(`${proxyUrl}/srv`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: initBody,
+    });
+
+    expect(res.status).toBe(200);
+    expect(upstream.requests).toHaveLength(1);
+    expect(upstream.requests[0].body).toBe(initBody);
+  });
+});
+
+describe('mcp-auth-proxy — tools/call gate', () => {
+  function rule(allow: string[]): PolicyRule {
+    return { tools: { allow } };
   }
 
-  afterEach(async () => {
-    if (proxy) {
-      await new Promise<void>((resolve) => proxy!.close(() => resolve()));
-      proxy = null;
-    }
-    if (mockUpstream) {
-      await mockUpstream.stop();
-    }
-    if (tmpDir) {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
+  it('returns 400 "Missing X-NanoClaw-Group" header when the group is absent', async () => {
+    upstream = await startFakeUpstream();
+    const proxyUrl = await startProxy({
+      upstreams: new Map([['srv', upstream.url]]),
+      policies: buildPolicySet({ srv: { default: rule(['fetch']) } }),
+      assignments: new Map([['srv', makeAssignments('default')]]),
+    });
+
+    const res = await fetch(`${proxyUrl}/srv`, {
+      method: 'POST',
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'fetch', arguments: {} } }),
+    });
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as { error: string };
+    expect(json.error).toMatch(/X-NanoClaw-Group/);
   });
 
-  it('forwards allowed tools/call to upstream', async () => {
-    await setupProxy();
+  it('returns MCP error envelope when no assignments registered for that server', async () => {
+    upstream = await startFakeUpstream();
+    const proxyUrl = await startProxy({
+      upstreams: new Map([['srv', upstream.url]]),
+      policies: buildPolicySet({ srv: { default: rule(['fetch']) } }),
+      assignments: new Map(),
+    });
 
-    const { status, body } = await proxyRequest(
-      proxyPort,
-      'mongodb',
-      {
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'tools/call',
-        params: { name: 'find', arguments: { collection: 'users' } },
-      },
-      { 'X-NanoClaw-Group': 'slack_ops' }, // gets 'readonly' default tier
-    );
-
-    expect(status).toBe(200);
-    expect(mockUpstream.requests).toHaveLength(1);
-    expect(mockUpstream.requests[0].method).toBe('tools/call');
+    const res = await fetch(`${proxyUrl}/srv`, {
+      method: 'POST',
+      headers: { 'X-NanoClaw-Group': 'g1' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'fetch' } }),
+    });
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      jsonrpc: string;
+      id: number | null;
+      error: { code: number; message: string };
+    };
+    expect(json.jsonrpc).toBe('2.0');
+    expect(json.id).toBe(7);
+    expect(json.error.code).toBe(-32600);
+    expect(json.error.message).toMatch(/No policy assignments/);
   });
 
-  it('blocks denied tools/call with MCP error', async () => {
-    await setupProxy();
+  it('returns MCP error envelope when no policy tier resolves for the group', async () => {
+    upstream = await startFakeUpstream();
+    const proxyUrl = await startProxy({
+      upstreams: new Map([['srv', upstream.url]]),
+      policies: buildPolicySet({ srv: { onlyTier: rule(['fetch']) } }),
+      // No defaultTier and no group-specific tier → resolveTier returns null.
+      assignments: new Map([['srv', { groups: {} } as PolicyAssignments]]),
+    });
 
-    const { status, body } = await proxyRequest(
-      proxyPort,
-      'mongodb',
-      {
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'tools/call',
-        params: { name: 'delete-many', arguments: {} },
-      },
-      { 'X-NanoClaw-Group': 'slack_ops' }, // readonly tier
-    );
-
-    expect(status).toBe(200); // MCP errors are still 200 HTTP with error body
-    const b = body as { error?: { code: number; message: string } };
-    expect(b.error).toBeDefined();
-    expect(b.error!.code).toBe(-32600);
-    expect(mockUpstream.requests).toHaveLength(0); // NOT forwarded
+    const res = await fetch(`${proxyUrl}/srv`, {
+      method: 'POST',
+      headers: { 'X-NanoClaw-Group': 'g1' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'fetch' } }),
+    });
+    const json = (await res.json()) as { error: { message: string } };
+    expect(json.error.message).toMatch(/No policy tier found.*g1/);
   });
 
-  it('forwards initialize unconditionally', async () => {
-    await setupProxy();
+  it('denies tools/call when policy disallows the tool', async () => {
+    upstream = await startFakeUpstream();
+    const proxyUrl = await startProxy({
+      upstreams: new Map([['srv', upstream.url]]),
+      policies: buildPolicySet({ srv: { default: rule(['fetch']) } }),
+      assignments: new Map([['srv', makeAssignments('default')]]),
+    });
 
-    const { status } = await proxyRequest(
-      proxyPort,
-      'mongodb',
-      {
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'initialize',
-        params: {
-          protocolVersion: '2024-11-05',
-          capabilities: {},
-          clientInfo: { name: 'test', version: '1.0.0' },
-        },
-      },
-      { 'X-NanoClaw-Group': 'slack_ops' },
-    );
-
-    expect(status).toBe(200);
-    expect(mockUpstream.requests).toHaveLength(1);
+    const res = await fetch(`${proxyUrl}/srv`, {
+      method: 'POST',
+      headers: { 'X-NanoClaw-Group': 'g1' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'write', arguments: {} } }),
+    });
+    const json = (await res.json()) as { error: { message: string } };
+    expect(json.error.message).toMatch(/Access denied/);
+    // Upstream must not have received the denied request.
+    expect(upstream.requests).toHaveLength(0);
   });
 
-  it('forwards tools/list unconditionally', async () => {
-    await setupProxy();
+  it('forwards tools/call to upstream when policy allows', async () => {
+    upstream = await startFakeUpstream();
+    const proxyUrl = await startProxy({
+      upstreams: new Map([['srv', upstream.url]]),
+      policies: buildPolicySet({ srv: { default: rule(['fetch']) } }),
+      assignments: new Map([['srv', makeAssignments('default')]]),
+    });
 
-    const { status } = await proxyRequest(
-      proxyPort,
-      'mongodb',
-      {
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'tools/list',
-        params: {},
-      },
-      { 'X-NanoClaw-Group': 'slack_ops' },
-    );
-
-    expect(status).toBe(200);
-    expect(mockUpstream.requests).toHaveLength(1);
-  });
-
-  it('returns 400 for missing group header', async () => {
-    await setupProxy();
-
-    const { status } = await proxyRequest(proxyPort, 'mongodb', {
+    const body = JSON.stringify({
       jsonrpc: '2.0',
       id: 1,
       method: 'tools/call',
-      params: { name: 'find', arguments: {} },
+      params: { name: 'fetch', arguments: { url: 'x' } },
+    });
+    const res = await fetch(`${proxyUrl}/srv`, {
+      method: 'POST',
+      headers: { 'X-NanoClaw-Group': 'g1' },
+      body,
     });
 
-    expect(status).toBe(400);
+    expect(res.status).toBe(200);
+    expect(upstream.requests).toHaveLength(1);
+    expect(upstream.requests[0].body).toBe(body);
   });
 
-  it('returns 404 for unknown server', async () => {
-    await setupProxy();
+  it('per-group assignment overrides defaultTier', async () => {
+    const restrictedRule: PolicyRule = { tools: { allow: ['read'] } };
+    const adminRule: PolicyRule = { tools: { allow: ['*'] } };
 
-    const { status } = await proxyRequest(
-      proxyPort,
-      'unknown-server',
-      {
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'tools/call',
-        params: { name: 'find', arguments: {} },
-      },
-      { 'X-NanoClaw-Group': 'main' },
-    );
-
-    expect(status).toBe(404);
-  });
-
-  it('denies when no tier matches for group (fail-closed)', async () => {
-    // Setup with no default tier and group not in assignments
-    const assignments = new Map<string, PolicyAssignments>();
-    assignments.set('mongodb', {
-      groups: { main: 'admin' }, // no defaultTier
+    upstream = await startFakeUpstream();
+    const proxyUrl = await startProxy({
+      upstreams: new Map([['srv', upstream.url]]),
+      policies: buildPolicySet({ srv: { restricted: restrictedRule, admin: adminRule } }),
+      assignments: new Map([['srv', makeAssignments('restricted', { admins: 'admin' })]]),
     });
 
-    await setupProxy({ assignments });
+    // restricted group: cannot call "delete"
+    const res1 = await fetch(`${proxyUrl}/srv`, {
+      method: 'POST',
+      headers: { 'X-NanoClaw-Group': 'untrusted' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'delete' } }),
+    });
+    expect(((await res1.json()) as { error: { message: string } }).error.message).toMatch(/Access denied/);
+    expect(upstream.requests).toHaveLength(0);
 
-    const { status, body } = await proxyRequest(
-      proxyPort,
-      'mongodb',
-      {
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'tools/call',
-        params: { name: 'find', arguments: {} },
-      },
-      { 'X-NanoClaw-Group': 'unknown_group' },
-    );
+    // admin group: can call anything
+    const res2 = await fetch(`${proxyUrl}/srv`, {
+      method: 'POST',
+      headers: { 'X-NanoClaw-Group': 'admins' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'delete' } }),
+    });
+    expect(res2.status).toBe(200);
+    expect(upstream.requests).toHaveLength(1);
+  });
+});
 
-    expect(status).toBe(200);
-    const b = body as { error?: { code: number } };
-    expect(b.error).toBeDefined();
-    expect(mockUpstream.requests).toHaveLength(0);
+describe('mcp-auth-proxy — JSON-RPC error envelope', () => {
+  it('preserves the request id', async () => {
+    upstream = await startFakeUpstream();
+    const proxyUrl = await startProxy({
+      upstreams: new Map([['srv', upstream.url]]),
+      policies: buildPolicySet({ srv: { default: { tools: { allow: ['fetch'] } } } }),
+      assignments: new Map([['srv', makeAssignments('default')]]),
+    });
+
+    const res = await fetch(`${proxyUrl}/srv`, {
+      method: 'POST',
+      headers: { 'X-NanoClaw-Group': 'g1' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 'string-id', method: 'tools/call', params: { name: 'denied' } }),
+    });
+    const json = (await res.json()) as { id: string | null };
+    expect(json.id).toBe('string-id');
   });
 
-  it('admin tier allows all tools', async () => {
-    await setupProxy();
+  it('returns id=null when the request id is missing', async () => {
+    upstream = await startFakeUpstream();
+    const proxyUrl = await startProxy({
+      upstreams: new Map([['srv', upstream.url]]),
+      policies: buildPolicySet({ srv: { default: { tools: { allow: ['fetch'] } } } }),
+      assignments: new Map([['srv', makeAssignments('default')]]),
+    });
 
-    const { status } = await proxyRequest(
-      proxyPort,
-      'mongodb',
-      {
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'tools/call',
-        params: { name: 'drop-database', arguments: {} },
-      },
-      { 'X-NanoClaw-Group': 'main' }, // admin tier
-    );
+    const res = await fetch(`${proxyUrl}/srv`, {
+      method: 'POST',
+      headers: { 'X-NanoClaw-Group': 'g1' },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'tools/call', params: { name: 'denied' } }),
+    });
+    const json = (await res.json()) as { id: number | string | null };
+    expect(json.id).toBeNull();
+  });
 
-    expect(status).toBe(200);
-    expect(mockUpstream.requests).toHaveLength(1);
+  it('always uses code -32600 for policy errors', async () => {
+    upstream = await startFakeUpstream();
+    const proxyUrl = await startProxy({
+      upstreams: new Map([['srv', upstream.url]]),
+      policies: buildPolicySet({ srv: { default: { tools: { allow: ['fetch'] } } } }),
+      assignments: new Map([['srv', makeAssignments('default')]]),
+    });
+
+    const res = await fetch(`${proxyUrl}/srv`, {
+      method: 'POST',
+      headers: { 'X-NanoClaw-Group': 'g1' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'denied' } }),
+    });
+    const json = (await res.json()) as { error: { code: number } };
+    expect(json.error.code).toBe(-32600);
+  });
+});
+
+describe('mcp-auth-proxy — upstream failures', () => {
+  it('returns 502 "Bad Gateway" when the upstream is unreachable', async () => {
+    // Pick a port we know nothing is listening on by closing it before use.
+    const dummy = createServer();
+    await new Promise<void>((resolve) => dummy.listen(0, '127.0.0.1', resolve));
+    const deadPort = (dummy.address() as { port: number }).port;
+    await new Promise<void>((resolve) => dummy.close(() => resolve()));
+
+    const proxyUrl = await startProxy({
+      upstreams: new Map([['srv', `http://127.0.0.1:${deadPort}`]]),
+      policies: buildPolicySet({ srv: { default: { tools: { allow: ['fetch'] } } } }),
+      assignments: new Map([['srv', makeAssignments('default')]]),
+    });
+
+    const res = await fetch(`${proxyUrl}/srv`, {
+      method: 'POST',
+      headers: { 'X-NanoClaw-Group': 'g1' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'fetch' } }),
+    });
+
+    expect(res.status).toBe(502);
+    const json = (await res.json()) as { error: string };
+    expect(json.error).toMatch(/Bad Gateway/);
   });
 });

@@ -52,9 +52,7 @@ export function markdownToBlocks(text: string): KnownBlock[] {
           },
         } as HeaderBlock);
       } else {
-        blocks.push(
-          makeSectionBlock(`*${convertInlineFormatting(section.content)}*`),
-        );
+        blocks.push(makeSectionBlock(`*${convertInlineFormatting(section.content)}*`));
       }
     } else if (section.type === 'table') {
       blocks.push(makeSectionBlock(tableToCodeBlock(section.content)));
@@ -160,10 +158,7 @@ export function splitIntoSections(text: string): Section[] {
 function isTableLine(line: string): boolean {
   if (!line) return false;
   const trimmed = line.trim();
-  return (
-    trimmed.includes('|') &&
-    (trimmed.startsWith('|') || /^\S+\s*\|/.test(trimmed))
-  );
+  return trimmed.includes('|') && (trimmed.startsWith('|') || /^\S+\s*\|/.test(trimmed));
 }
 
 /**
@@ -195,9 +190,7 @@ export function tableToCodeBlock(tableText: string): string {
   }
 
   // Format aligned rows
-  const formatted = rows.map((row) =>
-    row.map((cell, c) => cell.padEnd(widths[c])).join('  '),
-  );
+  const formatted = rows.map((row) => row.map((cell, c) => cell.padEnd(widths[c])).join('  '));
 
   // Uppercase the header row to distinguish it from data rows
   if (formatted.length > 1) {

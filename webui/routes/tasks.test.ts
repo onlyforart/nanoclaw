@@ -5,61 +5,48 @@ import path from 'node:path';
 import os from 'node:os';
 
 import { initDb, closeDb } from '../db.js';
+import { createV2Schema, seedAgentGroupWiring } from '../test-helpers.js';
 import { handleGetGroupTasks, handleGetTask, handleCreateTask, handlePatchTask, handleGetTaskRuns } from './tasks.js';
 
 let tmpDir: string;
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'webui-tasks-test-'));
-  const dbPath = path.join(tmpDir, 'messages.db');
+  const dbPath = path.join(tmpDir, 'v2.db');
 
   const db = new Database(dbPath);
-  db.exec(`
-    CREATE TABLE scheduled_tasks (
-      id TEXT PRIMARY KEY, group_folder TEXT NOT NULL, chat_jid TEXT NOT NULL,
-      prompt TEXT NOT NULL, schedule_type TEXT NOT NULL, schedule_value TEXT NOT NULL,
-      next_run TEXT, last_run TEXT, last_result TEXT, status TEXT DEFAULT 'active',
-      created_at TEXT NOT NULL, context_mode TEXT DEFAULT 'isolated',
-      model TEXT DEFAULT NULL, temperature REAL DEFAULT NULL, timezone TEXT DEFAULT NULL,
-      max_tool_rounds INTEGER DEFAULT NULL, timeout_ms INTEGER DEFAULT NULL,
-      use_agent_sdk INTEGER DEFAULT 0,
-      allowed_tools TEXT, allowed_send_targets TEXT,
-      execution_mode TEXT NOT NULL DEFAULT 'container',
-      subscribed_event_types TEXT,
-      fallback_poll_ms INTEGER DEFAULT NULL
-    );
-    CREATE TABLE task_run_logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL,
-      run_at TEXT NOT NULL, duration_ms INTEGER NOT NULL, status TEXT NOT NULL,
-      result TEXT, error TEXT
-    );
-    CREATE TABLE registered_groups (
-      jid TEXT PRIMARY KEY, name TEXT, folder TEXT UNIQUE, trigger_pattern TEXT,
-      is_main INTEGER DEFAULT 0, requires_trigger INTEGER DEFAULT 1,
-      model TEXT, temperature REAL, max_tool_rounds INTEGER, timeout_ms INTEGER,
-      show_thinking INTEGER DEFAULT 0,
-      mode TEXT NOT NULL DEFAULT 'active',
-      threading_mode TEXT NOT NULL DEFAULT 'temporal',
-      pipeline_replies_blocked INTEGER DEFAULT 0
-    );
-  `);
+  createV2Schema(db);
+  seedAgentGroupWiring(db, {
+    agentGroupId: 'ag-main',
+    folder: 'slack_main',
+    name: 'Main',
+    channelType: 'slack',
+    platformId: 'slack@main',
+    engagePattern: '@bot',
+    isMain: 1,
+  });
 
-  db.prepare(`INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, next_run, status, created_at, context_mode, model, temperature, timezone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+  db.prepare(
+    `INSERT INTO pipeline_scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value,
+       next_run, status, created_at, context_mode, model, temperature, timezone)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
     'task-1', 'slack_main', 'slack@main', 'Daily standup', 'cron', '0 9 * * 1-5',
     '2024-06-03T09:00:00.000Z', 'active', '2024-01-01T00:00:00.000Z', 'group', 'sonnet', null, 'America/New_York',
   );
-  db.prepare(`INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, next_run, status, created_at, context_mode, use_agent_sdk) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+  db.prepare(
+    `INSERT INTO pipeline_scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value,
+       next_run, status, created_at, context_mode, use_agent_sdk)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
     'task-2', 'slack_main', 'slack@main', 'Weekly digest', 'cron', '0 8 * * 5',
     '2024-06-07T08:00:00.000Z', 'paused', '2024-02-01T00:00:00.000Z', 'isolated', 1,
   );
 
-  db.prepare(`INSERT INTO registered_groups (jid, name, folder, trigger_pattern) VALUES (?, ?, ?, ?)`).run(
-    'slack@main', 'Main', 'slack_main', '@bot',
-  );
-
-  db.prepare(`INSERT INTO task_run_logs (task_id, run_at, duration_ms, status, result, error) VALUES (?, ?, ?, ?, ?, ?)`).run(
-    'task-1', '2024-06-02T09:00:00.000Z', 4500, 'success', 'Done', null,
-  );
+  db.prepare(
+    `INSERT INTO pipeline_task_run_logs (task_id, run_at, duration_ms, status, result, error)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run('task-1', '2024-06-02T09:00:00.000Z', 4500, 'success', 'Done', null);
   db.close();
   initDb(dbPath);
 });

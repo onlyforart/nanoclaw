@@ -1,0 +1,30 @@
+# Pipeline surfaces fixture for K.1.f step 8.5 dry-run.
+#
+# Single shape that matches the test observation "test status" and
+# invokes the stub MCP server's `check_status` tool. The healthy_when
+# path matches the stub's deterministic response, so the trivial
+# answerer renders the `healthy` template and replies via the (mock)
+# channel adapter — completing the obs → fast-path → trivial-answerer
+# → outbound delivery flow.
+#
+# Pointed at via the PIPELINE_SURFACES_YAML env var when running
+# scripts/test-v2-host.ts.
+
+version: 1
+surfaces:
+  - cluster_key_prefix: test
+    label: Test status
+    trivial_answer:
+      shapes:
+        - regex: 'test status'
+          tool:
+            server: test-stub
+            name: check_status
+            args:
+              target: TEST
+          healthy_when:
+            path: healthy
+            equals: true
+          templates:
+            healthy: ':white_check_mark: TEST status — everything ok ({label})'
+            unhealthy: ':warning: TEST status — degraded ({label})'

@@ -1,47 +1,41 @@
 # Dependencies
 node_modules/
 .npm-cache/
+# pnpm content-addressable store (created when running in sandbox mode)
+.pnpm-store/
 # Build output
 dist/
 
-# Local config (installation-specific, not committed)
-.gitleaks-local.toml
-
 # Local data & auth
 store/
-data/
+# data/* (not data/) so the `!` exception lines below can re-include
+# specific files. A `data/` rule excludes the whole directory which
+# blocks any per-file re-include.
+data/*
+# Narrow exceptions — committed config schema templates only.
+# NEVER widen to a glob (e.g. !data/*.example) — gitignored data/ can
+# contain secrets / installation-specific names; explicit per-file
+# allowlist keeps the blast radius small. See K.1.f step 11 risk-pass.
+!data/backend-defaults.json.example
+!data/mcp-servers.json.example
 logs/
 
-# Groups - only track base structure and specific CLAUDE.md files
+# Groups - per-installation state, not tracked
 groups/*
-!groups/main/
-!groups/global/
-groups/main/*
-groups/global/*
-!groups/main/CLAUDE.md
-!groups/global/CLAUDE.md
-# Shared pagepilot script library — never commit, even if `groups/*`
-# is ever loosened. Scripts may contain selectors and URLs for
-# private monitoring targets.
-groups/.pagepilot/
+
+# Composer-managed CLAUDE.md artifacts (regenerated every spawn) and
+# per-group memory (CLAUDE.local.md) must never be committed.
+**/CLAUDE.local.md
+**/.claude-shared.md
+**/.claude-fragments/
 
 # Secrets
 *.keys.json
 .env
-
-# MCP servers
-mcp-servers/
-**/mcp-servers/
-
-# Backups
-backups/
+.env*
 
 # Temp files
 .tmp-*
-
-# Runtime state and local scripts
-nanoclaw.pid
-start-nanoclaw.sh
 
 # OS
 .DS_Store
@@ -50,20 +44,10 @@ start-nanoclaw.sh
 .idea/
 .vscode/
 
-# Claude Code per-session state (auto-generated; not reproducible across installs)
-.claude/scheduled_tasks.lock
-
-# Skills system — ignore all by default (copied from other repos per-install),
-# then whitelist skills that are part of this repo.
+# Skills system (local per-installation state)
 .nanoclaw/
-container/skills/*
-!container/skills/agent-browser/
 
 agents-sdk-docs
-eval/results/
-eval/sets/
-eval/taxonomy.md
 
-# Pipeline plugin — specs symlinked from private repo, compiled JS copied to dist/
-pipeline
-eval/
+# v1-to-v2 migration run reports (per-run artifacts, not source).
+scripts/v1-migration-reports/

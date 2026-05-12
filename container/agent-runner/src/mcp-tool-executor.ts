@@ -11,17 +11,18 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import type { Tool } from 'ollama';
 
 // MCP_SAFE_ENV_KEYS is shared with the host-side host-mcp-invoker.ts
 // via a JSON file so the two invoker paths see identical envs.
 // Loaded once at module init.
 const MCP_SAFE_ENV_KEYS: string[] = (() => {
   const here = dirname(fileURLToPath(import.meta.url));
-  const data = JSON.parse(
-    readFileSync(join(here, 'mcp-safe-env.json'), 'utf-8'),
-  ) as { safe_keys: string[] };
+  const data = JSON.parse(readFileSync(join(here, 'mcp-safe-env.json'), 'utf-8')) as { safe_keys: string[] };
   return data.safe_keys;
 })();
 
@@ -34,11 +35,17 @@ function buildSafeMcpEnv(overrides?: Record<string, string>): Record<string, str
   if (overrides) Object.assign(env, overrides);
   return env;
 }
-import {
-  StreamableHTTPClientTransport,
-} from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import type { Tool } from 'ollama';
-import type { AnthropicTool } from './anthropic-api-engine.js';
+
+/**
+ * Tool descriptor in the Anthropic Messages API shape. Defined here so
+ * `mcp-tool-executor.ts` can be ported before `anthropic-api-engine.ts` —
+ * the engine will import this type rather than the other way around.
+ */
+export interface AnthropicTool {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+}
 
 export interface McpServerConfig {
   // Stdio (existing)
@@ -49,8 +56,15 @@ export interface McpServerConfig {
   type?: 'http';
   url?: string;
   headers?: Record<string, string>;
-  // Common
-  tools: string[];
+  /**
+   * Tool allowlist. When present, only these tool names are exposed to
+   * engines (and only schemas matching this set are kept on listTools).
+   * When undefined or empty, the executor exposes ALL tools the server
+   * reports — required for v2 stdio servers in container.json which carry
+   * no `tools` field (the SDK auto-discovers; non-SDK engines need the
+   * same).
+   */
+  tools?: string[];
   toolSchemas?: Array<{
     name: string;
     description?: string;
@@ -99,19 +113,14 @@ export class McpToolExecutor {
 
         if (config.type === 'http' && config.url) {
           // Remote MCP server — connect over HTTP
-          transport = new StreamableHTTPClientTransport(
-            new URL(config.url),
-            {
-              requestInit: config.headers
-                ? { headers: config.headers }
-                : undefined,
-            },
-          );
+          transport = new StreamableHTTPClientTransport(new URL(config.url), {
+            requestInit: config.headers ? { headers: config.headers } : undefined,
+          });
           transportType = 'http';
         } else if (config.command) {
           // Stdio MCP server — spawn child process.
           // Safe-env allow-list is shared with host-mcp-invoker.ts
-          // via mcp-safe-env.ts so the two invoker paths see the
+          // via mcp-safe-env.json so the two invoker paths see the
           // same environment. Per-server `env` entries win over the
           // allow-list defaults.
           const env = buildSafeMcpEnv({ ...(config.env ?? {}), ...(extraEnv ?? {}) });
@@ -133,28 +142,26 @@ export class McpToolExecutor {
 
         await client.connect(transport);
 
+        // tools=undefined/empty → discover-all mode (v2 stdio servers).
+        // tools=non-empty → allowlist filter (v1-style + v2 remote servers).
+        const allowlist = config.tools && config.tools.length > 0 ? new Set(config.tools) : null;
+
         this.servers.set(name, {
           client,
           transport,
-          tools: config.tools,
+          tools: config.tools ?? [],
           transportType,
         });
 
-        // Register tool mappings
-        for (const toolName of config.tools) {
-          const mcpToolName = `mcp__${name}__${toolName}`;
-          this.toolToServer.set(mcpToolName, name);
-        }
-
-        // Build Ollama tool schemas: use pre-discovered schemas if available,
-        // otherwise discover dynamically via MCP tools/list
+        // Build tool schemas: prefer pre-discovered (host-resolved for HTTP),
+        // else discover dynamically via MCP tools/list. Filter by allowlist
+        // when one is set.
         let schemas = config.toolSchemas;
         if (!schemas || schemas.length === 0) {
           try {
             const listResult = await client.listTools();
-            const toolSet = new Set(config.tools);
             schemas = listResult.tools
-              .filter((t) => toolSet.has(t.name))
+              .filter((t) => allowlist === null || allowlist.has(t.name))
               .map((t) => ({
                 name: t.name,
                 description: t.description,
@@ -169,10 +176,16 @@ export class McpToolExecutor {
           }
         }
 
+        // Register tool mappings from the resolved schemas. v1 used to
+        // pre-register from config.tools before discovery, but registering
+        // post-discovery keeps the toolToServer map and the engine-format
+        // tool list consistent — only actually-available tools are
+        // addressable from engine-side tool calls.
         for (const schema of schemas) {
           const ollamaToolName = `${name}__${schema.name}`;
           const mcpToolName = `mcp__${name}__${schema.name}`;
 
+          this.toolToServer.set(mcpToolName, name);
           this.ollamaToolMap.set(ollamaToolName, {
             mcpTool: mcpToolName,
             serverName: name,
@@ -194,7 +207,7 @@ export class McpToolExecutor {
           });
         }
 
-        log(`Connected to MCP server: ${name} (${config.tools.length} tools, ${schemas.length} schemas)`);
+        log(`Connected to MCP server: ${name} (${schemas.length} tool(s)${allowlist ? ` from allowlist of ${allowlist.size}` : ' — discover-all'})`);
       } catch (err) {
         log(`Failed to connect to MCP server ${name}: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -222,12 +235,16 @@ export class McpToolExecutor {
     log(`Calling tool: ${mcpToolName} with args: ${JSON.stringify(args).slice(0, 200)}`);
 
     const callStart = Date.now();
-    const result = await server.client.callTool({
-      name: toolName,
-      arguments: args,
-    }, undefined, {
-      timeout: this.callTimeoutMs,
-    });
+    const result = await server.client.callTool(
+      {
+        name: toolName,
+        arguments: args,
+      },
+      undefined,
+      {
+        timeout: this.callTimeoutMs,
+      },
+    );
     const callMs = Date.now() - callStart;
 
     // Extract text content from the MCP result

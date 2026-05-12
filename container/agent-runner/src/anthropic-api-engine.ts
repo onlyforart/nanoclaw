@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
 
+import type { AnthropicTool } from './mcp-tool-executor.js';
 import { sanitizeToolArgs } from './sanitize-tool-args.js';
 
 const REPEAT_THRESHOLD = 3;
@@ -89,12 +90,6 @@ export interface AnthropicApiOptions {
   existingMessages?: MessageParam[];
   /** Context window size for auto-compaction threshold. Defaults to 150K. */
   contextWindowSize?: number;
-}
-
-export interface AnthropicTool {
-  name: string;
-  description?: string;
-  input_schema: Record<string, unknown>;
 }
 
 export interface AnthropicApiResult {

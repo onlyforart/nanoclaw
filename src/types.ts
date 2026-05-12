@@ -1,255 +1,213 @@
-export interface AdditionalMount {
-  hostPath: string; // Absolute path on host (supports ~ for home)
-  containerPath?: string; // Optional — defaults to basename of hostPath. Mounted at /workspace/extra/{value}
-  readonly?: boolean; // Default: true for safety
-}
+// ── Central DB entities ──
 
-/**
- * Mount Allowlist - Security configuration for additional mounts
- * This file should be stored at ~/.config/nanoclaw/mount-allowlist.json
- * and is NOT mounted into any container, making it tamper-proof from agents.
- */
-export interface MountAllowlist {
-  // Directories that can be mounted into containers
-  allowedRoots: AllowedRoot[];
-  // Glob patterns for paths that should never be mounted (e.g., ".ssh", ".gnupg")
-  blockedPatterns: string[];
-  // If true, non-main groups can only mount read-only regardless of config
-  nonMainReadOnly: boolean;
-}
-
-export interface AllowedRoot {
-  // Absolute path or ~ for home (e.g., "~/projects", "/var/repos")
-  path: string;
-  // Whether read-write mounts are allowed under this root
-  allowReadWrite: boolean;
-  // Optional description for documentation
-  description?: string;
-}
-
-export interface ContainerConfig {
-  additionalMounts?: AdditionalMount[];
-  timeout?: number; // Default: 300000 (5 minutes)
-}
-
-export interface RegisteredGroup {
+export interface AgentGroup {
+  id: string;
   name: string;
   folder: string;
-  trigger: string;
-  added_at: string;
-  containerConfig?: ContainerConfig;
-  requiresTrigger?: boolean; // Default: true for groups, false for solo chats
-  isMain?: boolean; // True for the main control group (no trigger, elevated privileges)
-  model?: string; // Model string (e.g. 'haiku', 'sonnet', 'opus', 'ollama:qwen3'). Defaults to CLI default.
-  temperature?: number; // Sampling temperature (0.0–2.0). Ollama only. NULL = use model default.
-  maxToolRounds?: number; // Max tool-calling rounds. NULL = use backend default.
-  timeoutMs?: number; // Per-invocation timeout in ms. NULL = use backend default.
-  showThinking?: boolean; // Send thinking/reasoning to channel. Ollama only. Default: false.
-  mode?: 'active' | 'passive' | 'control'; // Default: 'active'
-  threadingMode?: 'temporal' | 'thread_aware'; // Default: 'temporal'
-  pipelineRepliesBlocked?: boolean; // Block pipeline replies to this channel (for testing). Default: false.
+  agent_provider: string | null;
+  created_at: string;
 }
 
-export interface NewMessage {
-  id: string;
-  chat_jid: string;
-  sender: string;
-  sender_name: string;
-  content: string;
-  timestamp: string;
-  is_from_me?: boolean;
-  is_bot_message?: boolean;
-}
+export type UnknownSenderPolicy = 'strict' | 'request_approval' | 'public';
 
-export interface ScheduledTask {
+export interface MessagingGroup {
   id: string;
-  group_folder: string;
-  chat_jid: string;
-  prompt: string;
-  schedule_type: 'cron' | 'interval' | 'once' | 'event';
-  schedule_value: string;
-  fallbackPollMs?: number | null;
-  context_mode: 'group' | 'isolated';
-  model?: string | null;
-  temperature?: number | null;
-  timezone?: string | null;
-  maxToolRounds?: number | null;
-  timeoutMs?: number | null;
-  useAgentSdk?: boolean | number | null;
-  allowedTools?: string[] | null;
-  allowedSendTargets?: string[] | null;
-  executionMode?: 'container' | 'host_pipeline';
-  subscribedEventTypes?: string[] | null;
+  channel_type: string;
+  platform_id: string;
+  name: string | null;
+  is_group: number; // 0 | 1
+  unknown_sender_policy: UnknownSenderPolicy;
   /**
-   * Maximum number of events a single invocation may claim via
-   * consume_events. The IPC handler caps the LLM-requested limit to
-   * this value, enforcing serial per-event processing regardless of
-   * what the prompt asks for. NULL = no cap (legacy behaviour).
+   * When set, the owner explicitly denied registering this channel — the
+   * router drops silently and does not re-escalate. Cleared by any explicit
+   * wiring mutation (admin command). See migration 012.
+   *
+   * Optional on the TS type so pre-migration-012 callers that build
+   * MessagingGroup objects in code (fixtures, etc.) don't need to update;
+   * the column itself defaults to NULL in SQLite.
    */
-  batchSize?: number | null;
-  next_run: string | null;
-  last_run: string | null;
-  last_result: string | null;
-  status: 'active' | 'paused' | 'completed';
+  denied_at?: string | null;
   created_at: string;
 }
 
-export interface TaskRunLog {
-  task_id: string;
-  run_at: string;
-  duration_ms: number;
-  status: 'success' | 'error';
-  result: string | null;
-  error: string | null;
-  input_tokens?: number | null;
-  output_tokens?: number | null;
-  cache_read_input_tokens?: number | null;
-  cache_creation_input_tokens?: number | null;
-  cost_usd?: number | null;
-}
-
-// --- Event bus ---
-
-export type EventStatus = 'pending' | 'claimed' | 'done' | 'expired' | 'failed';
-
-export interface EventRow {
-  id: number;
-  type: string;
-  source_group: string;
-  source_task_id: string | null;
-  payload: string; // JSON
-  dedupe_key: string | null;
-  created_at: string;
-  expires_at: string | null;
-  status: EventStatus;
-  claimed_by: string | null;
-  claimed_at: string | null;
-  processed_at: string | null;
-  result_note: string | null;
-  // F9 phase 9 — bounded retry for the trivial-answerer.
-  // Set to 1 when the trivial-answerer releases an event with a
-  // failureReason; the trivial-answerer's consumeEvents skips rows
-  // with this flag set so it doesn't re-attempt a guaranteed-fail
-  // shape on every tick. The solver ignores the flag.
-  attempted_by_trivial: number;
-  trivial_failure_reason: string | null;
-  // F9.3 Task B — timestamp the reply_to_event IPC handler wrote on
-  // successful delivery. null means no reply has been sent for this
-  // event. onEventAcked on candidate.question → done uses this to
-  // detect solver silent-fails (acked without a user reply).
-  replied_at: string | null;
-}
-
-// --- Observed messages ---
-
-export interface ObservedMessageRow {
-  id: number;
-  source_chat_jid: string | null;
-  source_message_id: string | null;
-  source_type: 'passive_channel' | 'task_intake';
-  source_task_id: string | null;
-  source_group: string | null;
-  intake_reason: string | null;
-  intake_event_id: number | null;
-  thread_id: string | null;
-  related_observation_ids: string | null; // JSON array
-  raw_text: string;
-  sanitised_json: string | null;
-  sanitiser_model: string | null;
-  sanitiser_version: string | null;
-  flags: string | null; // JSON array
-  created_at: string;
-  sanitised_at: string | null;
-}
-
-// --- Pipeline intake ---
-
-export interface IntakeSourceContext {
-  source_type: string;
-  source_group: string;
-  source_task_id?: string;
-  source_channel?: string;
-  source_message_id?: string;
-  reason: string;
-}
-
-export interface PipelineIntakeLogRow {
-  id: number;
-  event_id: number;
-  raw_text_hash: string;
-  source_type: string;
-  source_group: string;
-  source_task_id: string | null;
-  source_channel: string | null;
-  source_message_id: string | null;
-  reason: string;
-  submitted_at: string;
-  processed_at: string | null;
-  observation_id: number | null;
-}
-
-// --- Channel abstraction ---
-
-export interface Channel {
-  name: string;
-  connect(): Promise<void>;
-  sendMessage(
-    jid: string,
-    text: string,
-    options?: { threadTs?: string },
-  ): Promise<void>;
-  isConnected(): boolean;
-  ownsJid(jid: string): boolean;
-  disconnect(): Promise<void>;
-  // Optional: typing indicator. Channels that support it implement it.
-  setTyping?(jid: string, isTyping: boolean): Promise<void>;
-  // Optional: sync group/chat names from the platform.
-  syncGroups?(force: boolean): Promise<void>;
-  // Optional: backfill missed messages for passive channels after reconnect.
-  backfillPassiveChannels?(
-    passiveJids: string[],
-    cursors: Record<string, string>,
-  ): Promise<void>;
-  // Optional: fetch the text content of a specific message. Used by
-  // the pipeline approval reacji handler to read draft text from a
-  // team-channel message when a 👍 is reacted.
-  fetchMessageText?(jid: string, messageId: string): Promise<string | null>;
-  // Optional: fetch all replies in a thread. Used by the pipeline
-  // post-write delivery verification to confirm our reply landed.
-  // Returns null if the channel adapter can't fetch or the thread is
-  // empty.
-  fetchThreadReplies?(
-    jid: string,
-    threadTs: string,
-  ): Promise<Array<{ ts: string; text: string | null }> | null>;
-}
-
-// Callback type that channels use to deliver inbound messages
-export type OnInboundMessage = (chatJid: string, message: NewMessage) => void;
+// ── Identity & privilege ──
 
 /**
- * Callback channels invoke when a user adds/removes a reaction. Used
- * for the pipeline approval flow (👍 on a team-channel PROPOSED REPLY
- * draft) and the legacy proposed_reply reacji bridge.
+ * User = a messaging-platform identifier. Namespaced so distinct channels
+ * with numeric IDs don't collide: "phone:+1555...", "tg:123", "discord:456",
+ * "email:a@x.com". A single human with a phone AND a telegram handle has
+ * two separate users — no cross-channel linking (yet).
  */
-export type OnReaction = (
-  chatJid: string,
-  reaction: {
-    emoji: string;
-    userId: string;
-    messageId: string;
-    chatJid: string;
-    timestamp: string;
-  },
-) => void | Promise<void>;
+export interface User {
+  id: string;
+  kind: string; // 'phone' | 'email' | 'discord' | 'telegram' | 'matrix' | ...
+  display_name: string | null;
+  created_at: string;
+}
 
-// Callback for chat metadata discovery.
-// name is optional — channels that deliver names inline (Telegram) pass it here;
-// channels that sync names separately (via syncGroups) omit it.
-export type OnChatMetadata = (
-  chatJid: string,
-  timestamp: string,
-  name?: string,
-  channel?: string,
-  isGroup?: boolean,
-) => void;
+export type UserRoleKind = 'owner' | 'admin';
+
+/**
+ * Role grant. Owner is always global. Admin is either global
+ * (agent_group_id = null) or scoped to a specific agent group.
+ * Admin @ A implicitly makes the user a member of A — we do not require
+ * a separate agent_group_members row for admins.
+ */
+export interface UserRole {
+  user_id: string;
+  role: UserRoleKind;
+  agent_group_id: string | null;
+  granted_by: string | null;
+  granted_at: string;
+}
+
+/** "Known" membership in an agent group — required for unprivileged users. */
+export interface AgentGroupMember {
+  user_id: string;
+  agent_group_id: string;
+  added_by: string | null;
+  added_at: string;
+}
+
+/** Cached DM channel for a user on a specific channel_type. */
+export interface UserDm {
+  user_id: string;
+  channel_type: string;
+  messaging_group_id: string;
+  resolved_at: string;
+}
+
+export type EngageMode = 'pattern' | 'mention' | 'mention-sticky';
+export type SenderScope = 'all' | 'known';
+export type IgnoredMessagePolicy = 'drop' | 'accumulate';
+
+export interface MessagingGroupAgent {
+  id: string;
+  messaging_group_id: string;
+  agent_group_id: string;
+  engage_mode: EngageMode;
+  /**
+   * Regex source string used when engage_mode='pattern'. `'.'` is the sentinel
+   * for "match every message" (the "always" flavor). Ignored for 'mention' /
+   * 'mention-sticky' modes.
+   */
+  engage_pattern: string | null;
+  sender_scope: SenderScope;
+  ignored_message_policy: IgnoredMessagePolicy;
+  session_mode: 'shared' | 'per-thread' | 'agent-shared';
+  priority: number;
+  created_at: string;
+  /**
+   * Per-wiring "main channel" marker. At most one wiring per agent_group_id
+   * may have is_main=1 (enforced by a partial unique index — see migration
+   * 014). Defaulted to 0 by the migration. Used by webui (Q7 β agent-group
+   * detail page picks the is_main wiring as the primary channel) and by
+   * any host routing that wants to identify the agent's "home" channel.
+   */
+  is_main?: number;
+  /**
+   * Engine override for the model name (e.g. 'claude-haiku-4.5',
+   * 'ollama:llama3.1'). NULL falls back to
+   * `data/backend-defaults.json[agent_group.agent_provider].model`.
+   * Resolution happens at session spawn (container-runner) and the
+   * resolved value reaches the container via NANOCLAW_MODEL env var.
+   */
+  model?: string | null;
+  /** NULL → backend-defaults. Range typically 0.0–1.0 for Anthropic-style. */
+  temperature?: number | null;
+  /** NULL → backend-defaults. Per-session max tool-use rounds. */
+  max_tool_rounds?: number | null;
+  /** NULL → backend-defaults. Per-request engine timeout (milliseconds). */
+  timeout_ms?: number | null;
+  /** 0/1 boolean. NULL → backend-defaults. Whether to surface model thinking output. */
+  show_thinking?: number | null;
+}
+
+export interface Session {
+  id: string;
+  agent_group_id: string;
+  messaging_group_id: string | null;
+  thread_id: string | null;
+  agent_provider: string | null;
+  status: 'active' | 'closed';
+  container_status: 'running' | 'idle' | 'stopped';
+  last_active: string | null;
+  created_at: string;
+}
+
+// ── Session DB entities ──
+
+export type MessageInKind = 'chat' | 'chat-sdk' | 'task' | 'webhook' | 'system';
+export type MessageInStatus = 'pending' | 'processing' | 'completed' | 'failed';
+
+export interface MessageIn {
+  id: string;
+  kind: MessageInKind;
+  timestamp: string;
+  status: MessageInStatus;
+  status_changed: string | null;
+  process_after: string | null;
+  recurrence: string | null;
+  tries: number;
+  platform_id: string | null;
+  channel_type: string | null;
+  thread_id: string | null;
+  content: string; // JSON blob
+}
+
+export interface MessageOut {
+  id: string;
+  in_reply_to: string | null;
+  timestamp: string;
+  delivered: number; // 0 | 1
+  deliver_after: string | null;
+  recurrence: string | null;
+  kind: string;
+  platform_id: string | null;
+  channel_type: string | null;
+  thread_id: string | null;
+  content: string; // JSON blob
+}
+
+// ── Pending questions (central DB) ──
+
+export interface PendingQuestion {
+  question_id: string;
+  session_id: string;
+  message_out_id: string;
+  platform_id: string | null;
+  channel_type: string | null;
+  thread_id: string | null;
+  title: string;
+  options: import('./channels/ask-question.js').NormalizedOption[];
+  created_at: string;
+}
+
+// ── Pending approvals (central DB) ──
+
+export interface PendingApproval {
+  approval_id: string;
+  session_id: string | null;
+  request_id: string;
+  action: string;
+  payload: string; // JSON
+  created_at: string;
+  agent_group_id: string | null;
+  channel_type: string | null;
+  platform_id: string | null;
+  platform_message_id: string | null;
+  expires_at: string | null;
+  status: 'pending' | 'approved' | 'rejected' | 'expired';
+  title: string;
+  options_json: string;
+}
+
+// ── Agent destinations (central DB) ──
+
+export interface AgentDestination {
+  agent_group_id: string;
+  local_name: string;
+  target_type: 'channel' | 'agent';
+  target_id: string;
+  created_at: string;
+}

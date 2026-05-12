@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import path from 'node:path';
 
-const DEFAULT_DB_PATH = path.join(process.cwd(), 'store', 'messages.db');
+const DEFAULT_DB_PATH = path.join(process.cwd(), 'data', 'v2.db');
 
 let db: Database.Database;
 
@@ -16,6 +16,56 @@ export function closeDb(): void {
     db.close();
   }
 }
+
+// ---------------------------------------------------------------------------
+// v2 entity-model interfaces (for Commit 2 agent-group-primary UI)
+// ---------------------------------------------------------------------------
+
+export interface AgentGroupRow {
+  id: string;
+  name: string;
+  folder: string;
+  agent_provider: string | null;
+  created_at: string;
+}
+
+export interface MessagingGroupRow {
+  id: string;
+  channel_type: string;
+  platform_id: string;
+  name: string | null;
+  is_group: number;
+  unknown_sender_policy: string;
+  created_at: string;
+}
+
+export interface WiringRow {
+  id: string;
+  messaging_group_id: string;
+  agent_group_id: string;
+  engage_mode: string | null;
+  engage_pattern: string | null;
+  sender_scope: string | null;
+  ignored_message_policy: string | null;
+  session_mode: string;
+  priority: number;
+  is_main: number;
+  model: string | null;
+  temperature: number | null;
+  max_tool_rounds: number | null;
+  timeout_ms: number | null;
+  show_thinking: number | null;
+  pipeline_replies_blocked: number;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// v1-compat shims (routes that Commit 2 will redesign still consume these)
+// ---------------------------------------------------------------------------
+// GroupRow is a flat per-wiring view. Each (agent_group, messaging_group)
+// wiring becomes one row. Returns one row per agent_group folder (the
+// is_main wiring, or first by priority) so v1 consumers that assume
+// folder uniqueness keep working until Commit 2 reshapes the routes.
 
 export interface GroupRow {
   jid: string;
@@ -68,15 +118,108 @@ export interface TaskRunRow {
   error: string | null;
 }
 
-// --- Groups ---
+// ---------------------------------------------------------------------------
+// v2-native entity helpers (Commit 2 will consume these for the redesigned UX)
+// ---------------------------------------------------------------------------
+
+export function getAllAgentGroups(): AgentGroupRow[] {
+  return db
+    .prepare(
+      `SELECT id, name, folder, agent_provider, created_at
+       FROM agent_groups ORDER BY name`,
+    )
+    .all() as AgentGroupRow[];
+}
+
+export function getAgentGroupByFolder(folder: string): AgentGroupRow | undefined {
+  return db
+    .prepare(
+      `SELECT id, name, folder, agent_provider, created_at
+       FROM agent_groups WHERE folder = ?`,
+    )
+    .get(folder) as AgentGroupRow | undefined;
+}
+
+export function getMessagingGroups(): MessagingGroupRow[] {
+  return db
+    .prepare(
+      `SELECT id, channel_type, platform_id, name, is_group, unknown_sender_policy, created_at
+       FROM messaging_groups ORDER BY channel_type, platform_id`,
+    )
+    .all() as MessagingGroupRow[];
+}
+
+export function getMessagingGroupById(id: string): MessagingGroupRow | undefined {
+  return db
+    .prepare(
+      `SELECT id, channel_type, platform_id, name, is_group, unknown_sender_policy, created_at
+       FROM messaging_groups WHERE id = ?`,
+    )
+    .get(id) as MessagingGroupRow | undefined;
+}
+
+export function getAgentGroupsForMessagingGroup(messagingGroupId: string): AgentGroupRow[] {
+  return db
+    .prepare(
+      `SELECT ag.id, ag.name, ag.folder, ag.agent_provider, ag.created_at
+       FROM agent_groups ag
+       JOIN messaging_group_agents mga ON mga.agent_group_id = ag.id
+       WHERE mga.messaging_group_id = ?
+       ORDER BY mga.is_main DESC, mga.priority DESC, ag.name`,
+    )
+    .all(messagingGroupId) as AgentGroupRow[];
+}
+
+export function getWiringsForAgentGroup(agentGroupId: string): WiringRow[] {
+  return db
+    .prepare(
+      `SELECT id, messaging_group_id, agent_group_id, engage_mode, engage_pattern,
+              sender_scope, ignored_message_policy, session_mode, priority, is_main,
+              model, temperature, max_tool_rounds, timeout_ms, show_thinking,
+              pipeline_replies_blocked, created_at
+       FROM messaging_group_agents WHERE agent_group_id = ?
+       ORDER BY is_main DESC, priority DESC, created_at`,
+    )
+    .all(agentGroupId) as WiringRow[];
+}
+
+// ---------------------------------------------------------------------------
+// v1-compat: groups (composite query: agent_groups ⨝ messaging_group_agents ⨝ messaging_groups)
+// ---------------------------------------------------------------------------
+
+const FLAT_GROUP_SELECT = `
+  SELECT
+    mg.platform_id                                                AS jid,
+    COALESCE(mg.name, ag.name)                                    AS name,
+    ag.folder                                                     AS folder,
+    COALESCE(mga.engage_pattern, '')                              AS trigger_pattern,
+    COALESCE(mga.is_main, 0)                                      AS is_main,
+    CASE WHEN mga.engage_mode = 'pattern' AND mga.engage_pattern = '.'
+         THEN 0 ELSE 1 END                                        AS requires_trigger,
+    mga.model                                                     AS model,
+    mga.temperature                                               AS temperature,
+    mga.max_tool_rounds                                           AS max_tool_rounds,
+    mga.timeout_ms                                                AS timeout_ms,
+    mga.show_thinking                                             AS show_thinking,
+    'active'                                                      AS mode,
+    COALESCE(mga.session_mode, 'shared')                          AS threading_mode,
+    COALESCE(mga.pipeline_replies_blocked, 0)                     AS pipeline_replies_blocked
+  FROM agent_groups ag
+  JOIN messaging_group_agents mga ON mga.agent_group_id = ag.id
+  JOIN messaging_groups mg ON mg.id = mga.messaging_group_id
+`;
 
 export function getAllGroups(): GroupRow[] {
   return db
     .prepare(
-      `SELECT jid, name, folder, trigger_pattern, is_main, requires_trigger,
-              model, temperature, max_tool_rounds, timeout_ms, show_thinking,
-              mode, threading_mode, pipeline_replies_blocked
-       FROM registered_groups ORDER BY name`,
+      `${FLAT_GROUP_SELECT}
+       WHERE mga.id = (
+         SELECT id FROM messaging_group_agents
+         WHERE agent_group_id = ag.id
+         ORDER BY is_main DESC, priority DESC, created_at
+         LIMIT 1
+       )
+       ORDER BY name`,
     )
     .all() as GroupRow[];
 }
@@ -84,18 +227,43 @@ export function getAllGroups(): GroupRow[] {
 export function getGroupByFolder(folder: string): GroupRow | undefined {
   return db
     .prepare(
-      `SELECT jid, name, folder, trigger_pattern, is_main, requires_trigger,
-              model, temperature, max_tool_rounds, timeout_ms, show_thinking,
-              mode, threading_mode, pipeline_replies_blocked
-       FROM registered_groups WHERE folder = ?`,
+      `${FLAT_GROUP_SELECT}
+       WHERE ag.folder = ?
+         AND mga.id = (
+           SELECT id FROM messaging_group_agents
+           WHERE agent_group_id = ag.id
+           ORDER BY is_main DESC, priority DESC, created_at
+           LIMIT 1
+         )`,
     )
     .get(folder) as GroupRow | undefined;
 }
 
 export function updateGroup(
   folder: string,
-  updates: { model?: string; temperature?: number | null; max_tool_rounds?: number; timeout_ms?: number; show_thinking?: number | null; mode?: string; threading_mode?: string; pipeline_replies_blocked?: number },
+  updates: {
+    model?: string | null;
+    temperature?: number | null;
+    max_tool_rounds?: number;
+    timeout_ms?: number;
+    show_thinking?: number | null;
+    mode?: string;
+    threading_mode?: string;
+    pipeline_replies_blocked?: number;
+  },
 ): boolean {
+  const wiring = db
+    .prepare(
+      `SELECT mga.id AS id
+       FROM agent_groups ag
+       JOIN messaging_group_agents mga ON mga.agent_group_id = ag.id
+       WHERE ag.folder = ?
+       ORDER BY mga.is_main DESC, mga.priority DESC, mga.created_at
+       LIMIT 1`,
+    )
+    .get(folder) as { id: string } | undefined;
+  if (!wiring) return false;
+
   const setClauses: string[] = [];
   const values: unknown[] = [];
 
@@ -119,29 +287,37 @@ export function updateGroup(
     setClauses.push('show_thinking = ?');
     values.push(updates.show_thinking);
   }
-  if (updates.mode !== undefined) {
-    setClauses.push('mode = ?');
-    values.push(updates.mode);
-  }
   if (updates.threading_mode !== undefined) {
-    setClauses.push('threading_mode = ?');
+    setClauses.push('session_mode = ?');
     values.push(updates.threading_mode);
   }
   if (updates.pipeline_replies_blocked !== undefined) {
     setClauses.push('pipeline_replies_blocked = ?');
     values.push(updates.pipeline_replies_blocked);
   }
+  // `mode` has no direct v2 equivalent (passive moved to
+  // pipeline_passive_subscriptions; engage_mode covers active variants).
+  // Commit 2's redesign surfaces engage_mode + passive subscriptions
+  // explicitly. The field is accepted on input but not persisted.
 
   if (setClauses.length === 0) return false;
 
-  values.push(folder);
+  values.push(wiring.id);
   const result = db
-    .prepare(`UPDATE registered_groups SET ${setClauses.join(', ')} WHERE folder = ?`)
+    .prepare(`UPDATE messaging_group_agents SET ${setClauses.join(', ')} WHERE id = ?`)
     .run(...values);
   return result.changes > 0;
 }
 
-// --- Tasks ---
+// ---------------------------------------------------------------------------
+// Tasks (table renamed: scheduled_tasks → pipeline_scheduled_tasks)
+// ---------------------------------------------------------------------------
+
+const TASK_SELECT = `SELECT id, group_folder, chat_jid, prompt, schedule_type, schedule_value,
+       context_mode, model, temperature, timezone, max_tool_rounds, timeout_ms, use_agent_sdk,
+       allowed_tools, allowed_send_targets, execution_mode, subscribed_event_types, fallback_poll_ms,
+       next_run, last_run, last_result, status, created_at
+FROM pipeline_scheduled_tasks`;
 
 export function createTask(task: {
   id: string;
@@ -162,7 +338,7 @@ export function createTask(task: {
   created_at: string;
 }): void {
   db.prepare(
-    `INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value,
+    `INSERT INTO pipeline_scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value,
        context_mode, model, temperature, timezone, max_tool_rounds, timeout_ms, use_agent_sdk,
        next_run, status, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -178,25 +354,13 @@ export function createTask(task: {
 export function getTasksByGroup(groupFolder: string): TaskRow[] {
   return db
     .prepare(
-      `SELECT id, group_folder, chat_jid, prompt, schedule_type, schedule_value,
-              context_mode, model, temperature, timezone, max_tool_rounds, timeout_ms, use_agent_sdk,
-              allowed_tools, allowed_send_targets, execution_mode, subscribed_event_types, fallback_poll_ms,
-              next_run, last_run, last_result, status, created_at
-       FROM scheduled_tasks WHERE group_folder = ? AND id NOT LIKE 'pipeline:%' ORDER BY next_run`,
+      `${TASK_SELECT} WHERE group_folder = ? AND id NOT LIKE 'pipeline:%' ORDER BY next_run`,
     )
     .all(groupFolder) as TaskRow[];
 }
 
 export function getTaskById(id: string): TaskRow | undefined {
-  return db
-    .prepare(
-      `SELECT id, group_folder, chat_jid, prompt, schedule_type, schedule_value,
-              context_mode, model, temperature, timezone, max_tool_rounds, timeout_ms, use_agent_sdk,
-              allowed_tools, allowed_send_targets, execution_mode, subscribed_event_types, fallback_poll_ms,
-              next_run, last_run, last_result, status, created_at
-       FROM scheduled_tasks WHERE id = ?`,
-    )
-    .get(id) as TaskRow | undefined;
+  return db.prepare(`${TASK_SELECT} WHERE id = ?`).get(id) as TaskRow | undefined;
 }
 
 export function updateTask(
@@ -242,18 +406,20 @@ export function updateTask(
 
   values.push(id);
   const result = db
-    .prepare(`UPDATE scheduled_tasks SET ${setClauses.join(', ')} WHERE id = ?`)
+    .prepare(`UPDATE pipeline_scheduled_tasks SET ${setClauses.join(', ')} WHERE id = ?`)
     .run(...values);
   return result.changes > 0;
 }
 
 export function deleteTask(id: string): boolean {
-  db.prepare(`DELETE FROM task_run_logs WHERE task_id = ?`).run(id);
-  const result = db.prepare(`DELETE FROM scheduled_tasks WHERE id = ?`).run(id);
+  db.prepare(`DELETE FROM pipeline_task_run_logs WHERE task_id = ?`).run(id);
+  const result = db.prepare(`DELETE FROM pipeline_scheduled_tasks WHERE id = ?`).run(id);
   return result.changes > 0;
 }
 
-// --- Token Usage ---
+// ---------------------------------------------------------------------------
+// Token usage
+// ---------------------------------------------------------------------------
 
 export interface DailyTokenUsageRow {
   date: string;
@@ -275,10 +441,12 @@ interface DailyModelTokenRow {
 }
 
 export function getGroupDailyTokensByModel(groupFolder: string, days: number = 30): DailyModelTokenRow[] {
+  // Per-wiring model lives on messaging_group_agents (is_main wiring); fall
+  // back to task.model.
   return db
     .prepare(
       `SELECT date(r.run_at) as date,
-              COALESCE(NULLIF(t.model, ''), g.model) as model,
+              COALESCE(NULLIF(t.model, ''), mga.model) as model,
               SUM(COALESCE(r.input_tokens, 0)) as input_tokens,
               SUM(COALESCE(r.output_tokens, 0)) as output_tokens,
               SUM(COALESCE(r.cache_read_input_tokens, 0)) as cache_read,
@@ -286,31 +454,24 @@ export function getGroupDailyTokensByModel(groupFolder: string, days: number = 3
               SUM(r.cost_usd) as actual_cost,
               COUNT(r.cost_usd) as rows_with_cost,
               COUNT(*) as total_rows
-       FROM task_run_logs r
-       JOIN scheduled_tasks t ON r.task_id = t.id
-       LEFT JOIN registered_groups g ON t.group_folder = g.folder
+       FROM pipeline_task_run_logs r
+       JOIN pipeline_scheduled_tasks t ON r.task_id = t.id
+       LEFT JOIN agent_groups ag ON t.group_folder = ag.folder
+       LEFT JOIN messaging_group_agents mga ON mga.agent_group_id = ag.id AND mga.is_main = 1
        WHERE t.group_folder = ?
          AND r.run_at >= date('now', ? || ' days')
-       GROUP BY date(r.run_at), COALESCE(NULLIF(t.model, ''), g.model)
+       GROUP BY date(r.run_at), COALESCE(NULLIF(t.model, ''), mga.model)
        ORDER BY date(r.run_at)`,
     )
     .all(groupFolder, -(days - 1)) as DailyModelTokenRow[];
 }
 
-// --- Task Runs ---
-
-// --- Pipeline ---
+// ---------------------------------------------------------------------------
+// Pipeline tasks / token usage / passive subscriptions
+// ---------------------------------------------------------------------------
 
 export function getPipelineTasks(): TaskRow[] {
-  return db
-    .prepare(
-      `SELECT id, group_folder, chat_jid, prompt, schedule_type, schedule_value,
-              context_mode, model, temperature, timezone, max_tool_rounds, timeout_ms, use_agent_sdk,
-              allowed_tools, allowed_send_targets, execution_mode, subscribed_event_types, fallback_poll_ms,
-              next_run, last_run, last_result, status, created_at
-       FROM scheduled_tasks WHERE id LIKE 'pipeline:%' ORDER BY id`,
-    )
-    .all() as TaskRow[];
+  return db.prepare(`${TASK_SELECT} WHERE id LIKE 'pipeline:%' ORDER BY id`).all() as TaskRow[];
 }
 
 export interface PipelineTokenUsageRow {
@@ -329,7 +490,7 @@ export function getPipelineTokenUsage(days: number = 30): PipelineTokenUsageRow[
               SUM(COALESCE(r.input_tokens, 0)) as input_tokens,
               SUM(COALESCE(r.output_tokens, 0)) as output_tokens,
               COUNT(*) as runs
-       FROM task_run_logs r
+       FROM pipeline_task_run_logs r
        WHERE r.task_id LIKE 'pipeline:%'
          AND r.run_at >= date('now', ? || ' days')
        GROUP BY date(r.run_at), r.task_id
@@ -339,28 +500,55 @@ export function getPipelineTokenUsage(days: number = 30): PipelineTokenUsageRow[
 }
 
 export function getPassiveChannels(): GroupRow[] {
+  // v2 moved passive observation from registered_groups.mode='passive' to
+  // pipeline_passive_subscriptions. Join with messaging_groups (and any
+  // existing agent_group wiring) to emit a v1-compat shape that
+  // routes/pipeline.ts can render. Subscriptions WITHOUT a wired
+  // agent_group still surface (with synthetic folder + empty agent fields).
   return db
     .prepare(
-      `SELECT jid, name, folder, trigger_pattern, is_main, requires_trigger,
-              model, temperature, max_tool_rounds, timeout_ms, show_thinking,
-              mode, threading_mode, pipeline_replies_blocked
-       FROM registered_groups WHERE mode = 'passive' ORDER BY name`,
+      `SELECT
+         pps.platform_id                                       AS jid,
+         COALESCE(mg.name, pps.platform_id)                    AS name,
+         COALESCE(ag.folder, '')                               AS folder,
+         ''                                                    AS trigger_pattern,
+         0                                                     AS is_main,
+         0                                                     AS requires_trigger,
+         NULL                                                  AS model,
+         NULL                                                  AS temperature,
+         NULL                                                  AS max_tool_rounds,
+         NULL                                                  AS timeout_ms,
+         NULL                                                  AS show_thinking,
+         'passive'                                             AS mode,
+         'shared'                                              AS threading_mode,
+         0                                                     AS pipeline_replies_blocked
+       FROM pipeline_passive_subscriptions pps
+       LEFT JOIN messaging_groups mg
+         ON mg.channel_type = pps.channel_type AND mg.platform_id = pps.platform_id
+       LEFT JOIN messaging_group_agents mga ON mga.messaging_group_id = mg.id AND mga.is_main = 1
+       LEFT JOIN agent_groups ag ON ag.id = mga.agent_group_id
+       WHERE pps.enabled = 1
+       ORDER BY name`,
     )
     .all() as GroupRow[];
 }
 
-// --- Task Runs ---
+// ---------------------------------------------------------------------------
+// Task run logs (table renamed)
+// ---------------------------------------------------------------------------
 
 export function getTaskRuns(taskId: string, limit: number = 20): TaskRunRow[] {
   return db
     .prepare(
       `SELECT run_at, duration_ms, status, result, error
-       FROM task_run_logs WHERE task_id = ? ORDER BY run_at DESC LIMIT ?`,
+       FROM pipeline_task_run_logs WHERE task_id = ? ORDER BY run_at DESC LIMIT ?`,
     )
     .all(taskId, limit) as TaskRunRow[];
 }
 
-// --- Events ---
+// ---------------------------------------------------------------------------
+// Events (table renamed: events → pipeline_events)
+// ---------------------------------------------------------------------------
 
 export interface EventRow {
   id: number;
@@ -401,11 +589,17 @@ export function getEvents(opts?: {
   params.push(limit);
 
   return db
-    .prepare(`SELECT * FROM events ${where} ORDER BY created_at DESC LIMIT ?`)
+    .prepare(
+      `SELECT id, type, source_group, source_task_id, payload, dedupe_key, created_at,
+              expires_at, status, claimed_by, claimed_at, processed_at, result_note
+       FROM pipeline_events ${where} ORDER BY created_at DESC LIMIT ?`,
+    )
     .all(...params) as EventRow[];
 }
 
-// --- Pipeline Intake Logs ---
+// ---------------------------------------------------------------------------
+// Pipeline intake log
+// ---------------------------------------------------------------------------
 
 export interface IntakeLogRow {
   id: number;
@@ -432,13 +626,18 @@ export function getIntakeLogs(opts?: {
 
   return db
     .prepare(
-      `SELECT * FROM pipeline_intake_log ${condition}
+      `SELECT id, event_id, raw_text_hash, source_type, source_group, source_task_id,
+              source_channel, source_message_id, reason, submitted_at, processed_at,
+              observation_id
+       FROM pipeline_intake_log ${condition}
        ORDER BY submitted_at DESC, id DESC LIMIT ?`,
     )
     .all(limit) as IntakeLogRow[];
 }
 
-// --- Observations + Labels ---
+// ---------------------------------------------------------------------------
+// Observations + labels
+// ---------------------------------------------------------------------------
 
 export interface ObservationListRow {
   id: number;
@@ -527,17 +726,24 @@ export function getObservationById(id: number): ObservationDetailRow | undefined
               raw_text, sanitised_json, flags, created_at, sanitised_at
        FROM observed_messages WHERE id = ?`,
     )
-    .get(id) as any;
+    .get(id) as Omit<ObservationDetailRow, 'label'> | undefined;
   if (!row) return undefined;
 
   const label = db
-    .prepare('SELECT * FROM observation_labels WHERE observation_id = ?')
+    .prepare(
+      `SELECT id, labeller, intent, form, imperative_content, addressee,
+              embedded_instructions, adversarial_smell, notes, expected_json,
+              created_at, updated_at
+       FROM observation_labels WHERE observation_id = ?`,
+    )
     .get(id) as ObservationLabelRow | undefined;
 
   return { ...row, label: label ?? null };
 }
 
-// --- Pipeline clusters ---
+// ---------------------------------------------------------------------------
+// Pipeline clusters
+// ---------------------------------------------------------------------------
 
 export type ClusterStatus = 'active' | 'resolved' | 'expired';
 
@@ -555,7 +761,7 @@ export interface ClusterListRow {
 }
 
 export interface ClusterDetailRow extends ClusterListRow {
-  observation_ids: string; // JSON-encoded number[]
+  observation_ids: string;
 }
 
 export interface ClusterObservationRow {
@@ -618,44 +824,6 @@ export function getClusterObservations(ids: number[]): ClusterObservationRow[] {
        ORDER BY id`,
     )
     .all(...ids) as ClusterObservationRow[];
-}
-
-export interface DownstreamEventRow {
-  id: number;
-  type: string;
-  status: string;
-  created_at: string;
-  processed_at: string | null;
-  result_note: string | null;
-  payload: string;
-}
-
-/**
- * Fetch candidate.* / human_review_required / delivery events that
- * reference any of the given observation ids in their payload. Used by
- * the cluster journal UI to show the downstream flow per cluster
- * (Phase F6).
- */
-export function getDownstreamEventsForObservations(
-  observationIds: number[],
-): DownstreamEventRow[] {
-  if (observationIds.length === 0) return [];
-  const placeholders = observationIds.map(() => '?').join(',');
-  return db
-    .prepare(
-      `SELECT e.id, e.type, e.status, e.created_at, e.processed_at,
-              e.result_note, e.payload
-         FROM events e
-        WHERE (e.type LIKE 'candidate.%'
-               OR e.type = 'human_review_required'
-               OR e.type = 'pipeline_delivery_failed')
-          AND EXISTS (
-            SELECT 1 FROM json_each(json_extract(e.payload, '$.observation_ids')) je
-             WHERE je.value IN (${placeholders})
-          )
-        ORDER BY e.created_at ASC, e.id ASC`,
-    )
-    .all(...observationIds) as DownstreamEventRow[];
 }
 
 export function upsertLabel(

@@ -59,27 +59,19 @@ describe('resolveTools', () => {
 // ---------------------------------------------------------------------------
 describe('rewriteUrlForContainer', () => {
   it('rewrites localhost to host.docker.internal', () => {
-    expect(rewriteUrlForContainer('http://localhost:3200/mcp')).toBe(
-      'http://host.docker.internal:3200/mcp',
-    );
+    expect(rewriteUrlForContainer('http://localhost:3200/mcp')).toBe('http://host.docker.internal:3200/mcp');
   });
 
   it('rewrites 127.0.0.1 to host.docker.internal', () => {
-    expect(rewriteUrlForContainer('http://127.0.0.1:3200/mcp')).toBe(
-      'http://host.docker.internal:3200/mcp',
-    );
+    expect(rewriteUrlForContainer('http://127.0.0.1:3200/mcp')).toBe('http://host.docker.internal:3200/mcp');
   });
 
   it('does not rewrite external URLs', () => {
-    expect(rewriteUrlForContainer('https://mcp.example.com/mcp')).toBe(
-      'https://mcp.example.com/mcp',
-    );
+    expect(rewriteUrlForContainer('https://mcp.example.com/mcp')).toBe('https://mcp.example.com/mcp');
   });
 
   it('does not rewrite docker bridge IP', () => {
-    expect(rewriteUrlForContainer('http://172.17.0.1:3200/mcp')).toBe(
-      'http://172.17.0.1:3200/mcp',
-    );
+    expect(rewriteUrlForContainer('http://172.17.0.1:3200/mcp')).toBe('http://172.17.0.1:3200/mcp');
   });
 
   it('passes through malformed URLs unchanged', () => {
@@ -87,9 +79,7 @@ describe('rewriteUrlForContainer', () => {
   });
 
   it('handles https localhost', () => {
-    expect(rewriteUrlForContainer('https://localhost:3200/mcp')).toBe(
-      'https://host.docker.internal:3200/mcp',
-    );
+    expect(rewriteUrlForContainer('https://localhost:3200/mcp')).toBe('https://host.docker.internal:3200/mcp');
   });
 });
 
@@ -158,14 +148,8 @@ describe('assembleSkillContent', () => {
 
   it('inlines referenced .md files', () => {
     fs.mkdirSync(path.join(tmpDir, 'reference'), { recursive: true });
-    fs.writeFileSync(
-      path.join(tmpDir, 'SKILL.md'),
-      '# MongoDB\n\nSee [Schema](reference/schema.md) for details.',
-    );
-    fs.writeFileSync(
-      path.join(tmpDir, 'reference', 'schema.md'),
-      '## Collections\n\n- users\n- orders',
-    );
+    fs.writeFileSync(path.join(tmpDir, 'SKILL.md'), '# MongoDB\n\nSee [Schema](reference/schema.md) for details.');
+    fs.writeFileSync(path.join(tmpDir, 'reference', 'schema.md'), '## Collections\n\n- users\n- orders');
     const result = assembleSkillContent(path.join(tmpDir, 'SKILL.md'));
     expect(result).toContain('# MongoDB');
     expect(result).toContain('### Schema');
@@ -188,14 +172,9 @@ describe('assembleSkillContent', () => {
   });
 
   it('skips missing referenced files gracefully', () => {
-    fs.writeFileSync(
-      path.join(tmpDir, 'SKILL.md'),
-      '# Tools\n\nSee [Missing](reference/nonexistent.md) for details.',
-    );
+    fs.writeFileSync(path.join(tmpDir, 'SKILL.md'), '# Tools\n\nSee [Missing](reference/nonexistent.md) for details.');
     const result = assembleSkillContent(path.join(tmpDir, 'SKILL.md'));
-    expect(result).toBe(
-      '# Tools\n\nSee [Missing](reference/nonexistent.md) for details.',
-    );
+    expect(result).toBe('# Tools\n\nSee [Missing](reference/nonexistent.md) for details.');
   });
 });
 

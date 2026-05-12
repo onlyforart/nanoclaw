@@ -2,6 +2,13 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
-    include: ['src/**/*.test.ts', 'setup/**/*.test.ts', 'container/agent-runner/src/**/*.test.ts', 'webui/**/*.test.ts', 'eval/**/*.test.ts'],
+    // container/agent-runner tests run under Bun (they depend on bun:sqlite).
+    // See container/agent-runner/package.json "test" script.
+    include: [
+      'src/**/*.test.ts',
+      'setup/**/*.test.ts',
+      'webui/**/*.test.ts',
+      'scripts/migrate-v1/**/*.test.ts',
+    ],
   },
 });
