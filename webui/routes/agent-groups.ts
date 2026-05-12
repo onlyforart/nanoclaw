@@ -262,8 +262,15 @@ export function handleGetAgentGroupTokenUsage(folder: string, days: number = 30)
       entry = { date: row.date, uncached: 0, cached: 0, cost: null };
       byDate.set(row.date, entry);
     }
+    // Anthropic API reports cache_read_input_tokens + cache_creation_input_tokens
+    // SEPARATELY from input_tokens (input_tokens is the uncached fresh portion
+    // by definition — they don't overlap). So:
+    //   cached   = cache_read + cache_creation
+    //   uncached = input_tokens + output_tokens
+    // The pre-fix formula subtracted cache from input and produced negative
+    // uncached numbers when prompt caching dominated the request.
     entry.cached += row.cache_read + row.cache_creation;
-    entry.uncached += row.input_tokens + row.output_tokens - row.cache_read - row.cache_creation;
+    entry.uncached += row.input_tokens + row.output_tokens;
 
     let rowCost: number | null = null;
     if (row.actual_cost != null && row.rows_with_cost === row.total_rows) {
