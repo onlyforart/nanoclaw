@@ -137,7 +137,13 @@ export class OllamaProvider implements AgentProvider {
         for (const [name, sdkConfig] of Object.entries(this.mcpServers)) {
           executorConfig[name] = sdkToExecutorConfig(sdkConfig);
         }
-        await executor.initialize(executorConfig);
+        // MCP call timeout inherits from the same per-wiring NANOCLAW_TIMEOUT_MS
+        // override the engine uses for LLM requests below — operator-configured
+        // task budgets propagate to MCP calls within them. The MCP SDK's own
+        // default (60s) is too short for browser-driven tools like pagepilot.
+        await executor.initialize(executorConfig, undefined, {
+          callTimeoutMs: timeoutMsOr(DEFAULT_TIMEOUT_MS),
+        });
         events.push({ type: 'activity' });
 
         try {
