@@ -1,0 +1,11 @@
+{
+  "_comment": "Test-stub MCP server config used by scripts/test-v2-host.ts boot script. The boot script reads this file, substitutes the __WORKTREE_ROOT__ placeholder with process.cwd(), and writes the result to data/mcp-servers.json for the test run (backing up any pre-existing data/mcp-servers.json first). Keeping the fixture in scripts/ (not data/) makes the test/install boundary explicit.",
+  "servers": {
+    "test-stub": {
+      "hostPath": "__WORKTREE_ROOT__",
+      "command": "node",
+      "args": ["__WORKTREE_ROOT__/scripts/test-mcp-stub.mjs"],
+      "tools": ["check_status"]
+    }
+  }
+}

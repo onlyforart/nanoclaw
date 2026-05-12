@@ -1,10 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, mock, beforeEach } from 'bun:test';
 
 // Mock the Anthropic SDK
-const mockCreate = vi.fn();
-const mockModelsList = vi.fn();
+const mockCreate = mock();
+const mockModelsList = mock();
 
-vi.mock('@anthropic-ai/sdk', () => {
+mock.module('@anthropic-ai/sdk', () => {
   return {
     default: class MockAnthropic {
       messages = { create: mockCreate };
@@ -18,7 +18,6 @@ import {
   runAnthropicApiChat,
   _resetModelCacheForTests,
   type AnthropicApiOptions,
-  type AnthropicApiResult,
 } from './anthropic-api-engine.js';
 
 // Helper: build a Message response object matching the Anthropic SDK shape
@@ -59,7 +58,7 @@ function baseOptions(
     timeoutMs: 300_000,
     tools: [],
     toolNameMap: new Map(),
-    executeTool: vi.fn(),
+    executeTool: mock(),
     ...overrides,
   };
 }
@@ -98,7 +97,7 @@ describe('runAnthropicApiChat', () => {
   });
 
   it('executes a tool call and feeds result back', async () => {
-    const executeTool = vi.fn().mockResolvedValueOnce('Status: OK');
+    const executeTool = mock().mockResolvedValueOnce('Status: OK');
 
     // First call: model requests tool use
     mockCreate.mockResolvedValueOnce(
@@ -142,8 +141,7 @@ describe('runAnthropicApiChat', () => {
   });
 
   it('handles multiple sequential tool calls', async () => {
-    const executeTool = vi
-      .fn()
+    const executeTool = mock()
       .mockResolvedValueOnce('Result A')
       .mockResolvedValueOnce('Result B');
 
@@ -203,7 +201,7 @@ describe('runAnthropicApiChat', () => {
         ),
     );
 
-    const executeTool = vi.fn().mockResolvedValue('ok');
+    const executeTool = mock().mockResolvedValue('ok');
     const toolNameMap = new Map([
       ['slow__tool', { mcpTool: 'mcp__slow__tool', serverName: 'slow' }],
     ]);
@@ -218,7 +216,7 @@ describe('runAnthropicApiChat', () => {
 
   it('returns with maxIterationsReached when limit is hit', async () => {
     let callCount = 0;
-    const executeTool = vi.fn().mockImplementation(() => {
+    const executeTool = mock().mockImplementation(() => {
       callCount++;
       return Promise.resolve(`result-${callCount}`);
     });
@@ -250,7 +248,7 @@ describe('runAnthropicApiChat', () => {
   });
 
   it('accumulates token counts across rounds', async () => {
-    const executeTool = vi.fn().mockResolvedValue('ok');
+    const executeTool = mock().mockResolvedValue('ok');
 
     mockCreate
       .mockResolvedValueOnce(
@@ -296,7 +294,7 @@ describe('runAnthropicApiChat', () => {
   });
 
   it('injects skill on first tool call per server (system prompt grows)', async () => {
-    const executeTool = vi.fn().mockResolvedValue('tool result');
+    const executeTool = mock().mockResolvedValue('tool result');
 
     mockCreate
       .mockResolvedValueOnce(
@@ -346,7 +344,7 @@ describe('runAnthropicApiChat', () => {
   });
 
   it('detects stuck loop (3 consecutive same-tool + same-result) and aborts', async () => {
-    const executeTool = vi.fn().mockResolvedValue('same result every time');
+    const executeTool = mock().mockResolvedValue('same result every time');
 
     mockCreate.mockResolvedValue(
       makeResponse({
@@ -510,8 +508,7 @@ describe('runAnthropicApiChat', () => {
   });
 
   it('handles tool execution errors gracefully', async () => {
-    const executeTool = vi
-      .fn()
+    const executeTool = mock()
       .mockRejectedValueOnce(new Error('Connection refused'));
 
     mockCreate

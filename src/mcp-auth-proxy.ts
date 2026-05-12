@@ -12,13 +12,8 @@
 import { createServer, IncomingMessage, Server, ServerResponse } from 'http';
 import { request as httpRequest } from 'http';
 
-import { logger } from './logger.js';
-import {
-  evaluatePolicy,
-  resolveTier,
-  type PolicySet,
-  type PolicyAssignments,
-} from './mcp-policy.js';
+import { log } from './log.js';
+import { evaluatePolicy, resolveTier, type PolicySet, type PolicyAssignments } from './mcp-policy.js';
 
 export interface McpAuthProxyConfig {
   /** server name → upstream URL */
@@ -40,7 +35,7 @@ export function startMcpAuthProxy(
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
       handleRequest(req, res, config).catch((err) => {
-        logger.error({ err }, 'MCP auth proxy unhandled error');
+        log.error('MCP auth proxy unhandled error', { err });
         if (!res.headersSent) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Internal proxy error' }));
@@ -51,17 +46,13 @@ export function startMcpAuthProxy(
     server.on('error', reject);
     server.listen(port, host, () => {
       const addr = server.address() as { port: number };
-      logger.info({ port: addr.port, host }, 'MCP authorization proxy started');
+      log.info('MCP authorization proxy started', { port: addr.port, host });
       resolve({ server, port: addr.port });
     });
   });
 }
 
-async function handleRequest(
-  req: IncomingMessage,
-  res: ServerResponse,
-  config: McpAuthProxyConfig,
-): Promise<void> {
+async function handleRequest(req: IncomingMessage, res: ServerResponse, config: McpAuthProxyConfig): Promise<void> {
   // Parse server name from URL path: POST /{serverName}
   const serverName = (req.url || '/').replace(/^\//, '').replace(/\/.*$/, '');
   if (!serverName) {
@@ -115,18 +106,9 @@ async function handleRequest(
     return;
   }
 
-  const policy = resolveTier(
-    config.policies,
-    serverName,
-    groupFolder,
-    assignments,
-  );
+  const policy = resolveTier(config.policies, serverName, groupFolder, assignments);
   if (!policy) {
-    sendMcpError(
-      res,
-      parsed.id,
-      `No policy tier found for group '${groupFolder}'`,
-    );
+    sendMcpError(res, parsed.id, `No policy tier found for group '${groupFolder}'`);
     return;
   }
 
@@ -136,15 +118,12 @@ async function handleRequest(
   const result = evaluatePolicy(policy, toolName, toolArgs);
 
   if (!result.allowed) {
-    logger.info(
-      {
-        server: serverName,
-        group: groupFolder,
-        tool: toolName,
-        reason: result.reason,
-      },
-      'MCP tool call denied by policy',
-    );
+    log.info('MCP tool call denied by policy', {
+      server: serverName,
+      group: groupFolder,
+      tool: toolName,
+      reason: result.reason,
+    });
     sendMcpError(res, parsed.id, `Access denied: ${result.reason}`);
     return;
   }
@@ -153,11 +132,7 @@ async function handleRequest(
   await forwardToUpstream(upstreamUrl, body, res);
 }
 
-function sendMcpError(
-  res: ServerResponse,
-  id: number | string | undefined,
-  message: string,
-): void {
+function sendMcpError(res: ServerResponse, id: number | string | undefined, message: string): void {
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(
     JSON.stringify({
@@ -177,11 +152,7 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
-async function forwardToUpstream(
-  upstreamUrl: string,
-  body: string,
-  clientRes: ServerResponse,
-): Promise<void> {
+async function forwardToUpstream(upstreamUrl: string, body: string, clientRes: ServerResponse): Promise<void> {
   const url = new URL(upstreamUrl);
 
   return new Promise((resolve, reject) => {
@@ -204,10 +175,10 @@ async function forwardToUpstream(
     );
 
     proxyReq.on('error', (err) => {
-      logger.warn(
-        { url: upstreamUrl, err: err.message },
-        'Upstream MCP server unreachable',
-      );
+      log.warn('Upstream MCP server unreachable', {
+        url: upstreamUrl,
+        err: err.message,
+      });
       if (!clientRes.headersSent) {
         clientRes.writeHead(502, { 'Content-Type': 'application/json' });
         clientRes.end(JSON.stringify({ error: 'Bad Gateway' }));

@@ -25,7 +25,7 @@ let _channelNameMap = null;
 async function loadChannelNames() {
   if (_channelNameMap) return _channelNameMap;
   try {
-    const groups = await api('/groups');
+    const groups = await api('/agent-groups');
     _channelNameMap = {};
     for (const g of groups) _channelNameMap[g.jid] = g.name;
   } catch { _channelNameMap = {}; }
@@ -237,47 +237,28 @@ const AppSidebar = {
           <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons.prompts}</svg>
           Global Prompts
         </a>
-        <a href="#/observations"
-          :class="isActive('/observations') ? 'bg-gray-800 text-white border-l-3 border-blue-500' : 'hover:bg-white/10 hover:text-gray-200 border-l-3 border-transparent'"
-          class="flex items-center gap-3 px-3 py-2 rounded-r-lg text-sm font-medium transition-colors">
-          <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons.prompts}</svg>
-          Observations
-        </a>
-        <a href="#/clusters"
-          :class="isActive('/clusters') ? 'bg-gray-800 text-white border-l-3 border-blue-500' : 'hover:bg-white/10 hover:text-gray-200 border-l-3 border-transparent'"
-          class="flex items-center gap-3 px-3 py-2 rounded-r-lg text-sm font-medium transition-colors">
-          <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons.prompts}</svg>
-          Clusters
-        </a>
-        <a href="#/events"
-          :class="isActive('/events') ? 'bg-gray-800 text-white border-l-3 border-blue-500' : 'hover:bg-white/10 hover:text-gray-200 border-l-3 border-transparent'"
+        <a href="#/messaging-groups"
+          :class="isActive('/messaging-groups') ? 'bg-gray-800 text-white border-l-3 border-blue-500' : 'hover:bg-white/10 hover:text-gray-200 border-l-3 border-transparent'"
           class="flex items-center gap-3 px-3 py-2 rounded-r-lg text-sm font-medium transition-colors">
           <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons.list}</svg>
-          Events
-        </a>
-        <a href="#/pipeline"
-          :class="isActive('/pipeline') ? 'bg-gray-800 text-white border-l-3 border-blue-500' : 'hover:bg-white/10 hover:text-gray-200 border-l-3 border-transparent'"
-          class="flex items-center gap-3 px-3 py-2 rounded-r-lg text-sm font-medium transition-colors">
-          <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons.dashboard}</svg>
-          Pipeline
+          Messaging Groups
         </a>
 
-        <!-- Groups section -->
+        <!-- Agent groups section -->
         <div class="pt-5 pb-2">
           <div class="flex items-center justify-between px-3">
-            <span class="text-xs font-semibold uppercase tracking-wider text-gray-500">Groups</span>
+            <span class="text-xs font-semibold uppercase tracking-wider text-gray-500">Agent Groups</span>
             <span v-if="groups.length" class="text-xs px-1.5 py-0.5 rounded-full bg-gray-800 text-gray-400">
               {{ groups.length }}
             </span>
           </div>
         </div>
         <a v-for="g in groups" :key="g.folder"
-          :href="'#/groups/' + g.folder"
-          :class="isActive('/groups/' + g.folder) ? 'bg-gray-800 text-white border-l-3 border-blue-500' : 'hover:bg-white/10 hover:text-gray-200 border-l-3 border-transparent'"
+          :href="'#/agent-groups/' + g.folder"
+          :class="isActive('/agent-groups/' + g.folder) ? 'bg-gray-800 text-white border-l-3 border-blue-500' : 'hover:bg-white/10 hover:text-gray-200 border-l-3 border-transparent'"
           class="flex items-center gap-3 px-3 py-2 rounded-r-lg text-sm transition-colors">
           <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons.group}</svg>
           <span class="truncate">{{ g.name }}</span>
-          <span v-if="g.isMain" class="ml-auto text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400 font-medium">MAIN</span>
         </a>
       </nav>
 
@@ -295,7 +276,7 @@ const AppSidebar = {
   setup(props) {
     const isActive = (path) => {
       if (props.currentHash === path || props.currentHash.startsWith(path + '/')) return true;
-      if (props.activeGroupFolder && path === '/groups/' + props.activeGroupFolder) return true;
+      if (props.activeGroupFolder && path === '/agent-groups/' + props.activeGroupFolder) return true;
       // Pipeline task detail → highlight Pipeline link
       if (path === '/pipeline' && props.currentHash.startsWith('/tasks/pipeline:')) return true;
       return false;
@@ -365,7 +346,7 @@ const AppDashboard = {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="g in groups" :key="g.folder" @click="navigate('/groups/' + g.folder)"
+            <tr v-for="g in groups" :key="g.folder" @click="navigate('/agent-groups/' + g.folder)"
               class="border-b border-gray-100 dark:border-gray-700/50 last:border-0 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
               <td class="px-4 py-3 font-medium">{{ g.name }}</td>
               <td class="px-4 py-3 font-mono text-xs text-gray-500">{{ g.folder }}</td>
@@ -435,8 +416,21 @@ const AppGlobalPrompts = {
         <div v-if="activeTab === 'global'">
           <div class="mb-6">
             <label class="block text-sm font-medium mb-2">CLAUDE.md</label>
+            <p class="text-xs text-gray-400 mb-2">Global system prompt. Per-group <code class="font-mono">CLAUDE.md</code> files <code class="font-mono">@</code>-import this.</p>
             <textarea v-model="claude"
-              class="w-full h-72 px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 font-mono text-sm leading-relaxed resize-y focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"></textarea>
+              class="w-full h-48 px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 font-mono text-sm leading-relaxed resize-y focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"></textarea>
+          </div>
+          <div class="mb-6">
+            <label class="block text-sm font-medium mb-2">CLAUDE.local.md</label>
+            <p class="text-xs text-gray-400 mb-2">Global operator memory. Optional — usually most operator notes live on individual groups.</p>
+            <textarea v-model="claudeLocal"
+              class="w-full h-48 px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 font-mono text-sm leading-relaxed resize-y focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"></textarea>
+          </div>
+          <div class="mb-6">
+            <label class="block text-sm font-medium mb-2">Resolved (read-only)</label>
+            <p class="text-xs text-gray-400 mb-2">Global CLAUDE.md with all <code class="font-mono">@./...</code> imports inlined.</p>
+            <textarea :value="claudeResolved" readonly
+              class="w-full h-72 px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 font-mono text-xs leading-relaxed resize-y outline-none"></textarea>
           </div>
           <div class="mb-6">
             <label class="block text-sm font-medium mb-2">OLLAMA.md</label>
@@ -467,6 +461,8 @@ const AppGlobalPrompts = {
   `,
   setup() {
     const claude = ref('');
+    const claudeLocal = ref('');
+    const claudeResolved = ref('');
     const ollama = ref('');
     const channelOverrides = Vue.reactive({});
     const newChannel = ref('');
@@ -486,6 +482,8 @@ const AppGlobalPrompts = {
       try {
         const data = await api('/prompts/global');
         claude.value = data.claude;
+        claudeLocal.value = data.claudeLocal || '';
+        claudeResolved.value = data.claudeResolved || '';
         ollama.value = data.ollama || '';
         if (data.channelOverrides) {
           Object.assign(channelOverrides, data.channelOverrides);
@@ -505,20 +503,22 @@ const AppGlobalPrompts = {
     const save = async () => {
       saving.value = true;
       try {
-        await api('/prompts/global', {
+        const result = await api('/prompts/global', {
           method: 'PUT',
           body: {
             claude: claude.value,
+            claudeLocal: claudeLocal.value,
             ollama: ollama.value || undefined,
             channelOverrides,
           },
         });
+        claudeResolved.value = result.claudeResolved || '';
         showToast('Global prompts saved');
       } catch (e) { showToast(e.message, 'error'); }
       saving.value = false;
     };
 
-    return { claude, ollama, channelOverrides, newChannel, activeTab, tabs, loading, saving, save, addOverride };
+    return { claude, claudeLocal, claudeResolved, ollama, channelOverrides, newChannel, activeTab, tabs, loading, saving, save, addOverride };
   },
 };
 
@@ -537,6 +537,46 @@ const AppGroupDetail = {
       <div v-if="loading" class="text-gray-400 text-sm">Loading...</div>
       <div v-else>
         <tab-bar :tabs="tabs" :active="activeTab" @select="selectTab" />
+
+        <!-- Channels Tab (Q7=β: surface v2 wirings + messaging-groups) -->
+        <div v-if="activeTab === 'channels'">
+          <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
+            <h3 class="text-lg font-semibold mb-1">Wired Channels</h3>
+            <p class="text-sm text-gray-400 mb-4">
+              Channels this agent group responds in. Per-wiring agent settings
+              (model, max tool rounds, etc.) override the agent group defaults.
+            </p>
+            <div v-if="!group?.wirings?.length" class="text-sm text-gray-500 py-6">
+              No wired channels.
+            </div>
+            <table v-else class="w-full text-sm">
+              <thead>
+                <tr class="text-left text-xs uppercase text-gray-500 border-b border-gray-200 dark:border-gray-700">
+                  <th class="py-2 pr-3">Channel</th>
+                  <th class="py-2 pr-3">Platform ID</th>
+                  <th class="py-2 pr-3">Engage</th>
+                  <th class="py-2 pr-3">Session</th>
+                  <th class="py-2 pr-3">Model</th>
+                  <th class="py-2 pr-3">Main</th>
+                  <th class="py-2 pr-3">Pipeline replies blocked</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="w in group.wirings" :key="w.id"
+                  class="border-b border-gray-100 dark:border-gray-800 last:border-b-0">
+                  <td class="py-2 pr-3"><a :href="'#/messaging-groups/' + w.messagingGroupId"
+                    class="text-blue-600 hover:underline">{{ w.messagingGroupName || w.channelType }}</a></td>
+                  <td class="py-2 pr-3 font-mono text-xs text-gray-500">{{ w.platformId }}</td>
+                  <td class="py-2 pr-3">{{ w.engageMode || '—' }}<span v-if="w.engagePattern" class="text-xs text-gray-500"> · {{ w.engagePattern }}</span></td>
+                  <td class="py-2 pr-3">{{ w.sessionMode }}</td>
+                  <td class="py-2 pr-3 font-mono text-xs">{{ w.model || '—' }}</td>
+                  <td class="py-2 pr-3"><span v-if="w.isMain" class="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 font-semibold">YES</span></td>
+                  <td class="py-2 pr-3"><span v-if="w.pipelineRepliesBlocked" class="text-xs text-amber-600 dark:text-amber-400">blocked</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
 
         <!-- Settings Tab -->
         <div v-if="activeTab === 'settings'">
@@ -609,8 +649,21 @@ const AppGroupDetail = {
         <div v-if="activeTab === 'prompts'">
           <div class="mb-6">
             <label class="block text-sm font-medium mb-2">CLAUDE.md</label>
+            <p class="text-xs text-gray-400 mb-2">The file the agent loads. Usually a list of <code class="font-mono">@./...</code> imports; the SDK inlines them at read time.</p>
             <textarea v-model="claude"
-              class="w-full h-72 px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 font-mono text-sm leading-relaxed resize-y focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"></textarea>
+              class="w-full h-48 px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 font-mono text-sm leading-relaxed resize-y focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"></textarea>
+          </div>
+          <div class="mb-6">
+            <label class="block text-sm font-medium mb-2">CLAUDE.local.md</label>
+            <p class="text-xs text-gray-400 mb-2">Per-group operator memory. Loaded each session, writable by the agent. Fill in group-specific routing, escalation, monitored systems, etc.</p>
+            <textarea v-model="claudeLocal"
+              class="w-full h-48 px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 font-mono text-sm leading-relaxed resize-y focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"></textarea>
+          </div>
+          <div class="mb-6">
+            <label class="block text-sm font-medium mb-2">Resolved (read-only)</label>
+            <p class="text-xs text-gray-400 mb-2">CLAUDE.md with all <code class="font-mono">@./...</code> imports inlined — what the agent actually sees. Symlinks into <code class="font-mono">/app/...</code> are remapped to their host paths.</p>
+            <textarea :value="claudeResolved" readonly
+              class="w-full h-96 px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 font-mono text-xs leading-relaxed resize-y outline-none"></textarea>
           </div>
           <div class="mb-6">
             <label class="block text-sm font-medium mb-2">OLLAMA.md</label>
@@ -808,6 +861,8 @@ const AppGroupDetail = {
     const group = ref(null);
     const tasks = ref([]);
     const claude = ref('');
+    const claudeLocal = ref('');
+    const claudeResolved = ref('');
     const ollama = ref('');
     const loading = ref(true);
     const saving = ref(false);
@@ -829,25 +884,26 @@ const AppGroupDetail = {
     const newTaskScheduleHint = computed(() => scheduleHintText(newTask.scheduleType, newTask.scheduleValue));
 
     const tabs = computed(() => [
+      { key: 'channels', label: 'Channels', count: group.value?.wirings?.length ?? 0 },
       { key: 'tasks', label: 'Tasks', count: tasks.value.length },
       { key: 'prompts', label: 'Prompts' },
       { key: 'settings', label: 'Settings' },
     ]);
 
     const fetchTasks = async () => {
-      try { tasks.value = await api(`/groups/${props.folder}/tasks`); } catch {}
+      try { tasks.value = await api(`/agent-groups/${props.folder}/tasks`); } catch {}
     };
     const fetchTokenUsage = async () => {
-      try { tokenUsage.value = await api(`/groups/${props.folder}/token-usage`); } catch {}
+      try { tokenUsage.value = await api(`/agent-groups/${props.folder}/token-usage`); } catch {}
     };
 
     onMounted(async () => {
       try {
         const [g, p, t, tu] = await Promise.all([
-          api(`/groups/${props.folder}`),
-          api(`/groups/${props.folder}/prompts`),
-          api(`/groups/${props.folder}/tasks`),
-          api(`/groups/${props.folder}/token-usage`).catch(() => []),
+          api(`/agent-groups/${props.folder}`),
+          api(`/agent-groups/${props.folder}/prompts`),
+          api(`/agent-groups/${props.folder}/tasks`),
+          api(`/agent-groups/${props.folder}/token-usage`).catch(() => []),
         ]);
         group.value = g;
         form.model = g.model || '';
@@ -859,6 +915,8 @@ const AppGroupDetail = {
         form.threadingMode = g.threadingMode || 'temporal';
         form.pipelineRepliesBlocked = g.pipelineRepliesBlocked ?? false;
         claude.value = p.claude;
+        claudeLocal.value = p.claudeLocal || '';
+        claudeResolved.value = p.claudeResolved || '';
         ollama.value = p.ollama || '';
         tasks.value = t;
         tokenUsage.value = tu;
@@ -894,7 +952,7 @@ const AppGroupDetail = {
         body.mode = form.mode;
         body.threadingMode = form.threadingMode;
         body.pipelineRepliesBlocked = form.pipelineRepliesBlocked;
-        await api(`/groups/${props.folder}`, { method: 'PATCH', body });
+        await api(`/agent-groups/${props.folder}`, { method: 'PATCH', body });
         showToast('Settings saved');
       } catch (e) { showToast(e.message, 'error'); }
       saving.value = false;
@@ -903,10 +961,11 @@ const AppGroupDetail = {
     const savePrompts = async () => {
       saving.value = true;
       try {
-        await api(`/groups/${props.folder}/prompts`, {
+        const result = await api(`/agent-groups/${props.folder}/prompts`, {
           method: 'PUT',
-          body: { claude: claude.value, ollama: ollama.value || undefined },
+          body: { claude: claude.value, claudeLocal: claudeLocal.value, ollama: ollama.value || undefined },
         });
+        claudeResolved.value = result.claudeResolved || '';
         showToast('Prompts saved');
       } catch (e) { showToast(e.message, 'error'); }
       saving.value = false;
@@ -914,7 +973,7 @@ const AppGroupDetail = {
 
     const selectTab = (tab) => {
       activeTab.value = tab;
-      const hashBase = `#/groups/${props.folder}`;
+      const hashBase = `#/agent-groups/${props.folder}`;
       window.location.hash = tab === 'tasks' ? hashBase : `${hashBase}?tab=${tab}`;
     };
 
@@ -933,7 +992,7 @@ const AppGroupDetail = {
         if (newTask.maxToolRounds != null) body.maxToolRounds = newTask.maxToolRounds;
         if (newTask.timeoutMs != null) body.timeoutMs = newTask.timeoutMs;
         if (newTask.useAgentSdk) body.useAgentSdk = true;
-        const created = await api(`/groups/${props.folder}/tasks`, { method: 'POST', body });
+        const created = await api(`/agent-groups/${props.folder}/tasks`, { method: 'POST', body });
         tasks.value.push(created);
         showNewTask.value = false;
         // Reset form
@@ -1043,7 +1102,7 @@ const AppGroupDetail = {
       return hasCostData.value ? base + 48 : base;
     });
 
-    return { group, tasks, claude, ollama, loading, saving, activeTab, form, tabs, showNewTask, newTask, newTaskScheduleError, newTaskScheduleHint, selectTab, createNewTask, saveSettings, savePrompts, navigate, tokenUsage, visibleTokenUsage, chartMax, chartBarHeight, chartYLabels, formatTokens, formatCost, barTooltip, hasCostData, costMax, costY, costLineSegments, costYLabels, chartWidth, chartContainerRef };
+    return { group, tasks, claude, claudeLocal, claudeResolved, ollama, loading, saving, activeTab, form, tabs, showNewTask, newTask, newTaskScheduleError, newTaskScheduleHint, selectTab, createNewTask, saveSettings, savePrompts, navigate, tokenUsage, visibleTokenUsage, chartMax, chartBarHeight, chartYLabels, formatTokens, formatCost, barTooltip, hasCostData, costMax, costY, costLineSegments, costYLabels, chartWidth, chartContainerRef };
   },
 };
 
@@ -1054,7 +1113,7 @@ const AppTaskDetail = {
   template: `
     <div>
       <!-- Back link -->
-      <a v-if="task" :href="taskId.startsWith('pipeline:') ? '#/pipeline' : '#/groups/' + task.groupFolder" class="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 mb-4 transition-colors">
+      <a v-if="task" :href="taskId.startsWith('pipeline:') ? '#/pipeline' : '#/agent-groups/' + task.groupFolder" class="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 mb-4 transition-colors">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">${icons.back}</svg>
         {{ taskId.startsWith('pipeline:') ? 'Back to Pipeline' : 'Back to ' + (group?.name || task.groupFolder) }}
       </a>
@@ -1358,7 +1417,7 @@ const AppTaskDetail = {
         form.status = t.status;
         runs.value = r;
         // Fetch group to show inherited model as placeholder
-        try { group.value = await api(`/groups/${t.groupFolder}`); } catch {}
+        try { group.value = await api(`/agent-groups/${t.groupFolder}`); } catch {}
       } catch (e) { showToast(e.message, 'error'); }
       loading.value = false;
       runsInterval = setInterval(fetchRuns, 10000);
@@ -1406,7 +1465,7 @@ const AppTaskDetail = {
       try {
         await api(`/tasks/${props.taskId}`, { method: 'DELETE' });
         showToast('Task deleted');
-        window.location.hash = `/groups/${task.value.groupFolder}?tab=tasks`;
+        window.location.hash = `/agent-groups/${task.value.groupFolder}?tab=tasks`;
       } catch (e) { showToast(e.message, 'error'); }
       deleting.value = false;
     };
@@ -1426,7 +1485,7 @@ const AppPipeline = {
       <!-- Team Group -->
       <div v-if="data.teamGroup" class="mb-6 flex items-center gap-3">
         <span class="text-sm font-semibold text-gray-500 uppercase">Team Channel:</span>
-        <a :href="'#/groups/' + data.teamGroup.folder"
+        <a :href="'#/agent-groups/' + data.teamGroup.folder"
           class="px-3 py-1.5 bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 rounded-full text-sm font-medium hover:opacity-80 transition-opacity">
           {{ data.teamGroup.name }}
         </a>
@@ -2166,7 +2225,7 @@ const AppClusters = {
 
     const fetchChannels = async () => {
       try {
-        const groups = await api('/groups');
+        const groups = await api('/agent-groups');
         sourceChannels.value = (groups || []).filter((g) => g.mode === 'passive');
       } catch {}
     };
@@ -2226,26 +2285,6 @@ const AppClusterDetail = {
           <div v-else class="text-center py-8 text-gray-400">No observations</div>
         </div>
       </div>
-
-      <!-- Downstream events journal (Phase F6) -->
-      <div class="mt-6 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
-        <h2 class="text-sm font-semibold mb-3 text-gray-500 uppercase">Downstream events ({{ (cluster.downstreamEvents || []).length }})</h2>
-        <div v-if="cluster.downstreamEvents && cluster.downstreamEvents.length" class="space-y-2 max-h-[32rem] overflow-y-auto">
-          <div v-for="e in cluster.downstreamEvents" :key="e.id" class="bg-gray-50 dark:bg-gray-900 rounded-lg p-3">
-            <div class="flex items-center justify-between text-xs mb-1">
-              <span class="font-mono">#{{ e.id }} · <span :class="eventTypeClass(e.type)" class="px-2 py-0.5 rounded-full font-medium">{{ e.type }}</span></span>
-              <span class="text-gray-500">{{ new Date(e.createdAt).toLocaleString() }}</span>
-            </div>
-            <div class="text-xs text-gray-500 mb-1">
-              status: <span class="font-mono">{{ e.status }}</span>
-              <span v-if="e.resultNote"> · {{ e.resultNote }}</span>
-              <span v-if="e.processedAt"> · processed {{ new Date(e.processedAt).toLocaleString() }}</span>
-            </div>
-            <pre v-if="e.payload" class="text-xs font-mono whitespace-pre-wrap bg-gray-100 dark:bg-gray-800 rounded p-2 mt-1 max-h-32 overflow-y-auto">{{ JSON.stringify(e.payload, null, 2) }}</pre>
-          </div>
-        </div>
-        <div v-else class="text-center py-4 text-gray-400 text-sm">No downstream events yet</div>
-      </div>
     </div>
     <div v-else-if="loading" class="text-center py-20 text-gray-400">Loading...</div>
     <div v-else class="text-center py-20 text-gray-400">Cluster not found</div>
@@ -2257,15 +2296,6 @@ const AppClusterDetail = {
     const statusClass = (s) => {
       if (s === 'active') return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200';
       if (s === 'resolved') return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200';
-      return 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300';
-    };
-
-    const eventTypeClass = (t) => {
-      if (t === 'candidate.escalation') return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200';
-      if (t === 'candidate.question') return 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200';
-      if (t === 'human_review_required') return 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200';
-      if (t === 'candidate.unhandled') return 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300';
-      if (t === 'pipeline_delivery_failed') return 'bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200';
       return 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300';
     };
 
@@ -2281,7 +2311,95 @@ const AppClusterDetail = {
     };
 
     onMounted(fetchCluster);
-    return { cluster, loading, statusClass, eventTypeClass, channelName };
+    return { cluster, loading, statusClass, channelName };
+  },
+};
+
+// --- Messaging Groups (Q7=β secondary navigation) -------------------------
+
+const AppMessagingGroups = {
+  template: `
+    <div>
+      <h2 class="text-2xl font-bold mb-1">Messaging Groups</h2>
+      <p class="text-sm text-gray-400 mb-6">Chat channels known to NanoClaw. Each may be wired to one or more agent groups.</p>
+      <div v-if="loading" class="text-sm text-gray-400">Loading...</div>
+      <div v-else class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+        <table v-if="messagingGroups.length" class="w-full text-sm">
+          <thead>
+            <tr class="text-left text-xs uppercase text-gray-500 border-b border-gray-200 dark:border-gray-700">
+              <th class="px-4 py-3">Name</th>
+              <th class="px-4 py-3">Channel</th>
+              <th class="px-4 py-3">Platform ID</th>
+              <th class="px-4 py-3">Group?</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="mg in messagingGroups" :key="mg.id"
+              @click="navigate(mg.id)"
+              class="border-b border-gray-100 dark:border-gray-800 last:border-b-0 hover:bg-gray-50 dark:hover:bg-gray-700/30 cursor-pointer">
+              <td class="px-4 py-3">{{ mg.name || '(unnamed)' }}</td>
+              <td class="px-4 py-3">{{ mg.channelType }}</td>
+              <td class="px-4 py-3 font-mono text-xs text-gray-500">{{ mg.platformId }}</td>
+              <td class="px-4 py-3">{{ mg.isGroup ? 'yes' : 'no' }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-else class="px-4 py-8 text-center text-gray-400 text-sm">No messaging groups registered</p>
+      </div>
+    </div>
+  `,
+  setup() {
+    const messagingGroups = ref([]);
+    const loading = ref(true);
+    onMounted(async () => {
+      try { messagingGroups.value = await api('/messaging-groups'); } catch {}
+      loading.value = false;
+    });
+    const navigate = (id) => { window.location.hash = '/messaging-groups/' + id; };
+    return { messagingGroups, loading, navigate };
+  },
+};
+
+const AppMessagingGroupDetail = {
+  props: ['id'],
+  template: `
+    <div>
+      <a href="#/messaging-groups" class="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 mb-4 transition-colors">
+        ← Messaging Groups
+      </a>
+      <div v-if="loading" class="text-sm text-gray-400">Loading...</div>
+      <div v-else-if="!mg" class="text-sm text-gray-400">Not found.</div>
+      <div v-else>
+        <h2 class="text-2xl font-bold mb-1">{{ mg.name || '(unnamed)' }}</h2>
+        <p class="text-sm text-gray-400 mb-6">
+          <span class="font-mono">{{ mg.channelType }}</span> · <span class="font-mono">{{ mg.platformId }}</span>
+        </p>
+        <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
+          <h3 class="text-lg font-semibold mb-3">Wired Agent Groups</h3>
+          <p v-if="!mg.wiredAgentGroups.length" class="text-sm text-gray-500 py-3">
+            No agent groups are wired to this channel.
+          </p>
+          <ul v-else class="space-y-1">
+            <li v-for="ag in mg.wiredAgentGroups" :key="ag.id" class="text-sm">
+              <a :href="'#/agent-groups/' + ag.folder" class="text-blue-600 hover:underline">
+                {{ ag.name }}
+              </a>
+              <span class="text-xs text-gray-500 font-mono ml-2">{{ ag.folder }}</span>
+              <span v-if="ag.agentProvider" class="text-xs text-gray-400 ml-2">{{ ag.agentProvider }}</span>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  `,
+  setup(props) {
+    const mg = ref(null);
+    const loading = ref(true);
+    onMounted(async () => {
+      try { mg.value = await api('/messaging-groups/' + props.id); } catch {}
+      loading.value = false;
+    });
+    return { mg, loading };
   },
 };
 
@@ -2307,12 +2425,8 @@ const app = createApp({
         <div class="max-w-4xl">
           <app-dashboard v-if="route.view === 'dashboard'" :groups="groups" />
           <app-global-prompts v-if="route.view === 'global-prompts'" />
-          <app-events v-if="route.view === 'events'" />
-          <app-pipeline v-if="route.view === 'pipeline'" />
-          <app-observations v-if="route.view === 'observations'" />
-          <app-observation-detail v-if="route.view === 'observation-detail'" :observation-id="route.id" :key="route.id" />
-          <app-clusters v-if="route.view === 'clusters'" />
-          <app-cluster-detail v-if="route.view === 'cluster-detail'" :cluster-id="route.id" :key="route.id" />
+          <app-messaging-groups v-if="route.view === 'messaging-groups'" />
+          <app-messaging-group-detail v-if="route.view === 'messaging-group-detail'" :id="route.id" :key="route.id" />
           <app-group-detail v-if="route.view === 'group-detail'" :folder="route.folder" :initial-tab="route.tab" :key="route.folder + (route.tab || '')" />
           <app-task-detail v-if="route.view === 'task-detail'" :task-id="route.id" :key="route.id" @group-loaded="taskGroupFolder = $event" />
           <div v-if="route.view === 'not-found'" class="text-center py-20 text-gray-400">
@@ -2336,15 +2450,10 @@ const app = createApp({
       const params = new URLSearchParams(qs || '');
       if (path === '/') return { view: 'dashboard' };
       if (path === '/prompts/global') return { view: 'global-prompts' };
-      if (path === '/events') return { view: 'events' };
-      if (path === '/pipeline') return { view: 'pipeline' };
-      if (path === '/observations') return { view: 'observations' };
-      const om = path.match(/^\/observations\/(\d+)$/);
-      if (om) return { view: 'observation-detail', id: parseInt(om[1], 10) };
-      if (path === '/clusters') return { view: 'clusters' };
-      const cm = path.match(/^\/clusters\/(\d+)$/);
-      if (cm) return { view: 'cluster-detail', id: parseInt(cm[1], 10) };
-      const gm = path.match(/^\/groups\/([^/]+)$/);
+      if (path === '/messaging-groups') return { view: 'messaging-groups' };
+      const mgd = path.match(/^\/messaging-groups\/(.+)$/);
+      if (mgd) return { view: 'messaging-group-detail', id: mgd[1] };
+      const gm = path.match(/^\/agent-groups\/([^/]+)$/);
       if (gm) return { view: 'group-detail', folder: gm[1], tab: params.get('tab') };
       const tm = path.match(/^\/tasks\/([^/]+)$/);
       if (tm) return { view: 'task-detail', id: tm[1] };
@@ -2373,7 +2482,7 @@ const app = createApp({
 
     onMounted(() => {
       window.addEventListener('hashchange', onHashChange);
-      api('/groups').then(g => groups.value = g).catch(() => {});
+      api('/agent-groups').then(g => groups.value = g).catch(() => {});
     });
 
     onUnmounted(() => {
@@ -2391,12 +2500,8 @@ app.component('app-dashboard', AppDashboard);
 app.component('app-global-prompts', AppGlobalPrompts);
 app.component('app-group-detail', AppGroupDetail);
 app.component('app-task-detail', AppTaskDetail);
-app.component('app-events', AppEvents);
-app.component('app-pipeline', AppPipeline);
-app.component('app-observations', AppObservations);
-app.component('app-observation-detail', AppObservationDetail);
-app.component('app-clusters', AppClusters);
-app.component('app-cluster-detail', AppClusterDetail);
+app.component('app-messaging-groups', AppMessagingGroups);
+app.component('app-messaging-group-detail', AppMessagingGroupDetail);
 app.component('tab-bar', TabBar);
 app.component('status-badge', StatusBadge);
 

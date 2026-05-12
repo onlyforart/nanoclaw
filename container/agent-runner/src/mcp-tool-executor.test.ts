@@ -1,361 +1,562 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, mock, beforeEach } from 'bun:test';
 
-const mockConnect = vi.fn();
-const mockCallTool = vi.fn();
-const mockClose = vi.fn();
+// === SDK transport mocks ===
+//
+// `@modelcontextprotocol/sdk/client/{index,stdio,streamableHttp}.js` are
+// external packages, so static `import` after `mock.module` works for them
+// (the hoisting issue only bites for relative paths to the file under test).
+// We capture every constructor call so transport-selection tests can assert
+// shape without spawning processes or opening sockets.
 
-vi.mock('@modelcontextprotocol/sdk/client/index.js', () => {
-  class MockClient {
-    connect = mockConnect;
-    callTool = mockCallTool;
-    close = mockClose;
-    constructor(_opts: unknown) {}
-  }
-  return { Client: MockClient };
-});
-
-const stdioTransportInstances: Array<{ command: string; args: string[]; env?: Record<string, string> }> = [];
-const httpTransportInstances: Array<{ url: URL; opts?: unknown }> = [];
-
-vi.mock('@modelcontextprotocol/sdk/client/stdio.js', () => {
-  class MockStdioClientTransport {
-    constructor(opts: { command: string; args: string[]; env?: Record<string, string> }) {
-      stdioTransportInstances.push(opts);
-    }
-  }
-  return { StdioClientTransport: MockStdioClientTransport };
-});
-
-vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => {
-  class MockStreamableHTTPClientTransport {
-    constructor(url: URL, opts?: unknown) {
-      httpTransportInstances.push({ url, opts });
-    }
-  }
-  return { StreamableHTTPClientTransport: MockStreamableHTTPClientTransport };
-});
-
-import { McpToolExecutor, McpServerConfig } from './mcp-tool-executor.js';
-
-// Keep backward-compat alias for existing tests
-const transportInstances = stdioTransportInstances;
-
-beforeEach(() => {
-  mockConnect.mockReset();
-  mockCallTool.mockReset();
-  mockClose.mockReset();
-  stdioTransportInstances.length = 0;
-  httpTransportInstances.length = 0;
-});
-
-function sampleConfig(): Record<string, McpServerConfig> {
-  return {
-    nanoclaw: {
-      command: 'node',
-      args: ['ipc-mcp-stdio.js'],
-      tools: ['send_message', 'schedule_task'],
-      toolSchemas: [
-        {
-          name: 'send_message',
-          description: 'Send a message',
-          inputSchema: { type: 'object', properties: { text: { type: 'string' } } },
-        },
-        {
-          name: 'schedule_task',
-          description: 'Schedule a task',
-          inputSchema: { type: 'object', properties: { prompt: { type: 'string' } } },
-        },
-      ],
-    },
-  };
+interface StdioCtorArgs {
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+}
+interface HttpCtorArgs {
+  url: URL;
+  init?: { requestInit?: { headers?: Record<string, string> } };
 }
 
-describe('McpToolExecutor', () => {
-  describe('initialize', () => {
-    it('spawns MCP server via StdioClientTransport', async () => {
-      const executor = new McpToolExecutor();
-      await executor.initialize(sampleConfig());
+const stdioCtorCalls: StdioCtorArgs[] = [];
+const httpCtorCalls: HttpCtorArgs[] = [];
 
-      expect(transportInstances).toHaveLength(1);
-      expect(transportInstances[0]).toMatchObject({
-        command: 'node',
-        args: ['ipc-mcp-stdio.js'],
-      });
-      expect(mockConnect).toHaveBeenCalled();
+mock.module('@modelcontextprotocol/sdk/client/stdio.js', () => ({
+  StdioClientTransport: class {
+    constructor(args: StdioCtorArgs) {
+      stdioCtorCalls.push(args);
+    }
+  },
+}));
+
+mock.module('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
+  StreamableHTTPClientTransport: class {
+    constructor(url: URL, init?: HttpCtorArgs['init']) {
+      httpCtorCalls.push({ url, init });
+    }
+  },
+}));
+
+// === SDK Client mock ===
+//
+// One Client instance per server connection. We expose hooks so each test
+// can wire connect/listTools/callTool/close behaviour per server.
+
+interface ClientCtorArgs {
+  name: string;
+  version: string;
+}
+
+const clientInstances: MockClient[] = [];
+
+// Module-level swap points. Tests mutate these via `setConnect()`,
+// `setListTools()` etc. so behaviour can be wired BEFORE `initialize()`
+// constructs new MockClient instances. (Class-field instance properties
+// shadow prototype mutations — module vars don't.)
+type ConnectFn = (this: MockClient) => Promise<void>;
+type ListToolsFn = (
+  this: MockClient,
+) => Promise<{ tools: Array<{ name: string; description?: string; inputSchema: unknown }> }>;
+type CallToolFn = (
+  this: MockClient,
+  req: { name: string; arguments: Record<string, unknown> },
+  schema: undefined,
+  options: { timeout?: number },
+) => Promise<{ content: Array<{ type: string; text?: string }> }>;
+type CloseFn = (this: MockClient) => Promise<void>;
+
+let connectImpl: ConnectFn = () => Promise.resolve();
+let listToolsImpl: ListToolsFn = () => Promise.resolve({ tools: [] });
+let callToolImpl: CallToolFn = () =>
+  Promise.resolve({ content: [{ type: 'text', text: 'ok' }] });
+let closeImpl: CloseFn = () => Promise.resolve();
+
+class MockClient {
+  ctor: ClientCtorArgs;
+  callToolCalls: Array<{
+    req: { name: string; arguments: Record<string, unknown> };
+    options: { timeout?: number };
+  }> = [];
+  closeCalled = false;
+
+  constructor(args: ClientCtorArgs) {
+    this.ctor = args;
+    clientInstances.push(this);
+  }
+  connect(_transport: unknown): Promise<void> {
+    return connectImpl.call(this);
+  }
+  listTools(): Promise<{ tools: Array<{ name: string; description?: string; inputSchema: unknown }> }> {
+    return listToolsImpl.call(this);
+  }
+  callTool(
+    req: { name: string; arguments: Record<string, unknown> },
+    schema: undefined,
+    options: { timeout?: number },
+  ): Promise<{ content: Array<{ type: string; text?: string }> }> {
+    this.callToolCalls.push({ req, options });
+    return callToolImpl.call(this, req, schema, options);
+  }
+  close(): Promise<void> {
+    this.closeCalled = true;
+    return closeImpl.call(this);
+  }
+}
+
+mock.module('@modelcontextprotocol/sdk/client/index.js', () => ({
+  Client: MockClient,
+}));
+
+// Dynamic import — file under test depends on the mocked SDK modules.
+const { McpToolExecutor } = await import('./mcp-tool-executor.js');
+
+beforeEach(() => {
+  stdioCtorCalls.length = 0;
+  httpCtorCalls.length = 0;
+  clientInstances.length = 0;
+  // Reset the module-level swap points to safe defaults.
+  connectImpl = () => Promise.resolve();
+  listToolsImpl = () => Promise.resolve({ tools: [] });
+  callToolImpl = () => Promise.resolve({ content: [{ type: 'text', text: 'ok' }] });
+  closeImpl = () => Promise.resolve();
+  // Each test starts with a clean process.env shape for the safe-env keys
+  // we touch. PATH always exists, but we want HOME absent unless a test
+  // sets it.
+  delete process.env.HOME;
+  delete process.env.TZ;
+});
+
+// =====================================================================
+// 1. Transport selection — stdio vs http vs empty
+// =====================================================================
+
+describe('McpToolExecutor — transport selection', () => {
+  it('spawns stdio transport when config has `command`', async () => {
+    const exec = new McpToolExecutor();
+    await exec.initialize({
+      srv: { command: '/usr/bin/node', args: ['server.js'] },
     });
 
-    it('builds Ollama tool schemas from config', async () => {
-      const executor = new McpToolExecutor();
-      await executor.initialize(sampleConfig());
-
-      const tools = executor.getOllamaTools();
-      expect(tools).toHaveLength(2);
-      expect(tools[0].function.name).toBe('nanoclaw__send_message');
-      expect(tools[1].function.name).toBe('nanoclaw__schedule_task');
-    });
-
-    it('builds tool name mapping', async () => {
-      const executor = new McpToolExecutor();
-      await executor.initialize(sampleConfig());
-
-      const map = executor.getToolNameMap();
-      expect(map.get('nanoclaw__send_message')).toEqual({
-        mcpTool: 'mcp__nanoclaw__send_message',
-        serverName: 'nanoclaw',
-      });
-    });
-
-    it('passes env vars to transport', async () => {
-      const config: Record<string, McpServerConfig> = {
-        myserver: {
-          command: 'node',
-          args: ['server.js'],
-          tools: ['my_tool'],
-          env: { MY_VAR: 'my_value' },
-          toolSchemas: [],
-        },
-      };
-
-      const executor = new McpToolExecutor();
-      await executor.initialize(config);
-
-      expect(transportInstances).toHaveLength(1);
-      expect(transportInstances[0].env).toMatchObject({ MY_VAR: 'my_value' });
-    });
-
-    it('survives a server that fails to connect', async () => {
-      mockConnect.mockRejectedValueOnce(new Error('spawn failed'));
-
-      const executor = new McpToolExecutor();
-      // Should not throw
-      await executor.initialize(sampleConfig());
-
-      // No tools should be available from the failed server
-      // (but it shouldn't crash)
-    });
+    expect(stdioCtorCalls.length).toBe(1);
+    expect(stdioCtorCalls[0].command).toBe('/usr/bin/node');
+    expect(stdioCtorCalls[0].args).toEqual(['server.js']);
+    expect(httpCtorCalls.length).toBe(0);
   });
 
-  describe('callTool', () => {
-    it('routes call to correct MCP server', async () => {
-      mockCallTool.mockResolvedValue({
-        content: [{ type: 'text', text: 'Message sent.' }],
+  it('uses http transport when config.type === "http" and url is set', async () => {
+    const exec = new McpToolExecutor();
+    await exec.initialize({
+      remote: {
+        type: 'http',
+        url: 'https://example.test/mcp',
+        headers: { Authorization: 'Bearer x' },
+      },
+    });
+
+    expect(httpCtorCalls.length).toBe(1);
+    expect(httpCtorCalls[0].url.toString()).toBe('https://example.test/mcp');
+    expect(httpCtorCalls[0].init?.requestInit?.headers).toEqual({ Authorization: 'Bearer x' });
+    expect(stdioCtorCalls.length).toBe(0);
+  });
+
+  it('skips a server that has neither command nor url — no error, no registration', async () => {
+    const exec = new McpToolExecutor();
+    await exec.initialize({ broken: {} });
+
+    expect(stdioCtorCalls.length).toBe(0);
+    expect(httpCtorCalls.length).toBe(0);
+    expect(exec.getOllamaTools()).toEqual([]);
+  });
+
+  it('passes args=[] when config omits args', async () => {
+    const exec = new McpToolExecutor();
+    await exec.initialize({ srv: { command: '/bin/echo' } });
+
+    expect(stdioCtorCalls[0].args).toEqual([]);
+  });
+});
+
+// =====================================================================
+// 2. Stdio environment composition
+// =====================================================================
+
+describe('McpToolExecutor — stdio env composition', () => {
+  it('forwards safe-env keys from process.env', async () => {
+    process.env.HOME = '/home/test';
+    const exec = new McpToolExecutor();
+    await exec.initialize({ srv: { command: '/bin/x' } });
+
+    expect(stdioCtorCalls[0].env?.HOME).toBe('/home/test');
+  });
+
+  it('per-server env overrides safe-env defaults', async () => {
+    process.env.TZ = 'UTC';
+    const exec = new McpToolExecutor();
+    await exec.initialize({ srv: { command: '/bin/x', env: { TZ: 'Europe/London' } } });
+
+    expect(stdioCtorCalls[0].env?.TZ).toBe('Europe/London');
+  });
+
+  it('extraEnv beats per-server env beats safe-env', async () => {
+    process.env.TZ = 'UTC';
+    const exec = new McpToolExecutor();
+    await exec.initialize(
+      { srv: { command: '/bin/x', env: { TZ: 'Europe/London' } } },
+      { TZ: 'Asia/Tokyo' },
+    );
+
+    expect(stdioCtorCalls[0].env?.TZ).toBe('Asia/Tokyo');
+  });
+
+  it('omits absent safe-env keys (does not set them to undefined)', async () => {
+    delete process.env.HOME;
+    const exec = new McpToolExecutor();
+    await exec.initialize({ srv: { command: '/bin/x' } });
+
+    expect('HOME' in (stdioCtorCalls[0].env ?? {})).toBe(false);
+  });
+});
+
+// =====================================================================
+// 3. Tool discovery — discover-all vs allowlist vs pre-supplied schemas
+// =====================================================================
+
+describe('McpToolExecutor — tool discovery modes', () => {
+  beforeEach(() => {
+    listToolsImpl = () =>
+      Promise.resolve({
+        tools: [
+          { name: 'alpha', description: 'A', inputSchema: { type: 'object' } },
+          { name: 'beta', description: 'B', inputSchema: { type: 'object' } },
+          { name: 'gamma', inputSchema: { type: 'object' } }, // no description
+        ],
       });
+  });
 
-      const executor = new McpToolExecutor();
-      await executor.initialize(sampleConfig());
+  it('tools=undefined registers ALL discovered tools', async () => {
+    const exec = new McpToolExecutor();
+    await exec.initialize({ srv: { command: '/bin/x' } });
 
-      const result = await executor.callTool('mcp__nanoclaw__send_message', { text: 'hello' });
+    const names = exec.getOllamaTools().map((t) => t.function.name).sort();
+    expect(names).toEqual(['srv__alpha', 'srv__beta', 'srv__gamma']);
+  });
 
-      expect(mockCallTool).toHaveBeenCalledWith({
-        name: 'send_message',
-        arguments: { text: 'hello' },
-      }, undefined, { timeout: undefined });
-      expect(result).toBe('Message sent.');
+  it('tools=[] registers ALL (treated same as undefined — discover-all)', async () => {
+    const exec = new McpToolExecutor();
+    await exec.initialize({ srv: { command: '/bin/x', tools: [] } });
+
+    const names = exec.getOllamaTools().map((t) => t.function.name).sort();
+    expect(names).toEqual(['srv__alpha', 'srv__beta', 'srv__gamma']);
+  });
+
+  it('tools=["alpha","beta"] filters discovery to allowlist', async () => {
+    const exec = new McpToolExecutor();
+    await exec.initialize({ srv: { command: '/bin/x', tools: ['alpha', 'beta'] } });
+
+    const names = exec.getOllamaTools().map((t) => t.function.name).sort();
+    expect(names).toEqual(['srv__alpha', 'srv__beta']);
+  });
+
+  it('pre-supplied toolSchemas skip listTools and use the provided shapes', async () => {
+    const listToolsSpy = mock();
+    listToolsImpl = () => {
+      listToolsSpy();
+      return Promise.resolve({ tools: [] });
+    };
+
+    const exec = new McpToolExecutor();
+    await exec.initialize({
+      srv: {
+        type: 'http',
+        url: 'https://example/mcp',
+        toolSchemas: [{ name: 'preset', description: 'P', inputSchema: { type: 'object' } }],
+      },
     });
 
-    it('throws for invalid MCP tool name format', async () => {
-      const executor = new McpToolExecutor();
-      await executor.initialize(sampleConfig());
+    expect(listToolsSpy).not.toHaveBeenCalled();
+    const names = exec.getOllamaTools().map((t) => t.function.name);
+    expect(names).toEqual(['srv__preset']);
+  });
 
-      await expect(executor.callTool('invalid_name', {})).rejects.toThrow(
-        'Invalid MCP tool name format',
-      );
-    });
+  it('missing description defaults to empty string in registered schemas', async () => {
+    const exec = new McpToolExecutor();
+    await exec.initialize({ srv: { command: '/bin/x' } });
 
-    it('throws for unknown server', async () => {
-      const executor = new McpToolExecutor();
-      await executor.initialize(sampleConfig());
+    const gamma = exec.getOllamaTools().find((t) => t.function.name === 'srv__gamma');
+    expect(gamma?.function.description).toBe('');
+    const gammaA = exec.getAnthropicTools().find((t) => t.name === 'srv__gamma');
+    expect(gammaA?.description).toBe('');
+  });
+});
 
-      await expect(
-        executor.callTool('mcp__unknown__some_tool', {}),
-      ).rejects.toThrow('MCP server not connected');
-    });
+// =====================================================================
+// 4. Failure isolation — connect / listTools failures don't bubble
+// =====================================================================
 
-    it('joins multiple text content blocks', async () => {
-      mockCallTool.mockResolvedValue({
+describe('McpToolExecutor — failure isolation', () => {
+  it('connect failure leaves server unregistered and does not throw', async () => {
+    connectImpl = function (this: MockClient) {
+      // First instance fails; subsequent ones succeed.
+      if (clientInstances.indexOf(this) === 0) {
+        return Promise.reject(new Error('boom'));
+      }
+      return Promise.resolve();
+    };
+
+    const exec = new McpToolExecutor();
+    await expect(
+      exec.initialize({
+        bad: { command: '/bin/x' },
+        good: { command: '/bin/y' },
+      }),
+    ).resolves.toBeUndefined();
+
+    // Calling a tool against the bad server should now report not-connected.
+    await expect(exec.callTool('mcp__bad__tool', {})).rejects.toThrow(/not connected/);
+    // Reset for next test.
+    connectImpl = () => Promise.resolve();
+  });
+
+  it('listTools failure leaves the server connected but with zero tools', async () => {
+    listToolsImpl = () => Promise.reject(new Error('list-fail'));
+
+    const exec = new McpToolExecutor();
+    await expect(exec.initialize({ srv: { command: '/bin/x' } })).resolves.toBeUndefined();
+
+    expect(exec.getOllamaTools()).toEqual([]);
+    // Server connection still exists — callTool routing finds it but the
+    // server reports no tools. Spec: the executor doesn't pre-validate
+    // tool names against the discovered set; calls are forwarded to the
+    // server, which is the authoritative reject.
+    callToolImpl = () =>
+      Promise.reject(new Error('unknown tool'));
+    await expect(exec.callTool('mcp__srv__anything', {})).rejects.toThrow(/unknown tool/);
+    callToolImpl = () =>
+      Promise.resolve({ content: [{ type: 'text', text: 'ok' }] });
+    listToolsImpl = () => Promise.resolve({ tools: [] });
+  });
+});
+
+// =====================================================================
+// 5. Tool name + schema shape (engine-facing contract)
+// =====================================================================
+
+describe('McpToolExecutor — engine-facing tool name shape', () => {
+  beforeEach(() => {
+    listToolsImpl = () =>
+      Promise.resolve({
+        tools: [{ name: 'send_message', description: 'd', inputSchema: { type: 'object' } }],
+      });
+  });
+
+  it('engine-facing name is `{server}__{tool}` for both Ollama and Anthropic formats (no mcp__ prefix)', async () => {
+    const exec = new McpToolExecutor();
+    await exec.initialize({ nanoclaw: { command: '/bin/x' } });
+
+    const ollama = exec.getOllamaTools();
+    const anthropic = exec.getAnthropicTools();
+
+    expect(ollama[0].function.name).toBe('nanoclaw__send_message');
+    expect(anthropic[0].name).toBe('nanoclaw__send_message');
+  });
+
+  it('toolNameMap resolves engine-facing name to mcp__-prefixed callTool address', async () => {
+    const exec = new McpToolExecutor();
+    await exec.initialize({ nanoclaw: { command: '/bin/x' } });
+
+    const map = exec.getToolNameMap();
+    const entry = map.get('nanoclaw__send_message');
+    expect(entry).toEqual({ mcpTool: 'mcp__nanoclaw__send_message', serverName: 'nanoclaw' });
+  });
+
+  it('Ollama tool format has type="function" with name/description/parameters', async () => {
+    const exec = new McpToolExecutor();
+    await exec.initialize({ srv: { command: '/bin/x' } });
+
+    const t = exec.getOllamaTools()[0];
+    expect(t.type).toBe('function');
+    expect(t.function.name).toBe('srv__send_message');
+    expect(t.function.description).toBe('d');
+    expect(t.function.parameters).toEqual({ type: 'object' });
+  });
+
+  it('Anthropic tool format has name/description/input_schema', async () => {
+    const exec = new McpToolExecutor();
+    await exec.initialize({ srv: { command: '/bin/x' } });
+
+    const t = exec.getAnthropicTools()[0];
+    expect(t.name).toBe('srv__send_message');
+    expect(t.description).toBe('d');
+    expect(t.input_schema).toEqual({ type: 'object' });
+  });
+});
+
+// =====================================================================
+// 6. callTool — name parsing, routing, output shaping
+// =====================================================================
+
+describe('McpToolExecutor — callTool routing', () => {
+  beforeEach(() => {
+    listToolsImpl = () =>
+      Promise.resolve({
+        tools: [{ name: 'fetch', description: '', inputSchema: { type: 'object' } }],
+      });
+  });
+
+  it('forwards to client.callTool with the unprefixed tool name + args', async () => {
+    const exec = new McpToolExecutor();
+    await exec.initialize({ srv: { command: '/bin/x' } });
+
+    await exec.callTool('mcp__srv__fetch', { url: 'x' });
+
+    const client = clientInstances[0];
+    expect(client.callToolCalls).toHaveLength(1);
+    expect(client.callToolCalls[0].req).toEqual({ name: 'fetch', arguments: { url: 'x' } });
+  });
+
+  it('joins text content parts with newline and ignores non-text parts', async () => {
+    callToolImpl = () =>
+      Promise.resolve({
         content: [
-          { type: 'text', text: 'line 1' },
-          { type: 'text', text: 'line 2' },
+          { type: 'text', text: 'line1' },
+          { type: 'image' },
+          { type: 'text', text: 'line2' },
         ],
       });
 
-      const executor = new McpToolExecutor();
-      await executor.initialize(sampleConfig());
+    const exec = new McpToolExecutor();
+    await exec.initialize({ srv: { command: '/bin/x' } });
 
-      const result = await executor.callTool('mcp__nanoclaw__send_message', {});
-      expect(result).toBe('line 1\nline 2');
-    });
-
-    it('returns "(no output)" for empty content', async () => {
-      mockCallTool.mockResolvedValue({ content: [] });
-
-      const executor = new McpToolExecutor();
-      await executor.initialize(sampleConfig());
-
-      const result = await executor.callTool('mcp__nanoclaw__send_message', {});
-      expect(result).toBe('(no output)');
-    });
+    const out = await exec.callTool('mcp__srv__fetch', {});
+    expect(out).toBe('line1\nline2');
+    callToolImpl = () =>
+      Promise.resolve({ content: [{ type: 'text', text: 'ok' }] });
   });
 
-  describe('close', () => {
-    it('closes all connected servers', async () => {
-      const executor = new McpToolExecutor();
-      await executor.initialize(sampleConfig());
+  it('returns "(no output)" when there are no text parts', async () => {
+    callToolImpl = () =>
+      Promise.resolve({ content: [{ type: 'image' }] });
 
-      await executor.close();
-      expect(mockClose).toHaveBeenCalled();
-    });
+    const exec = new McpToolExecutor();
+    await exec.initialize({ srv: { command: '/bin/x' } });
+
+    const out = await exec.callTool('mcp__srv__fetch', {});
+    expect(out).toBe('(no output)');
+    callToolImpl = () =>
+      Promise.resolve({ content: [{ type: 'text', text: 'ok' }] });
   });
 
-  describe('getAnthropicTools', () => {
-    it('returns tools in Anthropic SDK format', async () => {
-      const executor = new McpToolExecutor();
-      await executor.initialize(sampleConfig());
+  it('throws on malformed tool name (no mcp__ prefix or wrong separator count)', async () => {
+    const exec = new McpToolExecutor();
+    await exec.initialize({ srv: { command: '/bin/x' } });
 
-      const tools = executor.getAnthropicTools();
-      expect(tools).toHaveLength(2);
-      expect(tools[0]).toEqual({
-        name: 'nanoclaw__send_message',
-        description: 'Send a message',
-        input_schema: { type: 'object', properties: { text: { type: 'string' } } },
-      });
-      expect(tools[1]).toEqual({
-        name: 'nanoclaw__schedule_task',
-        description: 'Schedule a task',
-        input_schema: { type: 'object', properties: { prompt: { type: 'string' } } },
-      });
-    });
-
-    it('returns empty array when no tools configured', async () => {
-      const executor = new McpToolExecutor();
-      await executor.initialize({});
-
-      expect(executor.getAnthropicTools()).toEqual([]);
-    });
+    await expect(exec.callTool('not_an_mcp_name', {})).rejects.toThrow(/Invalid MCP tool name/);
+    await expect(exec.callTool('mcp__only-one-part', {})).rejects.toThrow(/Invalid MCP tool name/);
   });
 
-  describe('HTTP transport (remote MCP servers)', () => {
-    function httpConfig(): Record<string, McpServerConfig> {
-      return {
-        mongodb: {
-          type: 'http',
-          url: 'http://host.docker.internal:3200/mcp',
-          tools: ['find', 'aggregate'],
-          toolSchemas: [
-            {
-              name: 'find',
-              description: 'Run a find query',
-              inputSchema: { type: 'object', properties: { collection: { type: 'string' } } },
-            },
-            {
-              name: 'aggregate',
-              description: 'Run an aggregation pipeline',
-              inputSchema: { type: 'object', properties: { pipeline: { type: 'array' } } },
-            },
-          ],
-        },
-      };
-    }
+  it('throws when server prefix references an unknown server', async () => {
+    const exec = new McpToolExecutor();
+    await exec.initialize({ srv: { command: '/bin/x' } });
 
-    it('creates StreamableHTTPClientTransport for type:http entries', async () => {
-      const executor = new McpToolExecutor();
-      await executor.initialize(httpConfig());
+    await expect(exec.callTool('mcp__nope__tool', {})).rejects.toThrow(/not connected: nope/);
+  });
 
-      expect(httpTransportInstances).toHaveLength(1);
-      expect(httpTransportInstances[0].url.toString()).toBe(
-        'http://host.docker.internal:3200/mcp',
-      );
-      expect(stdioTransportInstances).toHaveLength(0);
-      expect(mockConnect).toHaveBeenCalled();
-    });
-
-    it('passes headers to HTTP transport', async () => {
-      const config: Record<string, McpServerConfig> = {
-        mongodb: {
-          type: 'http',
-          url: 'http://host.docker.internal:3200/mcp',
-          tools: ['find'],
-          headers: { 'X-NanoClaw-Group': 'main' },
-          toolSchemas: [
-            { name: 'find', description: 'Find', inputSchema: {} },
-          ],
-        },
-      };
-
-      const executor = new McpToolExecutor();
-      await executor.initialize(config);
-
-      expect(httpTransportInstances).toHaveLength(1);
-      const opts = httpTransportInstances[0].opts as { requestInit?: { headers?: Record<string, string> } };
-      expect(opts?.requestInit?.headers).toEqual({ 'X-NanoClaw-Group': 'main' });
-    });
-
-    it('builds Ollama tool schemas from HTTP server config', async () => {
-      const executor = new McpToolExecutor();
-      await executor.initialize(httpConfig());
-
-      const tools = executor.getOllamaTools();
-      expect(tools).toHaveLength(2);
-      expect(tools[0].function.name).toBe('mongodb__find');
-      expect(tools[1].function.name).toBe('mongodb__aggregate');
-    });
-
-    it('routes tool calls to HTTP-connected server', async () => {
-      mockCallTool.mockResolvedValue({
-        content: [{ type: 'text', text: '{"_id": "test"}' }],
+  it('supports tool names containing underscores (server portion is non-underscore)', async () => {
+    listToolsImpl = () =>
+      Promise.resolve({
+        tools: [{ name: 'send_message_now', description: '', inputSchema: { type: 'object' } }],
       });
+    const exec = new McpToolExecutor();
+    await exec.initialize({ srv: { command: '/bin/x' } });
 
-      const executor = new McpToolExecutor();
-      await executor.initialize(httpConfig());
+    await exec.callTool('mcp__srv__send_message_now', { x: 1 });
+    const client = clientInstances[0];
+    expect(client.callToolCalls[0].req.name).toBe('send_message_now');
+  });
 
-      const result = await executor.callTool('mcp__mongodb__find', {
-        collection: 'users',
+  it('supports server names containing hyphens (production convention)', async () => {
+    listToolsImpl = () =>
+      Promise.resolve({
+        tools: [{ name: 'list_pods', description: '', inputSchema: { type: 'object' } }],
       });
+    const exec = new McpToolExecutor();
+    await exec.initialize({ 'eks-kubectl': { command: '/bin/x' } });
 
-      expect(mockCallTool).toHaveBeenCalledWith({
-        name: 'find',
-        arguments: { collection: 'users' },
-      }, undefined, { timeout: undefined });
-      expect(result).toBe('{"_id": "test"}');
-    });
-
-    it('handles mixed stdio and HTTP servers', async () => {
-      const mixedConfig: Record<string, McpServerConfig> = {
-        ...sampleConfig(),
-        ...httpConfig(),
-      };
-
-      const executor = new McpToolExecutor();
-      await executor.initialize(mixedConfig);
-
-      expect(stdioTransportInstances).toHaveLength(1);
-      expect(httpTransportInstances).toHaveLength(1);
-
-      const tools = executor.getOllamaTools();
-      expect(tools).toHaveLength(4); // 2 stdio + 2 http
-    });
-
-    it('skips entry with no command and no url', async () => {
-      const config: Record<string, McpServerConfig> = {
-        broken: {
-          tools: ['something'],
-          toolSchemas: [],
-        } as McpServerConfig,
-      };
-
-      const executor = new McpToolExecutor();
-      await executor.initialize(config);
-
-      expect(stdioTransportInstances).toHaveLength(0);
-      expect(httpTransportInstances).toHaveLength(0);
-    });
-
-    it('close works for HTTP servers', async () => {
-      const executor = new McpToolExecutor();
-      await executor.initialize(httpConfig());
-
-      await executor.close();
-      expect(mockClose).toHaveBeenCalled();
-    });
+    await exec.callTool('mcp__eks-kubectl__list_pods', {});
+    const client = clientInstances[0];
+    expect(client.callToolCalls[0].req.name).toBe('list_pods');
   });
 });
+
+// =====================================================================
+// 7. Lifecycle — timeout propagation + close
+// =====================================================================
+
+describe('McpToolExecutor — lifecycle', () => {
+  beforeEach(() => {
+    listToolsImpl = () =>
+      Promise.resolve({
+        tools: [{ name: 'fetch', description: '', inputSchema: { type: 'object' } }],
+      });
+  });
+
+  it('propagates callTimeoutMs from initialize options to client.callTool', async () => {
+    const exec = new McpToolExecutor();
+    await exec.initialize({ srv: { command: '/bin/x' } }, undefined, { callTimeoutMs: 12345 });
+
+    await exec.callTool('mcp__srv__fetch', {});
+
+    const client = clientInstances[0];
+    expect(client.callToolCalls[0].options).toEqual({ timeout: 12345 });
+  });
+
+  it('passes timeout=undefined when no callTimeoutMs was given', async () => {
+    const exec = new McpToolExecutor();
+    await exec.initialize({ srv: { command: '/bin/x' } });
+
+    await exec.callTool('mcp__srv__fetch', {});
+
+    const client = clientInstances[0];
+    expect(client.callToolCalls[0].options).toEqual({ timeout: undefined });
+  });
+
+  it('close() invokes client.close() on every registered server', async () => {
+    const exec = new McpToolExecutor();
+    await exec.initialize({ a: { command: '/bin/x' }, b: { command: '/bin/y' } });
+
+    expect(clientInstances).toHaveLength(2);
+    await exec.close();
+    expect(clientInstances[0].closeCalled).toBe(true);
+    expect(clientInstances[1].closeCalled).toBe(true);
+  });
+
+  it('close() continues past one server\'s close() error', async () => {
+    let calls = 0;
+    closeImpl = function (this: MockClient) {
+      calls += 1;
+      if (clientInstances.indexOf(this) === 0) return Promise.reject(new Error('close-fail'));
+      return Promise.resolve();
+    };
+
+    const exec = new McpToolExecutor();
+    await exec.initialize({ a: { command: '/bin/x' }, b: { command: '/bin/y' } });
+    await expect(exec.close()).resolves.toBeUndefined();
+    expect(calls).toBe(2);
+
+    closeImpl = () => Promise.resolve();
+  });
+
+  it('after close(), callTool reports the server is no longer connected', async () => {
+    const exec = new McpToolExecutor();
+    await exec.initialize({ srv: { command: '/bin/x' } });
+    await exec.close();
+
+    await expect(exec.callTool('mcp__srv__fetch', {})).rejects.toThrow(/not connected/);
+  });
+
+  it('close() on a never-initialized executor is a no-op', async () => {
+    const exec = new McpToolExecutor();
+    await expect(exec.close()).resolves.toBeUndefined();
+  });
+});
+

@@ -1,7 +1,16 @@
 /**
- * Thin DB access layer for the e2e test harness. Opens the same
- * SQLite file the live nanoclaw process uses; relies on WAL concurrency
- * so we can inject rows while the daemon is running.
+ * Thin DB access layer for the e2e test harness (v2).
+ *
+ * v2 deltas vs v1:
+ *   - DB path:       store/messages.db    → data/v2.db
+ *   - events table:  events               → pipeline_events
+ *   - tasks table:   scheduled_tasks      → pipeline_scheduled_tasks
+ *   - observed_messages + pipeline_clusters: unchanged
+ *
+ * Pipeline tables live on the central DB (`data/v2.db`) via the
+ * pipeline plugin's own migrations (versions 100, 500, 800, 1000…).
+ * Opens the same SQLite file the live nanoclaw process uses; relies on
+ * WAL concurrency so we can inject rows while the daemon is running.
  *
  * Test rows are tagged by `sender_name LIKE '%(e2e-test)'` plus a
  * `source_type` value the harness reserves for itself. Cleanup uses
@@ -11,11 +20,7 @@
 import Database from 'better-sqlite3';
 import path from 'node:path';
 
-const DEFAULT_DB_PATH = path.join(
-  process.cwd(),
-  'store',
-  'messages.db',
-);
+const DEFAULT_DB_PATH = path.join(process.cwd(), 'data', 'v2.db');
 
 let db: Database.Database | null = null;
 
@@ -95,7 +100,7 @@ export function publishObservationEvent(input: {
   });
   const res = database
     .prepare(
-      `INSERT INTO events
+      `INSERT INTO pipeline_events
          (type, source_group, source_task_id, payload, dedupe_key, created_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
     )
@@ -117,7 +122,7 @@ export function publishObservationEvent(input: {
  */
 export function bumpConsumerNextRun(taskId: string): void {
   openDb()
-    .prepare(`UPDATE scheduled_tasks SET next_run = ? WHERE id = ?`)
+    .prepare(`UPDATE pipeline_scheduled_tasks SET next_run = ? WHERE id = ?`)
     .run(new Date().toISOString(), taskId);
 }
 
@@ -135,9 +140,7 @@ export interface ClusterSnapshot {
  * Fetch clusters that contain any of the given observation ids (i.e.
  * the clusters this scenario's observations were assigned to).
  */
-export function getClustersByObservations(
-  observationIds: number[],
-): ClusterSnapshot[] {
+export function getClustersByObservations(observationIds: number[]): ClusterSnapshot[] {
   if (observationIds.length === 0) return [];
   const rows = openDb()
     .prepare(
@@ -196,7 +199,7 @@ export function getDownstreamEvents(
   return openDb()
     .prepare(
       `SELECT e.id, e.type, e.status, e.payload, e.created_at, e.result_note
-         FROM events e
+         FROM pipeline_events e
         WHERE e.created_at >= ?
           AND (e.type LIKE 'candidate.%'
                OR e.type = 'human_review_required'
@@ -225,9 +228,7 @@ export function cleanupTestRows(): {
 
   // Observations to remove
   const obsRows = database
-    .prepare(
-      `SELECT id FROM observed_messages WHERE source_type = ?`,
-    )
+    .prepare(`SELECT id FROM observed_messages WHERE source_type = ?`)
     .all(TEST_SOURCE_TYPE) as Array<{ id: number }>;
   const obsIds = obsRows.map((r) => r.id);
 
@@ -269,7 +270,7 @@ export function cleanupTestRows(): {
   // a test observation id.
   const eventsDelete = database
     .prepare(
-      `DELETE FROM events
+      `DELETE FROM pipeline_events
         WHERE source_task_id = ?
            OR dedupe_key LIKE ?
            OR dedupe_key LIKE ?`,

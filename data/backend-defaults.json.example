@@ -1,0 +1,27 @@
+{
+  "_comment": "Per-agent-provider engine defaults + pricing table. Copy this file to data/backend-defaults.json (drop the .example suffix) and customise. Precedence (per K.1.f step 8.6 wiring-settings resolver, src/wiring-settings-resolve.ts): wiring override on messaging_group_agents row → backend-defaults[agent_group.agent_provider] → NULL (engine's own hardcoded default). Keys: model (string), temperature (number), maxToolRounds (integer; 0 = unbounded), timeoutMs (integer ms). show_thinking is intentionally NOT read here — that one only honours per-wiring override or engine default. The pricing block is consumed by webui/routes/agent-groups.ts for cost calculation; key match is substring (e.g. 'haiku' matches 'claude-haiku-3.5'). Edit values to match the models you actually run.",
+
+  "claude": {
+    "maxToolRounds": 0,
+    "timeoutMs": 1800000
+  },
+
+  "ollama": {
+    "model": "qwen3:8b",
+    "maxToolRounds": 10,
+    "timeoutMs": 300000
+  },
+
+  "anthropic-api": {
+    "model": "claude-sonnet-4-6",
+    "temperature": 1,
+    "maxToolRounds": 15,
+    "timeoutMs": 300000
+  },
+
+  "pricing": {
+    "haiku":  { "input": 0.80, "output": 4,  "cacheRead": 0.08, "cacheWrite": 1 },
+    "sonnet": { "input": 3,    "output": 15, "cacheRead": 0.30, "cacheWrite": 3.75 },
+    "opus":   { "input": 15,   "output": 75, "cacheRead": 1.50, "cacheWrite": 18.75 }
+  }
+}

@@ -1,442 +1,565 @@
-import { App, LogLevel } from '@slack/bolt';
-import type { GenericMessageEvent, BotMessageEvent } from '@slack/types';
+/**
+ * Slack channel adapter — fork-only Socket Mode port of v1
+ * src/channels/slack.ts. Uses @slack/bolt directly (not the v2
+ * webhook-only Chat-SDK shim).
+ */
+import type { KnownBlock } from '@slack/types';
 
-import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
-import { updateChatName } from '../db.js';
-import { readEnvFile } from '../env.js';
-import { logger } from '../logger.js';
-import { registerChannel, ChannelOpts } from './registry.js';
-import { markdownToSlackPayload } from './slack-blocks.js';
+import type { ChannelAdapter, ChannelSetup, ConversationInfo, InboundMessage, OutboundMessage } from './adapter.js';
+import { log } from '../log.js';
+import { registerChannelAdapter } from './channel-registry.js';
 import {
-  Channel,
-  OnInboundMessage,
-  OnChatMetadata,
-  OnReaction,
-  RegisteredGroup,
-} from '../types.js';
+  createBoltShim,
+  type ActionPayload,
+  type BoltShim,
+  type HandledMessageEvent,
+  type ReactionAddedEvent,
+} from './slack-bolt-shim.js';
+import { markdownToBlocks, markdownToSlackPayload } from './slack-blocks.js';
 
-// The message subtypes we process. Bolt delivers all subtypes via app.event('message');
-// we filter to regular messages (GenericMessageEvent, subtype undefined) and bot messages
-// (BotMessageEvent, subtype 'bot_message') so we can track our own output.
-type HandledMessageEvent = GenericMessageEvent | BotMessageEvent;
-
-export interface SlackChannelOpts {
-  onMessage: OnInboundMessage;
-  onChatMetadata: OnChatMetadata;
-  onReaction?: OnReaction;
-  registeredGroups: () => Record<string, RegisteredGroup>;
+/**
+ * Strip the `slack:` channel-type prefix that v2 stores on platform_id
+ * (e.g. `slack:C0ALE6G9FGB` → `C0ALE6G9FGB`). The bolt-shim / Slack Web API
+ * expects the raw channel ID; passing the prefixed form returns
+ * `channel_not_found` even when the bot is a member.
+ */
+function toSlackChannelId(platformId: string): string {
+  return platformId.startsWith('slack:') ? platformId.slice('slack:'.length) : platformId;
 }
 
-export class SlackChannel implements Channel {
-  name = 'slack';
+interface QueuedMessage {
+  platformId: string;
+  threadId: string | null;
+  text: string;
+}
 
-  private app: App;
-  private botUserId: string | undefined;
-  private connected = false;
-  private outgoingQueue: Array<{ jid: string; text: string }> = [];
-  private flushing = false;
-  private userNameCache = new Map<string, string>();
+interface AskQuestionOption {
+  value: string;
+  label: string;
+}
 
-  private opts: SlackChannelOpts;
-
-  constructor(opts: SlackChannelOpts) {
-    this.opts = opts;
-
-    // Read tokens from .env (not process.env — keeps secrets off the environment
-    // so they don't leak to child processes, matching NanoClaw's security pattern)
-    const env = readEnvFile(['SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN']);
-    const botToken = env.SLACK_BOT_TOKEN;
-    const appToken = env.SLACK_APP_TOKEN;
-
-    if (!botToken || !appToken) {
-      throw new Error(
-        'SLACK_BOT_TOKEN and SLACK_APP_TOKEN must be set in .env',
-      );
-    }
-
-    this.app = new App({
-      token: botToken,
-      appToken,
-      socketMode: true,
-      logLevel: LogLevel.ERROR,
-    });
-
-    this.setupEventHandlers();
+function extractText(content: unknown): string | undefined {
+  if (typeof content === 'string') return content;
+  if (content && typeof content === 'object') {
+    const c = content as Record<string, unknown>;
+    if (typeof c.markdown === 'string') return c.markdown;
+    if (typeof c.text === 'string') return c.text;
   }
+  return undefined;
+}
 
-  private setupEventHandlers(): void {
-    // Use app.event('message') instead of app.message() to capture all
-    // message subtypes including bot_message (needed to track our own output)
-    this.app.event('message', async ({ event }) => {
-      // Bolt's event type is the full MessageEvent union (17+ subtypes).
-      // We filter on subtype first, then narrow to the two types we handle.
-      const subtype = (event as { subtype?: string }).subtype;
-      if (subtype && subtype !== 'bot_message') return;
-
-      // After filtering, event is either GenericMessageEvent or BotMessageEvent
-      const msg = event as HandledMessageEvent;
-
-      if (!msg.text) return;
-
-      // Threaded replies are flattened into the channel conversation.
-      // The agent sees them alongside channel-level messages; responses
-      // always go to the channel, not back into the thread.
-
-      const jid = `slack:${msg.channel}`;
-      const timestamp = new Date(parseFloat(msg.ts) * 1000).toISOString();
-      const isGroup = msg.channel_type !== 'im';
-
-      // Always report metadata for group discovery
-      this.opts.onChatMetadata(jid, timestamp, undefined, 'slack', isGroup);
-
-      // Only deliver full messages for registered groups
-      const groups = this.opts.registeredGroups();
-      if (!groups[jid]) return;
-
-      const isBotMessage = !!msg.bot_id || msg.user === this.botUserId;
-
-      let senderName: string;
-      if (isBotMessage) {
-        senderName = ASSISTANT_NAME;
-      } else {
-        senderName =
-          (msg.user ? await this.resolveUserName(msg.user) : undefined) ||
-          msg.user ||
-          'unknown';
-      }
-
-      // Translate Slack <@UBOTID> mentions into TRIGGER_PATTERN format.
-      // Slack encodes @mentions as <@U12345>, which won't match TRIGGER_PATTERN
-      // (e.g., ^@<ASSISTANT_NAME>\b), so we prepend the trigger when the bot is @mentioned.
-      let content = msg.text;
-      if (this.botUserId && !isBotMessage) {
-        const mentionPattern = `<@${this.botUserId}>`;
-        if (
-          content.includes(mentionPattern) &&
-          !TRIGGER_PATTERN.test(content)
-        ) {
-          content = `@${ASSISTANT_NAME} ${content}`;
-        }
-      }
-
-      this.opts.onMessage(jid, {
-        id: msg.ts,
-        chat_jid: jid,
-        sender: msg.user || msg.bot_id || '',
-        sender_name: senderName,
-        content,
-        timestamp,
-        is_from_me: isBotMessage,
-        is_bot_message: isBotMessage,
-      });
-    });
-
-    // Reaction events — needed for the pipeline approval flow (F5b).
-    // Requires `reactions:read` OAuth scope on the Slack app. Socket
-    // mode delivers these alongside message events.
-    this.app.event('reaction_added', async ({ event }) => {
-      if (!this.opts.onReaction) return;
-      // The event item can be a message, file, or file_comment; we
-      // only care about message reactions.
-      if (event.item?.type !== 'message') return;
-      const channelId = event.item.channel;
-      const messageId = event.item.ts;
-      const jid = `slack:${channelId}`;
-
-      // Ignore reactions in unregistered channels — we wouldn't know
-      // what to do with them.
-      const groups = this.opts.registeredGroups();
-      if (!groups[jid]) return;
-
-      try {
-        await this.opts.onReaction(jid, {
-          emoji: event.reaction,
-          userId: event.user,
-          messageId,
-          chatJid: jid,
-          timestamp: new Date(parseFloat(event.event_ts) * 1000).toISOString(),
-        });
-      } catch (err) {
-        logger.warn(
-          { err, jid, messageId, emoji: event.reaction },
-          'Slack reaction_added handler threw',
-        );
-      }
-    });
+function asObject(content: unknown): Record<string, unknown> | undefined {
+  if (content && typeof content === 'object') {
+    return content as Record<string, unknown>;
   }
+  return undefined;
+}
 
-  async connect(): Promise<void> {
-    await this.app.start();
+function buildAskQuestionBlocks(
+  questionId: string,
+  title: string,
+  question: string,
+  options: AskQuestionOption[],
+): KnownBlock[] {
+  return [
+    {
+      type: 'header',
+      text: { type: 'plain_text', text: title.slice(0, 150), emoji: true },
+    },
+    {
+      type: 'section',
+      text: { type: 'mrkdwn', text: question.slice(0, 3000) },
+    },
+    {
+      type: 'actions',
+      elements: options.map((opt, idx) => ({
+        type: 'button',
+        action_id: `ncq:${questionId}:${idx}`,
+        text: { type: 'plain_text', text: opt.label, emoji: true },
+        value: String(idx),
+      })),
+    },
+  ] as KnownBlock[];
+}
 
-    // Get bot's own user ID for self-message detection.
-    // Resolve this BEFORE setting connected=true so that messages arriving
-    // during startup can correctly detect bot-sent messages.
+/**
+ * Build a Slack ChannelAdapter from a Bolt shim. The shim is the
+ * test seam — production wires the real @slack/bolt App via
+ * createBoltShim from './slack-bolt-shim.js'.
+ */
+export function createSlackAdapterWithShim(shim: BoltShim): ChannelAdapter {
+  let botUserId: string | undefined;
+  let connected = false;
+  let config: ChannelSetup | null = null;
+  const outgoingQueue: QueuedMessage[] = [];
+  let flushing = false;
+  const askQuestionOptions = new Map<string, AskQuestionOption[]>();
+
+  async function handleSlackReaction(event: ReactionAddedEvent): Promise<void> {
+    if (event.item.type !== 'message') return;
+    const platformId = event.item.channel;
+    const messageId = event.item.ts;
+    if (!platformId || !messageId) return;
+    if (!config?.onReaction) return;
+
+    // Strip Slack's ::skin-tone-N modifier so handler chain matches on the
+    // base emoji name (carry-across from f50dd58).
+    const emoji = event.reaction.replace(/::skin-tone-\d+$/, '');
+
     try {
-      const auth = await this.app.client.auth.test();
-      this.botUserId = auth.user_id as string;
-      logger.info({ botUserId: this.botUserId }, 'Connected to Slack');
+      await config.onReaction({
+        channelType: 'slack',
+        platformId,
+        threadId: null,
+        messageId,
+        emoji,
+        userId: event.user,
+        timestamp: new Date(parseFloat(event.event_ts) * 1000).toISOString(),
+      });
     } catch (err) {
-      logger.warn({ err }, 'Connected to Slack but failed to get bot user ID');
-    }
-
-    this.connected = true;
-
-    // Flush any messages queued before connection
-    await this.flushOutgoingQueue();
-
-    // Sync channel names on startup
-    await this.syncChannelMetadata();
-  }
-
-  async backfillPassiveChannels(
-    passiveJids: string[],
-    cursors: Record<string, string>,
-  ): Promise<void> {
-    for (const jid of passiveJids) {
-      const channelId = jid.replace(/^slack:/, '');
-      const oldest = cursors[jid];
-      if (!oldest) continue;
-
-      try {
-        const oldestTs = String(new Date(oldest).getTime() / 1000);
-        const resp = await this.app.client.conversations.history({
-          channel: channelId,
-          oldest: oldestTs,
-          limit: 100,
-          inclusive: false,
-        });
-
-        let backfilled = 0;
-        for (const msg of resp.messages ?? []) {
-          if (!msg.text || !msg.ts) continue;
-          if (msg.bot_id || msg.user === this.botUserId) continue;
-
-          const timestamp = new Date(parseFloat(msg.ts) * 1000).toISOString();
-          this.opts.onMessage(jid, {
-            id: msg.ts,
-            chat_jid: jid,
-            sender: msg.user || '',
-            sender_name: msg.user || 'unknown',
-            content: msg.text,
-            timestamp,
-            is_from_me: false,
-            is_bot_message: false,
-          });
-          backfilled++;
-        }
-
-        if (backfilled > 0) {
-          logger.info(
-            { jid, backfilled },
-            'Backfilled passive channel history',
-          );
-        }
-      } catch (err) {
-        logger.warn({ jid, err }, 'Failed to backfill passive channel history');
-      }
+      log.warn('Slack reaction_added handler threw', {
+        channel: toSlackChannelId(platformId),
+        messageId,
+        emoji,
+        err,
+      });
     }
   }
 
-  async sendMessage(
-    jid: string,
-    text: string,
-    options?: { threadTs?: string },
-  ): Promise<void> {
-    const channelId = jid.replace(/^slack:/, '');
-
-    if (!this.connected) {
-      this.outgoingQueue.push({ jid, text });
-      logger.info(
-        { jid, queueSize: this.outgoingQueue.length },
-        'Slack disconnected, message queued',
-      );
+  function handleAction(payload: ActionPayload): void {
+    const m = /^ncq:([^:]+):(\d+)$/.exec(payload.actionId);
+    if (!m) {
+      log.warn('Slack onAction: malformed action_id', {
+        actionId: payload.actionId,
+      });
       return;
     }
-
-    try {
-      const payload = markdownToSlackPayload(text);
-      await this.app.client.chat.postMessage({
-        channel: channelId,
-        ...payload,
-        ...(options?.threadTs && { thread_ts: options.threadTs }),
+    const questionId = m[1];
+    const idx = parseInt(m[2], 10);
+    const options = askQuestionOptions.get(questionId);
+    if (!options || idx < 0 || idx >= options.length) {
+      log.warn('Slack onAction: unknown questionId or out-of-range idx', {
+        questionId,
+        idx,
       });
-      logger.info({ jid, length: text.length }, 'Slack message sent');
-    } catch (err) {
-      this.outgoingQueue.push({ jid, text });
-      logger.warn(
-        { jid, err, queueSize: this.outgoingQueue.length },
-        'Failed to send Slack message, queued',
-      );
+      return;
     }
+    config?.onAction(questionId, options[idx].value, payload.userId);
   }
 
-  /**
-   * Fetch all replies in a thread (including the root message), for
-   * post-write delivery verification. Returns null if the channel
-   * adapter can't fetch or the thread is empty.
-   */
-  async fetchThreadReplies(
-    jid: string,
-    threadTs: string,
-  ): Promise<Array<{ ts: string; text: string | null }> | null> {
-    const channelId = jid.replace(/^slack:/, '');
-    if (!this.connected) return null;
-    try {
-      const res = await this.app.client.conversations.replies({
-        channel: channelId,
-        ts: threadTs,
-        limit: 100,
+  async function deliverAskQuestion(
+    platformId: string,
+    threadId: string | null,
+    content: Record<string, unknown>,
+  ): Promise<string | undefined> {
+    if (!connected) {
+      log.warn('Slack disconnected, dropping ask_question (not queueable)', {
+        channel: toSlackChannelId(platformId),
+        questionId: content.questionId,
       });
-      const msgs = res.messages ?? [];
-      return msgs.map((m) => ({
-        ts: (m.ts ?? '') as string,
-        text: (m.text ?? null) as string | null,
-      }));
-    } catch (err) {
-      logger.warn(
-        { jid, threadTs, err },
-        'Failed to fetch Slack thread replies',
-      );
-      return null;
+      return undefined;
     }
-  }
-
-  /**
-   * Fetch the text content of a specific message, given its channel JID
-   * and Slack timestamp. Used by the pipeline approval reacji handler to
-   * read the draft text from a team-channel PROPOSED REPLY before
-   * delivering the approved reply to the source thread.
-   */
-  async fetchMessageText(
-    jid: string,
-    messageId: string,
-  ): Promise<string | null> {
-    const channelId = jid.replace(/^slack:/, '');
-    if (!this.connected) return null;
-    try {
-      const res = await this.app.client.conversations.history({
-        channel: channelId,
-        latest: messageId,
-        oldest: messageId,
-        inclusive: true,
-        limit: 1,
+    const questionId = content.questionId;
+    const title = content.title;
+    const question = content.question;
+    const rawOptions = content.options;
+    if (
+      typeof questionId !== 'string' ||
+      typeof title !== 'string' ||
+      typeof question !== 'string' ||
+      !Array.isArray(rawOptions) ||
+      rawOptions.length === 0
+    ) {
+      log.warn('Slack ask_question: missing required fields', {
+        channel: toSlackChannelId(platformId),
+        questionId,
       });
-      const msg = res.messages?.[0];
-      if (!msg) return null;
-      if (msg.ts !== messageId) return null;
-      return msg.text ?? null;
-    } catch (err) {
-      logger.warn(
-        { jid, messageId, err },
-        'Failed to fetch Slack message text',
-      );
-      return null;
+      return undefined;
     }
-  }
-
-  isConnected(): boolean {
-    return this.connected;
-  }
-
-  ownsJid(jid: string): boolean {
-    return jid.startsWith('slack:');
-  }
-
-  async disconnect(): Promise<void> {
-    this.connected = false;
-    await this.app.stop();
-  }
-
-  // Slack does not expose a typing indicator API for bots.
-  // This no-op satisfies the Channel interface so the orchestrator
-  // doesn't need channel-specific branching.
-  async setTyping(_jid: string, _isTyping: boolean): Promise<void> {
-    // no-op: Slack Bot API has no typing indicator endpoint
-  }
-
-  /**
-   * Sync channel metadata from Slack.
-   * Fetches channels the bot is a member of and stores their names in the DB.
-   */
-  async syncChannelMetadata(): Promise<void> {
-    try {
-      logger.info('Syncing channel metadata from Slack...');
-      let cursor: string | undefined;
-      let count = 0;
-
-      do {
-        const result = await this.app.client.conversations.list({
-          types: 'public_channel,private_channel',
-          exclude_archived: true,
-          limit: 200,
-          cursor,
-        });
-
-        for (const ch of result.channels || []) {
-          if (ch.id && ch.name && ch.is_member) {
-            updateChatName(`slack:${ch.id}`, ch.name);
-            count++;
-          }
+    const options: AskQuestionOption[] = rawOptions
+      .map((o: unknown) => {
+        const obj = asObject(o);
+        if (!obj || typeof obj.value !== 'string' || typeof obj.label !== 'string') {
+          return null;
         }
+        return { value: obj.value, label: obj.label };
+      })
+      .filter((o): o is AskQuestionOption => o !== null);
 
-        cursor = result.response_metadata?.next_cursor || undefined;
-      } while (cursor);
-
-      logger.info({ count }, 'Slack channel metadata synced');
-    } catch (err) {
-      logger.error({ err }, 'Failed to sync Slack channel metadata');
+    if (options.length === 0) {
+      log.warn('Slack ask_question: no valid options', {
+        channel: toSlackChannelId(platformId),
+        questionId,
+      });
+      return undefined;
     }
-  }
 
-  private async resolveUserName(userId: string): Promise<string | undefined> {
-    if (!userId) return undefined;
+    askQuestionOptions.set(questionId, options);
 
-    const cached = this.userNameCache.get(userId);
-    if (cached) return cached;
+    const blocks = buildAskQuestionBlocks(questionId, title, question, options);
+    const fallback = `${title}\n\n${question}\nOptions: ${options.map((o) => o.label).join(', ')}`;
 
     try {
-      const result = await this.app.client.users.info({ user: userId });
-      const name = result.user?.real_name || result.user?.name;
-      if (name) this.userNameCache.set(userId, name);
-      return name;
+      const result = await shim.postMessage({
+        channel: toSlackChannelId(platformId),
+        ...(threadId ? { threadTs: threadId } : {}),
+        blocks,
+        text: fallback.slice(0, 4000),
+      });
+      return result.ts;
     } catch (err) {
-      logger.debug({ userId, err }, 'Failed to resolve Slack user name');
+      log.error('Slack ask_question post failed', {
+        channel: toSlackChannelId(platformId),
+        questionId,
+        err,
+      });
       return undefined;
     }
   }
 
-  private async flushOutgoingQueue(): Promise<void> {
-    if (this.flushing || this.outgoingQueue.length === 0) return;
-    this.flushing = true;
+  async function deliverEdit(platformId: string, content: Record<string, unknown>): Promise<string | undefined> {
+    if (!connected) {
+      log.warn('Slack disconnected, dropping edit (not queueable)', {
+        channel: toSlackChannelId(platformId),
+        messageId: content.messageId,
+      });
+      return undefined;
+    }
+    const messageId = content.messageId;
+    if (typeof messageId !== 'string') {
+      log.warn('Slack edit: missing messageId', { channel: platformId });
+      return undefined;
+    }
+    const text = extractText(content);
+    if (!text) {
+      log.warn('Slack edit: missing text/markdown', {
+        channel: toSlackChannelId(platformId),
+        messageId,
+      });
+      return undefined;
+    }
     try {
-      logger.info(
-        { count: this.outgoingQueue.length },
-        'Flushing Slack outgoing queue',
-      );
-      while (this.outgoingQueue.length > 0) {
-        const item = this.outgoingQueue.shift()!;
-        const channelId = item.jid.replace(/^slack:/, '');
-        const payload = markdownToSlackPayload(item.text);
-        await this.app.client.chat.postMessage({
-          channel: channelId,
-          ...payload,
-        });
-        logger.info(
-          { jid: item.jid, length: item.text.length },
-          'Queued Slack message sent',
-        );
-      }
-    } finally {
-      this.flushing = false;
+      await shim.editMessage({
+        channel: toSlackChannelId(platformId),
+        ts: messageId,
+        blocks: markdownToBlocks(text),
+        text: text.slice(0, 4000),
+      });
+      return messageId;
+    } catch (err) {
+      log.error('Slack edit failed', { channel: toSlackChannelId(platformId), messageId, err });
+      return undefined;
     }
   }
+
+  async function deliverReaction(platformId: string, content: Record<string, unknown>): Promise<string | undefined> {
+    if (!connected) {
+      log.warn('Slack disconnected, dropping reaction (not queueable)', {
+        channel: toSlackChannelId(platformId),
+        messageId: content.messageId,
+      });
+      return undefined;
+    }
+    const messageId = content.messageId;
+    const emoji = content.emoji;
+    if (typeof messageId !== 'string') {
+      log.warn('Slack reaction: missing messageId', { channel: platformId });
+      return undefined;
+    }
+    if (typeof emoji !== 'string') {
+      log.warn('Slack reaction: missing emoji', {
+        channel: toSlackChannelId(platformId),
+        messageId,
+      });
+      return undefined;
+    }
+    try {
+      await shim.addReaction({
+        channel: toSlackChannelId(platformId),
+        timestamp: messageId,
+        emoji,
+      });
+      return undefined;
+    } catch (err) {
+      log.error('Slack reaction failed', {
+        channel: toSlackChannelId(platformId),
+        messageId,
+        emoji,
+        err,
+      });
+      return undefined;
+    }
+  }
+
+  function handleSlackMessage(event: HandledMessageEvent): void {
+    const e = event as {
+      text?: string;
+      channel: string;
+      ts: string;
+      channel_type?: string;
+      user?: string;
+      bot_id?: string;
+    };
+    if (!e.text) return;
+
+    const platformId = e.channel;
+    const isGroup = e.channel_type !== 'im';
+
+    // Always report metadata for channel discovery, even for the bot's
+    // own posts (carry-across from v1 slack.ts:89). Bot self-posts then
+    // skip onInbound below — v2 has no is_bot_message field, and routing
+    // the bot's own outbound back through messages_in would cause the
+    // agent to see and potentially respond to its own replies.
+    config?.onMetadata(platformId, undefined, isGroup);
+
+    const isBotMessage = !!e.bot_id || (!!botUserId && e.user === botUserId);
+    if (isBotMessage) return;
+
+    const timestamp = new Date(parseFloat(e.ts) * 1000).toISOString();
+    const isMention = !!botUserId && e.text.includes(`<@${botUserId}>`);
+
+    void Promise.resolve(
+      config?.onInbound(platformId, null, {
+        id: e.ts,
+        kind: 'chat',
+        content: e.text,
+        timestamp,
+        isMention,
+        isGroup,
+      }),
+    ).catch((err) => {
+      log.error('Slack onInbound handler threw', {
+        channel: toSlackChannelId(platformId),
+        ts: e.ts,
+        err,
+      });
+    });
+  }
+
+  async function flushOutgoingQueue(): Promise<void> {
+    if (flushing || outgoingQueue.length === 0) return;
+    flushing = true;
+    try {
+      log.info('Flushing Slack outgoing queue', { count: outgoingQueue.length });
+      while (outgoingQueue.length > 0) {
+        const item = outgoingQueue.shift()!;
+        const payload = markdownToSlackPayload(item.text);
+        await shim.postMessage({
+          channel: toSlackChannelId(item.platformId),
+          ...(item.threadId ? { threadTs: item.threadId } : {}),
+          blocks: payload.blocks,
+          text: payload.text,
+        });
+        log.info('Queued Slack message sent', {
+          channel: toSlackChannelId(item.platformId),
+          length: item.text.length,
+        });
+      }
+    } finally {
+      flushing = false;
+    }
+  }
+
+  return {
+    name: 'slack',
+    channelType: 'slack',
+    supportsThreads: true,
+
+    async setup(c: ChannelSetup): Promise<void> {
+      config = c;
+      shim.onMessageEvent(handleSlackMessage);
+      shim.onReactionEvent(handleSlackReaction);
+      shim.onAction(handleAction);
+      await shim.start();
+      try {
+        botUserId = await shim.getBotUserId();
+        log.info('Connected to Slack', { botUserId });
+      } catch (err) {
+        log.warn('Connected to Slack but failed to get bot user ID', { err });
+      }
+      connected = true;
+      await flushOutgoingQueue();
+    },
+
+    async teardown(): Promise<void> {
+      connected = false;
+      await shim.stop();
+    },
+
+    isConnected(): boolean {
+      return connected;
+    },
+
+    async setTyping(_platformId: string, _threadId: string | null): Promise<void> {
+      // Slack Bot API has no typing-indicator endpoint.
+    },
+
+    async syncConversations(): Promise<ConversationInfo[]> {
+      const out: ConversationInfo[] = [];
+      let cursor: string | undefined;
+      try {
+        do {
+          const page: { channels: Array<{ id?: string; name?: string; is_member?: boolean }>; nextCursor?: string } =
+            await shim.listConversations({ cursor, limit: 200 });
+          for (const ch of page.channels) {
+            if (!ch.id || !ch.name) continue;
+            if (!ch.is_member) continue;
+            out.push({ platformId: ch.id, name: ch.name, isGroup: true });
+          }
+          cursor = page.nextCursor;
+        } while (cursor);
+      } catch (err) {
+        log.error('Failed to sync Slack channel metadata', { err });
+        return [];
+      }
+      log.info('Slack channel metadata synced', { count: out.length });
+      return out;
+    },
+
+    async backfillFromCursor(platformId: string, oldestTimestamp: string): Promise<InboundMessage[] | null> {
+      if (!connected) return null;
+      try {
+        const oldestTs = String(new Date(oldestTimestamp).getTime() / 1000);
+        const msgs = await shim.fetchChannelHistory({
+          channel: toSlackChannelId(platformId),
+          oldestTs,
+          limit: 100,
+          inclusive: false,
+        });
+        const out: InboundMessage[] = [];
+        for (const msg of msgs) {
+          if (!msg.text) continue;
+          if (msg.bot_id) continue;
+          if (botUserId && msg.user === botUserId) continue;
+          out.push({
+            id: msg.ts,
+            kind: 'chat',
+            content: msg.text,
+            timestamp: new Date(parseFloat(msg.ts) * 1000).toISOString(),
+            isMention: !!botUserId && msg.text.includes(`<@${botUserId}>`),
+          });
+        }
+        return out;
+      } catch (err) {
+        log.warn('Failed to backfill Slack channel history', {
+          channel: toSlackChannelId(platformId),
+          oldestTimestamp,
+          err,
+        });
+        return null;
+      }
+    },
+
+    async fetchThreadReplies(
+      platformId: string,
+      threadId: string,
+    ): Promise<Array<{ id: string; text: string | null }> | null> {
+      if (!connected) return null;
+      try {
+        const replies = await shim.fetchThreadReplies({
+          channel: toSlackChannelId(platformId),
+          threadTs: threadId,
+        });
+        return replies.map((r) => ({ id: r.ts, text: r.text ?? null }));
+      } catch (err) {
+        log.warn('Failed to fetch Slack thread replies', {
+          channel: toSlackChannelId(platformId),
+          threadId,
+          err,
+        });
+        return null;
+      }
+    },
+
+    async fetchMessageText(platformId: string, messageId: string): Promise<string | null> {
+      if (!connected) return null;
+      try {
+        const msg = await shim.fetchHistoryMessage({
+          channel: toSlackChannelId(platformId),
+          ts: messageId,
+        });
+        if (!msg || msg.ts !== messageId) return null;
+        return msg.text ?? null;
+      } catch (err) {
+        log.warn('Failed to fetch Slack message text', {
+          channel: toSlackChannelId(platformId),
+          messageId,
+          err,
+        });
+        return null;
+      }
+    },
+
+    async deliver(platformId: string, threadId: string | null, message: OutboundMessage): Promise<string | undefined> {
+      const obj = asObject(message.content);
+      if (obj) {
+        if (obj.type === 'ask_question') {
+          return deliverAskQuestion(platformId, threadId, obj);
+        }
+        if (obj.operation === 'edit') {
+          return deliverEdit(platformId, obj);
+        }
+        if (obj.operation === 'reaction') {
+          return deliverReaction(platformId, obj);
+        }
+      }
+
+      const text = extractText(message.content);
+      if (!text) {
+        log.warn('Slack deliver: unsupported content shape, skipping', {
+          channel: toSlackChannelId(platformId),
+          kind: message.kind,
+        });
+        return undefined;
+      }
+
+      if (!connected) {
+        outgoingQueue.push({ platformId, threadId, text });
+        log.info('Slack disconnected, message queued', {
+          channel: toSlackChannelId(platformId),
+          queueSize: outgoingQueue.length,
+        });
+        return undefined;
+      }
+
+      try {
+        const payload = markdownToSlackPayload(text);
+        const result = await shim.postMessage({
+          channel: toSlackChannelId(platformId),
+          ...(threadId ? { threadTs: threadId } : {}),
+          blocks: payload.blocks,
+          text: payload.text,
+        });
+        log.info('Slack message sent', { channel: toSlackChannelId(platformId), length: text.length });
+        return result.ts;
+      } catch (err) {
+        outgoingQueue.push({ platformId, threadId, text });
+        log.warn('Failed to send Slack message, queued', {
+          channel: toSlackChannelId(platformId),
+          err,
+          queueSize: outgoingQueue.length,
+        });
+        return undefined;
+      }
+    },
+  };
 }
 
-registerChannel('slack', (opts: ChannelOpts) => {
-  const envVars = readEnvFile(['SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN']);
-  if (!envVars.SLACK_BOT_TOKEN || !envVars.SLACK_APP_TOKEN) {
-    logger.warn('Slack: SLACK_BOT_TOKEN or SLACK_APP_TOKEN not set');
+/**
+ * Public factory: build a Slack adapter wired to a real Bolt App.
+ * Reads SLACK_BOT_TOKEN and SLACK_APP_TOKEN from process.env (Q2);
+ * returns null if either is missing so the channel registry can
+ * skip activation cleanly.
+ */
+export function createSlackAdapter(): ChannelAdapter | null {
+  const botToken = process.env.SLACK_BOT_TOKEN;
+  const appToken = process.env.SLACK_APP_TOKEN;
+  if (!botToken || !appToken) {
+    log.warn('Slack adapter disabled — SLACK_BOT_TOKEN and SLACK_APP_TOKEN must be set');
     return null;
   }
-  return new SlackChannel(opts);
-});
+  const shim = createBoltShim({ botToken, appToken });
+  return createSlackAdapterWithShim(shim);
+}
+
+registerChannelAdapter('slack', { factory: createSlackAdapter });

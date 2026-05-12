@@ -11,7 +11,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 import { CONTAINER_HOST_GATEWAY } from './container-runtime.js';
-import { logger } from './logger.js';
+import { log } from './log.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -72,9 +72,7 @@ export interface StdioContainerServerEntry {
   }>;
 }
 
-export type ContainerServerEntry =
-  | StdioContainerServerEntry
-  | RemoteContainerServerEntry;
+export type ContainerServerEntry = StdioContainerServerEntry | RemoteContainerServerEntry;
 
 // ---------------------------------------------------------------------------
 // Type guards
@@ -175,17 +173,9 @@ export function assembleSkillContent(skillPath: string): string | undefined {
  *
  * Returns the fully assembled markdown content or undefined.
  */
-export function resolveRemoteSkillContent(
-  serverName: string,
-  skill?: string,
-): string | undefined {
+export function resolveRemoteSkillContent(serverName: string, skill?: string): string | undefined {
   // Priority 1: Local skill directory (convention)
-  const conventionPath = path.join(
-    'container',
-    'skills',
-    serverName,
-    'SKILL.md',
-  );
+  const conventionPath = path.join('container', 'skills', serverName, 'SKILL.md');
   if (fs.existsSync(conventionPath)) {
     return assembleSkillContent(conventionPath);
   }
@@ -219,9 +209,7 @@ export function resolveRemoteSkillContent(
 export async function discoverRemoteToolSchemas(
   url: string,
   headers?: Record<string, string>,
-): Promise<
-  Array<{ name: string; description?: string; inputSchema: unknown }>
-> {
+): Promise<Array<{ name: string; description?: string; inputSchema: unknown }>> {
   const abortController = new AbortController();
   const timeout = setTimeout(() => abortController.abort(), 5_000);
 
@@ -250,10 +238,10 @@ export async function discoverRemoteToolSchemas(
     await client.close();
     return tools;
   } catch (err) {
-    logger.warn(
-      { url, err: err instanceof Error ? err.message : String(err) },
-      'Failed to discover remote MCP tool schemas',
-    );
+    log.warn('Failed to discover remote MCP tool schemas', {
+      url,
+      err: err instanceof Error ? err.message : String(err),
+    });
     return [];
   } finally {
     clearTimeout(timeout);

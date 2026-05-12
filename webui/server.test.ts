@@ -7,6 +7,7 @@ import os from 'node:os';
 
 import { createApp } from './server.js';
 import { initDb, closeDb } from './db.js';
+import { createV2Schema, seedAgentGroupWiring } from './test-helpers.js';
 
 let tmpDir: string;
 let groupsDir: string;
@@ -73,79 +74,43 @@ beforeEach(async () => {
   fs.writeFileSync(path.join(groupsDir, 'global', 'CLAUDE.md'), '# Global prompt', 'utf-8');
   fs.writeFileSync(path.join(groupsDir, 'slack_main', 'CLAUDE.md'), '# Slack prompt', 'utf-8');
 
-  const dbPath = path.join(tmpDir, 'messages.db');
+  const dbPath = path.join(tmpDir, 'v2.db');
   const db = new Database(dbPath);
-  db.exec(`
-    CREATE TABLE registered_groups (
-      jid TEXT PRIMARY KEY, name TEXT NOT NULL, folder TEXT NOT NULL UNIQUE,
-      trigger_pattern TEXT NOT NULL, added_at TEXT NOT NULL,
-      container_config TEXT, requires_trigger INTEGER DEFAULT 1,
-      is_main INTEGER DEFAULT 0, model TEXT DEFAULT NULL,
-      temperature REAL DEFAULT NULL,
-      max_tool_rounds INTEGER DEFAULT NULL, timeout_ms INTEGER DEFAULT NULL,
-      show_thinking INTEGER DEFAULT NULL,
-      mode TEXT NOT NULL DEFAULT 'active',
-      threading_mode TEXT NOT NULL DEFAULT 'temporal',
-      pipeline_replies_blocked INTEGER DEFAULT 0
-    );
-    CREATE TABLE scheduled_tasks (
-      id TEXT PRIMARY KEY, group_folder TEXT NOT NULL, chat_jid TEXT NOT NULL,
-      prompt TEXT NOT NULL, schedule_type TEXT NOT NULL, schedule_value TEXT NOT NULL,
-      next_run TEXT, last_run TEXT, last_result TEXT, status TEXT DEFAULT 'active',
-      created_at TEXT NOT NULL, context_mode TEXT DEFAULT 'isolated',
-      model TEXT DEFAULT NULL, temperature REAL DEFAULT NULL, timezone TEXT DEFAULT NULL,
-      max_tool_rounds INTEGER DEFAULT NULL, timeout_ms INTEGER DEFAULT NULL,
-      use_agent_sdk INTEGER DEFAULT 0,
-      allowed_tools TEXT, allowed_send_targets TEXT,
-      execution_mode TEXT NOT NULL DEFAULT 'container',
-      subscribed_event_types TEXT,
-      fallback_poll_ms INTEGER DEFAULT NULL
-    );
-    CREATE TABLE task_run_logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL,
-      run_at TEXT NOT NULL, duration_ms INTEGER NOT NULL, status TEXT NOT NULL,
-      result TEXT, error TEXT
-    );
-    CREATE TABLE events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, source_group TEXT NOT NULL,
-      source_task_id TEXT, payload TEXT NOT NULL, dedupe_key TEXT,
-      created_at TEXT NOT NULL, expires_at TEXT, status TEXT NOT NULL DEFAULT 'pending',
-      claimed_by TEXT, claimed_at TEXT, processed_at TEXT, result_note TEXT
-    );
-    CREATE TABLE pipeline_intake_log (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, event_id INTEGER NOT NULL,
-      raw_text_hash TEXT NOT NULL, source_type TEXT NOT NULL, source_group TEXT NOT NULL,
-      source_task_id TEXT, source_channel TEXT, source_message_id TEXT,
-      reason TEXT NOT NULL, submitted_at TEXT NOT NULL, processed_at TEXT, observation_id INTEGER
-    );
-    CREATE TABLE observed_messages (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, source_chat_jid TEXT, source_message_id TEXT,
-      source_type TEXT NOT NULL DEFAULT 'passive_channel', source_task_id TEXT, source_group TEXT,
-      intake_reason TEXT, intake_event_id INTEGER, thread_id TEXT, related_observation_ids TEXT,
-      raw_text TEXT NOT NULL, sanitised_json TEXT, sanitiser_model TEXT, sanitiser_version TEXT,
-      flags TEXT, created_at TEXT NOT NULL, sanitised_at TEXT
-    );
-    CREATE TABLE observation_labels (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, observation_id INTEGER NOT NULL,
-      labeller TEXT NOT NULL DEFAULT 'human', intent TEXT, form TEXT,
-      imperative_content TEXT, addressee TEXT, embedded_instructions TEXT,
-      adversarial_smell INTEGER, notes TEXT, expected_json TEXT,
-      created_at TEXT NOT NULL, updated_at TEXT
-    );
-  `);
-  db.prepare(`INSERT INTO registered_groups (jid, name, folder, trigger_pattern, added_at, requires_trigger, is_main) VALUES (?, ?, ?, ?, ?, 1, 1)`).run(
-    'main@s.whatsapp.net', 'Main Chat', 'whatsapp_main', '@Andy', '2024-01-01T00:00:00.000Z',
-  );
-  db.prepare(`INSERT INTO registered_groups (jid, name, folder, trigger_pattern, added_at, requires_trigger, is_main, model, max_tool_rounds, timeout_ms) VALUES (?, ?, ?, ?, ?, 1, 0, ?, ?, ?)`).run(
-    'slack@main', 'Slack Main', 'slack_main', '@Andy', '2024-01-02T00:00:00.000Z', 'sonnet', 10, 300000,
-  );
-  db.prepare(`INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, next_run, status, created_at, context_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+  createV2Schema(db);
+  seedAgentGroupWiring(db, {
+    agentGroupId: 'ag-main',
+    folder: 'whatsapp_main',
+    name: 'Main Chat',
+    channelType: 'whatsapp',
+    platformId: 'main@s.whatsapp.net',
+    engagePattern: '@Andy',
+    isMain: 1,
+  });
+  seedAgentGroupWiring(db, {
+    agentGroupId: 'ag-slack',
+    folder: 'slack_main',
+    name: 'Slack Main',
+    channelType: 'slack',
+    platformId: 'slack@main',
+    engagePattern: '@Andy',
+    isMain: 1,
+    model: 'sonnet',
+    maxToolRounds: 10,
+    timeoutMs: 300000,
+  });
+
+  db.prepare(
+    `INSERT INTO pipeline_scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value,
+       next_run, status, created_at, context_mode)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
     'task-1', 'slack_main', 'slack@main', 'Daily standup', 'cron', '0 9 * * 1-5',
     '2024-06-03T09:00:00.000Z', 'active', '2024-01-01T00:00:00.000Z', 'group',
   );
-  db.prepare(`INSERT INTO task_run_logs (task_id, run_at, duration_ms, status, result, error) VALUES (?, ?, ?, ?, ?, ?)`).run(
-    'task-1', '2024-06-02T09:00:00.000Z', 4500, 'success', 'Done', null,
-  );
+  db.prepare(
+    `INSERT INTO pipeline_task_run_logs (task_id, run_at, duration_ms, status, result, error)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run('task-1', '2024-06-02T09:00:00.000Z', 4500, 'success', 'Done', null);
   db.close();
   initDb(dbPath);
 
@@ -175,42 +140,76 @@ describe('GET /api/v1/health', () => {
   });
 });
 
-// --- Groups ---
+// --- Agent groups (Q7=β agent-group-primary) ---
 
-describe('GET /api/v1/groups', () => {
-  it('returns all groups', async () => {
-    const { status, body } = await get('/api/v1/groups');
+describe('GET /api/v1/agent-groups', () => {
+  it('returns all agent groups', async () => {
+    const { status, body } = await get('/api/v1/agent-groups');
     expect(status).toBe(200);
     expect(body).toHaveLength(2);
+    expect(body[0].folder).toBeTruthy();
+    expect(body[0].wiringCount).toBeGreaterThanOrEqual(0);
   });
 });
 
-describe('GET /api/v1/groups/:folder', () => {
-  it('returns a single group', async () => {
-    const { status, body } = await get('/api/v1/groups/slack_main');
+describe('GET /api/v1/agent-groups/:folder', () => {
+  it('returns detail with inline wirings', async () => {
+    const { status, body } = await get('/api/v1/agent-groups/slack_main');
     expect(status).toBe(200);
     expect(body.folder).toBe('slack_main');
-    expect(body.model).toBe('sonnet');
+    expect(Array.isArray(body.wirings)).toBe(true);
+    expect(body.wirings).toHaveLength(1);
+    expect(body.wirings[0].isMain).toBe(true);
+    expect(body.wirings[0].model).toBe('sonnet');
+    expect(body.wirings[0].platformId).toBe('slack@main');
   });
 
-  it('returns 404 for non-existent group', async () => {
-    const { status } = await get('/api/v1/groups/nonexistent');
+  it('returns 404 for non-existent agent group', async () => {
+    const { status } = await get('/api/v1/agent-groups/nonexistent');
     expect(status).toBe(404);
   });
 
   it('returns 400 for invalid folder name', async () => {
-    const { status } = await get('/api/v1/groups/..%2Fetc');
+    const { status } = await get('/api/v1/agent-groups/..%2Fetc');
     expect(status).toBe(400);
   });
 });
 
-describe('PATCH /api/v1/groups/:folder', () => {
-  it('updates group model', async () => {
-    const { status, body } = await request('PATCH', '/api/v1/groups/slack_main', {
+describe('PATCH /api/v1/agent-groups/:folder', () => {
+  it('updates the main wiring model', async () => {
+    const { status, body } = await request('PATCH', '/api/v1/agent-groups/slack_main', {
       model: 'haiku',
     });
     expect(status).toBe(200);
-    expect(body.model).toBe('haiku');
+    const main = body.wirings.find((w: { isMain: boolean }) => w.isMain);
+    expect(main.model).toBe('haiku');
+  });
+});
+
+// --- Messaging groups (secondary nav; reverse wirings) ---
+
+describe('GET /api/v1/messaging-groups', () => {
+  it('returns all messaging groups', async () => {
+    const { status, body } = await get('/api/v1/messaging-groups');
+    expect(status).toBe(200);
+    expect(body.length).toBeGreaterThanOrEqual(2);
+    expect(body[0].platformId).toBeTruthy();
+    expect(body[0].channelType).toBeTruthy();
+  });
+});
+
+describe('GET /api/v1/messaging-groups/:id', () => {
+  it('returns detail with wired agent groups (reverse lookup)', async () => {
+    const { status, body } = await get('/api/v1/messaging-groups/mg-ag-slack');
+    expect(status).toBe(200);
+    expect(body.id).toBe('mg-ag-slack');
+    expect(Array.isArray(body.wiredAgentGroups)).toBe(true);
+    expect(body.wiredAgentGroups[0].folder).toBe('slack_main');
+  });
+
+  it('returns 404 for non-existent id', async () => {
+    const { status } = await get('/api/v1/messaging-groups/nope');
+    expect(status).toBe(404);
   });
 });
 
@@ -239,22 +238,22 @@ describe('PUT /api/v1/prompts/global', () => {
   });
 });
 
-describe('GET /api/v1/groups/:folder/prompts', () => {
+describe('GET /api/v1/agent-groups/:folder/prompts', () => {
   it('returns group prompts', async () => {
-    const { status, body } = await get('/api/v1/groups/slack_main/prompts');
+    const { status, body } = await get('/api/v1/agent-groups/slack_main/prompts');
     expect(status).toBe(200);
     expect(body.claude).toBe('# Slack prompt');
   });
 
   it('returns 404 for non-existent group', async () => {
-    const { status } = await get('/api/v1/groups/nonexistent/prompts');
+    const { status } = await get('/api/v1/agent-groups/nonexistent/prompts');
     expect(status).toBe(404);
   });
 });
 
-describe('PUT /api/v1/groups/:folder/prompts', () => {
+describe('PUT /api/v1/agent-groups/:folder/prompts', () => {
   it('updates group prompts', async () => {
-    const { status, body } = await request('PUT', '/api/v1/groups/slack_main/prompts', {
+    const { status, body } = await request('PUT', '/api/v1/agent-groups/slack_main/prompts', {
       claude: 'new slack prompt',
     });
     expect(status).toBe(200);
@@ -264,9 +263,9 @@ describe('PUT /api/v1/groups/:folder/prompts', () => {
 
 // --- Tasks ---
 
-describe('GET /api/v1/groups/:folder/tasks', () => {
+describe('GET /api/v1/agent-groups/:folder/tasks', () => {
   it('returns tasks for a group', async () => {
-    const { status, body } = await get('/api/v1/groups/slack_main/tasks');
+    const { status, body } = await get('/api/v1/agent-groups/slack_main/tasks');
     expect(status).toBe(200);
     expect(body).toHaveLength(1);
     expect(body[0].scheduleType).toBe('cron');

@@ -10,13 +10,44 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
 import { DATA_DIR } from './config.js';
-import { logger } from './logger.js';
+import { log } from './log.js';
 import type { StdioMcpServerEntry } from './remote-mcp.js';
+
+// Shared env-var allow-list — see container/agent-runner/src/mcp-safe-env.json
+// for the docstring. Loaded at module init from the container tree
+// because that's the canonical location (container builds include it
+// as part of the agent-runner-src staging). Both host and container
+// agree on exactly the same list.
+const MCP_SAFE_ENV_KEYS: string[] = (() => {
+  // __dirname at runtime is nanoclaw/dist/. The container source
+  // file is two levels up, then into container/agent-runner/src.
+  // At dev time (tests) the module resolves via tsx and __dirname
+  // is nanoclaw/src/ — same relative path works.
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    path.join(here, '..', 'container', 'agent-runner', 'src', 'mcp-safe-env.json'),
+    path.join(here, '..', '..', 'container', 'agent-runner', 'src', 'mcp-safe-env.json'),
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) {
+      const data = JSON.parse(fs.readFileSync(p, 'utf-8')) as {
+        safe_keys: string[];
+      };
+      return data.safe_keys;
+    }
+  }
+  log.error(
+    'mcp-safe-env.json not found — falling back to a narrow default; playwright-using MCP servers may fail to locate browsers',
+    { candidates },
+  );
+  return ['PATH', 'HOME', 'NODE_ENV'];
+})();
 
 export interface InvokeMcpToolArgs {
   server: string;
@@ -54,19 +85,21 @@ function loadMcpServersFile(): McpServersFile {
     const parsed = JSON.parse(raw);
     return { servers: parsed.servers ?? {} };
   } catch (err) {
-    logger.error({ configPath, err }, 'Failed to load mcp-servers.json');
+    log.error('Failed to load mcp-servers.json', { configPath, err });
     return { servers: {} };
   }
 }
 
-function resolveStdioServer(serverName: string): StdioMcpServerEntry {
+interface HostStdioEntry {
+  entry: StdioMcpServerEntry;
+  hostEnv: Record<string, string> | undefined;
+}
+
+function resolveStdioServer(serverName: string): HostStdioEntry {
   const { servers } = loadMcpServersFile();
   const entry = servers[serverName];
   if (!entry) {
-    throw new McpInvokerError(
-      `MCP server "${serverName}" not found in mcp-servers.json`,
-      'server-not-found',
-    );
+    throw new McpInvokerError(`MCP server "${serverName}" not found in mcp-servers.json`, 'server-not-found');
   }
   if ('url' in entry) {
     throw new McpInvokerError(
@@ -75,18 +108,26 @@ function resolveStdioServer(serverName: string): StdioMcpServerEntry {
     );
   }
   if (typeof entry.hostPath !== 'string' || typeof entry.command !== 'string') {
-    throw new McpInvokerError(
-      `MCP server "${serverName}" entry is missing hostPath or command`,
-      'server-not-stdio',
-    );
+    throw new McpInvokerError(`MCP server "${serverName}" entry is missing hostPath or command`, 'server-not-stdio');
   }
-  return entry as unknown as StdioMcpServerEntry;
+  // Optional `hostEnv` field (not part of the container-runner schema)
+  // lets local invocations inject env vars the MCP server needs but
+  // that aren't exported to the parent nanoclaw process. Values are
+  // passed through verbatim; operator is responsible for keeping the
+  // mcp-servers.json file correct.
+  let hostEnv: Record<string, string> | undefined;
+  const raw = (entry as Record<string, unknown>).hostEnv;
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const accum: Record<string, string> = {};
+    for (const [k, v] of Object.entries(raw)) {
+      if (typeof v === 'string') accum[k] = v;
+    }
+    if (Object.keys(accum).length > 0) hostEnv = accum;
+  }
+  return { entry: entry as unknown as StdioMcpServerEntry, hostEnv };
 }
 
-export function toolIsAllowed(
-  entry: Pick<StdioMcpServerEntry, 'tools'>,
-  toolName: string,
-): boolean {
+export function toolIsAllowed(entry: Pick<StdioMcpServerEntry, 'tools'>, toolName: string): boolean {
   const tools = entry.tools;
   if (Array.isArray(tools)) return tools.includes(toolName);
   return Object.values(tools).some((list) => list.includes(toolName));
@@ -105,17 +146,11 @@ export function parseToolResult(result: unknown): unknown {
   };
   if (r?.isError) {
     const text = r.content?.[0]?.text ?? '(no text)';
-    throw new McpInvokerError(
-      `MCP tool returned isError=true: ${text.slice(0, 500)}`,
-      'tool-error',
-    );
+    throw new McpInvokerError(`MCP tool returned isError=true: ${text.slice(0, 500)}`, 'tool-error');
   }
   const first = r?.content?.[0];
   if (!first || first.type !== 'text' || typeof first.text !== 'string') {
-    throw new McpInvokerError(
-      'MCP tool response missing text content part',
-      'malformed-response',
-    );
+    throw new McpInvokerError('MCP tool response missing text content part', 'malformed-response');
   }
   try {
     return JSON.parse(first.text);
@@ -132,42 +167,55 @@ export function parseToolResult(result: unknown): unknown {
  * response, terminate. Designed for use from host_pipeline tasks
  * where the caller has no long-lived MCP client.
  */
-export async function invokeMcpTool(
-  params: InvokeMcpToolArgs,
-  timeoutMs = 15_000,
-): Promise<unknown> {
-  const entry = resolveStdioServer(params.server);
+// Ceiling is driven by the slowest tool a trivial-answer shape is
+// allowed to call. Browser-driven checks (pagepilot-style stored
+// scripts) routinely take 60–90 s on a live page. Fast health-probe
+// MCP tools return in under 5 s and aren't affected by the raised
+// ceiling.
+export async function invokeMcpTool(params: InvokeMcpToolArgs, timeoutMs = 120_000): Promise<unknown> {
+  const { entry, hostEnv } = resolveStdioServer(params.server);
   if (!toolIsAllowed(entry, params.name)) {
-    throw new McpInvokerError(
-      `Tool "${params.name}" is not listed for server "${params.server}"`,
-      'tool-not-allowed',
-    );
+    throw new McpInvokerError(`Tool "${params.name}" is not listed for server "${params.server}"`, 'tool-not-allowed');
   }
+
+  // Build env from the shared MCP_SAFE_ENV_KEYS allow-list plus
+  // any per-server hostEnv overrides from mcp-servers.json.
+  // getDefaultEnvironment() remains the lowest layer so irrelevant
+  // but non-sensitive vars the SDK exposes still pass through.
+  const safeFromProcess: Record<string, string> = {};
+  for (const key of MCP_SAFE_ENV_KEYS) {
+    const v = process.env[key];
+    if (v !== undefined) safeFromProcess[key] = v;
+  }
+  const envPayload: Record<string, string> = {
+    ...getDefaultEnvironment(),
+    ...safeFromProcess,
+    ...(hostEnv ?? {}),
+  };
 
   const transport = new StdioClientTransport({
     command: entry.command,
     args: entry.args,
     cwd: entry.hostPath,
+    env: envPayload,
   });
 
-  const client = new Client(
-    { name: 'nanoclaw-host-invoker', version: '0.1.0' },
-    { capabilities: {} },
-  );
+  const client = new Client({ name: 'nanoclaw-host-invoker', version: '0.1.0' }, { capabilities: {} });
 
   try {
     await client.connect(transport);
+    // SDK's own request timeout defaults to 60s, which aborts any
+    // tool that takes longer (pagepilot widget runs routinely take
+    // 60–90s). Pass it explicitly, matching the outer timeoutMs plus
+    // a small buffer so the outer Promise.race fires first with a
+    // clearer error message.
     const result = await Promise.race([
-      client.callTool({ name: params.name, arguments: params.args ?? {} }),
+      client.callTool({ name: params.name, arguments: params.args ?? {} }, undefined, {
+        timeout: timeoutMs + 5_000,
+      }),
       new Promise<never>((_, reject) =>
         setTimeout(
-          () =>
-            reject(
-              new McpInvokerError(
-                `MCP tool call timed out after ${timeoutMs} ms`,
-                'transport-error',
-              ),
-            ),
+          () => reject(new McpInvokerError(`MCP tool call timed out after ${timeoutMs} ms`, 'transport-error')),
           timeoutMs,
         ),
       ),
@@ -176,10 +224,7 @@ export async function invokeMcpTool(
   } catch (err) {
     if (err instanceof McpInvokerError) throw err;
     const message = err instanceof Error ? err.message : String(err);
-    throw new McpInvokerError(
-      `MCP transport error: ${message}`,
-      'transport-error',
-    );
+    throw new McpInvokerError(`MCP transport error: ${message}`, 'transport-error');
   } finally {
     try {
       await client.close();

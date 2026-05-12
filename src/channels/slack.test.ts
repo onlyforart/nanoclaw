@@ -1,839 +1,1209 @@
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 
-// --- Mocks ---
+import type { ChannelSetup } from './adapter.js';
+import { getRegisteredChannelNames } from './channel-registry.js';
+import { createSlackAdapter, createSlackAdapterWithShim } from './slack.js';
+import type {
+  ActionHandler,
+  BoltShim,
+  HandledMessageEvent,
+  MessageHandler,
+  ReactionAddedEvent,
+  ReactionHandler,
+} from './slack-bolt-shim.js';
 
-// Mock registry (registerChannel runs at import time)
-vi.mock('./registry.js', () => ({ registerChannel: vi.fn() }));
-
-// Mock config
-vi.mock('../config.js', () => ({
-  ASSISTANT_NAME: 'Jonesy',
-  TRIGGER_PATTERN: /^@Jonesy\b/i,
-}));
-
-// Mock logger
-vi.mock('../logger.js', () => ({
-  logger: {
-    debug: vi.fn(),
+vi.mock('../log.js', () => ({
+  log: {
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
+    debug: vi.fn(),
+    fatal: vi.fn(),
   },
 }));
 
-// Mock db
-vi.mock('../db.js', () => ({
-  updateChatName: vi.fn(),
-}));
-
-// --- @slack/bolt mock ---
-
-type Handler = (...args: any[]) => any;
-
-const appRef = vi.hoisted(() => ({ current: null as any }));
-
-vi.mock('@slack/bolt', () => ({
-  App: class MockApp {
-    eventHandlers = new Map<string, Handler>();
-    token: string;
-    appToken: string;
-
-    client = {
-      auth: {
-        test: vi.fn().mockResolvedValue({ user_id: 'U_BOT_123' }),
-      },
-      chat: {
-        postMessage: vi.fn().mockResolvedValue(undefined),
-      },
-      conversations: {
-        list: vi.fn().mockResolvedValue({
-          channels: [],
-          response_metadata: {},
-        }),
-      },
-      users: {
-        info: vi.fn().mockResolvedValue({
-          user: { real_name: 'Alice Smith', name: 'alice' },
-        }),
-      },
-    };
-
-    constructor(opts: any) {
-      this.token = opts.token;
-      this.appToken = opts.appToken;
-      appRef.current = this;
-    }
-
-    event(name: string, handler: Handler) {
-      this.eventHandlers.set(name, handler);
-    }
-
-    async start() {}
-    async stop() {}
-  },
-  LogLevel: { ERROR: 'error' },
-}));
-
-// Mock env
-vi.mock('../env.js', () => ({
-  readEnvFile: vi.fn().mockReturnValue({
-    SLACK_BOT_TOKEN: 'xoxb-test-token',
-    SLACK_APP_TOKEN: 'xapp-test-token',
-  }),
-}));
-
-import { SlackChannel, SlackChannelOpts } from './slack.js';
-import { updateChatName } from '../db.js';
-import { readEnvFile } from '../env.js';
-
-// --- Test helpers ---
-
-function createTestOpts(
-  overrides?: Partial<SlackChannelOpts>,
-): SlackChannelOpts {
+function makeMockShim(overrides: Partial<BoltShim> = {}): BoltShim {
   return {
-    onMessage: vi.fn(),
-    onChatMetadata: vi.fn(),
-    registeredGroups: vi.fn(() => ({
-      'slack:C0123456789': {
-        name: 'Test Channel',
-        folder: 'test-channel',
-        trigger: '@Jonesy',
-        added_at: '2024-01-01T00:00:00.000Z',
-      },
+    start: vi.fn<BoltShim['start']>(async () => {}),
+    stop: vi.fn<BoltShim['stop']>(async () => {}),
+    getBotUserId: vi.fn<BoltShim['getBotUserId']>(async () => 'U_BOT_123'),
+    postMessage: vi.fn<BoltShim['postMessage']>(async () => ({
+      ts: '1234.5678',
+    })),
+    editMessage: vi.fn<BoltShim['editMessage']>(async () => {}),
+    addReaction: vi.fn<BoltShim['addReaction']>(async () => {}),
+    onMessageEvent: vi.fn<BoltShim['onMessageEvent']>(),
+    onReactionEvent: vi.fn<BoltShim['onReactionEvent']>(),
+    onAction: vi.fn<BoltShim['onAction']>(),
+    fetchHistoryMessage: vi.fn<BoltShim['fetchHistoryMessage']>(async () => null),
+    fetchThreadReplies: vi.fn<BoltShim['fetchThreadReplies']>(async () => []),
+    fetchChannelHistory: vi.fn<BoltShim['fetchChannelHistory']>(async () => []),
+    listConversations: vi.fn<BoltShim['listConversations']>(async () => ({
+      channels: [],
     })),
     ...overrides,
   };
 }
 
-function createMessageEvent(overrides: {
-  channel?: string;
-  channelType?: string;
-  user?: string;
-  text?: string;
-  ts?: string;
-  threadTs?: string;
-  subtype?: string;
-  botId?: string;
-}) {
+const noopSetup = {} as ChannelSetup;
+
+function makeChannelSetup(overrides: Partial<ChannelSetup> = {}): ChannelSetup {
   return {
-    channel: overrides.channel ?? 'C0123456789',
-    channel_type: overrides.channelType ?? 'channel',
-    user: overrides.user ?? 'U_USER_456',
-    text: 'text' in overrides ? overrides.text : 'Hello everyone',
-    ts: overrides.ts ?? '1704067200.000000',
-    thread_ts: overrides.threadTs,
-    subtype: overrides.subtype,
-    bot_id: overrides.botId,
+    onInbound: vi.fn(),
+    onInboundEvent: vi.fn(),
+    onMetadata: vi.fn(),
+    onAction: vi.fn(),
+    ...overrides,
   };
 }
 
-function currentApp() {
-  return appRef.current;
+function makeMessageEvent(overrides: Record<string, unknown> = {}): HandledMessageEvent {
+  return {
+    type: 'message',
+    channel: 'C_DEFAULT',
+    channel_type: 'channel',
+    ts: '1701000000.000000',
+    event_ts: '1701000000.000000',
+    team: 'T_TEAM',
+    user: 'U_USER',
+    text: 'Hello',
+    ...overrides,
+  } as unknown as HandledMessageEvent;
 }
 
-async function triggerMessageEvent(
-  event: ReturnType<typeof createMessageEvent>,
-) {
-  const handler = currentApp().eventHandlers.get('message');
-  if (handler) await handler({ event });
+async function setupAdapterWithMessageHandler(shim: BoltShim, config: ChannelSetup): Promise<MessageHandler> {
+  const adapter = createSlackAdapterWithShim(shim);
+  await adapter.setup(config);
+  const calls = (shim.onMessageEvent as ReturnType<typeof vi.fn>).mock.calls;
+  return calls[0][0] as MessageHandler;
 }
 
-// --- Tests ---
-
-describe('SlackChannel', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+describe('createSlackAdapterWithShim', () => {
+  it('exposes channel adapter metadata', () => {
+    const adapter = createSlackAdapterWithShim(makeMockShim());
+    expect(adapter.name).toBe('slack');
+    expect(adapter.channelType).toBe('slack');
+    expect(adapter.supportsThreads).toBe(true);
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
+  it('starts disconnected', () => {
+    const adapter = createSlackAdapterWithShim(makeMockShim());
+    expect(adapter.isConnected()).toBe(false);
   });
 
-  // --- Connection lifecycle ---
+  it('setup() starts the shim, fetches botUserId, and marks connected', async () => {
+    const shim = makeMockShim();
+    const adapter = createSlackAdapterWithShim(shim);
 
-  describe('connection lifecycle', () => {
-    it('resolves connect() when app starts', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
+    await adapter.setup(noopSetup);
 
-      await channel.connect();
-
-      expect(channel.isConnected()).toBe(true);
-    });
-
-    it('registers message event handler on construction', () => {
-      const opts = createTestOpts();
-      new SlackChannel(opts);
-
-      expect(currentApp().eventHandlers.has('message')).toBe(true);
-    });
-
-    it('gets bot user ID on connect', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
-
-      await channel.connect();
-
-      expect(currentApp().client.auth.test).toHaveBeenCalled();
-    });
-
-    it('disconnects cleanly', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
-
-      await channel.connect();
-      expect(channel.isConnected()).toBe(true);
-
-      await channel.disconnect();
-      expect(channel.isConnected()).toBe(false);
-    });
-
-    it('isConnected() returns false before connect', () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
-
-      expect(channel.isConnected()).toBe(false);
-    });
+    expect(shim.start).toHaveBeenCalledOnce();
+    expect(shim.getBotUserId).toHaveBeenCalledOnce();
+    expect(adapter.isConnected()).toBe(true);
   });
 
-  // --- Message handling ---
+  it('setup() tolerates getBotUserId rejection', async () => {
+    const shim = makeMockShim({
+      getBotUserId: vi.fn<BoltShim['getBotUserId']>().mockRejectedValue(new Error('auth.test failed')),
+    });
+    const adapter = createSlackAdapterWithShim(shim);
 
-  describe('message handling', () => {
-    it('delivers message for registered channel', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
-      await channel.connect();
+    await expect(adapter.setup(noopSetup)).resolves.toBeUndefined();
+    expect(adapter.isConnected()).toBe(true);
+  });
 
-      const event = createMessageEvent({ text: 'Hello everyone' });
-      await triggerMessageEvent(event);
+  it('teardown() stops the shim and marks disconnected', async () => {
+    const shim = makeMockShim();
+    const adapter = createSlackAdapterWithShim(shim);
 
-      expect(opts.onChatMetadata).toHaveBeenCalledWith(
-        'slack:C0123456789',
-        expect.any(String),
-        undefined,
-        'slack',
-        true,
-      );
-      expect(opts.onMessage).toHaveBeenCalledWith(
-        'slack:C0123456789',
-        expect.objectContaining({
-          id: '1704067200.000000',
-          chat_jid: 'slack:C0123456789',
-          sender: 'U_USER_456',
-          content: 'Hello everyone',
-          is_from_me: false,
-        }),
-      );
+    await adapter.setup(noopSetup);
+    expect(adapter.isConnected()).toBe(true);
+
+    await adapter.teardown();
+
+    expect(shim.stop).toHaveBeenCalledOnce();
+    expect(adapter.isConnected()).toBe(false);
+  });
+});
+
+describe('createSlackAdapterWithShim — deliver', () => {
+  it('returns undefined and queues when not connected', async () => {
+    const shim = makeMockShim();
+    const adapter = createSlackAdapterWithShim(shim);
+
+    const result = await adapter.deliver('C123', null, {
+      kind: 'chat',
+      content: 'Hello world',
     });
 
-    it('only emits metadata for unregistered channels', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
-      await channel.connect();
+    expect(result).toBeUndefined();
+    expect(shim.postMessage).not.toHaveBeenCalled();
+  });
 
-      const event = createMessageEvent({ channel: 'C9999999999' });
-      await triggerMessageEvent(event);
+  it('posts and returns ts when connected (string content)', async () => {
+    const shim = makeMockShim();
+    const adapter = createSlackAdapterWithShim(shim);
+    await adapter.setup(noopSetup);
 
-      expect(opts.onChatMetadata).toHaveBeenCalledWith(
-        'slack:C9999999999',
-        expect.any(String),
-        undefined,
-        'slack',
-        true,
-      );
-      expect(opts.onMessage).not.toHaveBeenCalled();
+    const result = await adapter.deliver('C123', null, {
+      kind: 'chat',
+      content: 'Hello world',
     });
 
-    it('skips non-text subtypes (channel_join, etc.)', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
-      await channel.connect();
+    expect(result).toBe('1234.5678');
+    expect(shim.postMessage).toHaveBeenCalledWith(expect.objectContaining({ channel: 'C123' }));
+  });
 
-      const event = createMessageEvent({ subtype: 'channel_join' });
-      await triggerMessageEvent(event);
+  it('extracts text from {markdown} content', async () => {
+    const shim = makeMockShim();
+    const adapter = createSlackAdapterWithShim(shim);
+    await adapter.setup(noopSetup);
 
-      expect(opts.onMessage).not.toHaveBeenCalled();
-      expect(opts.onChatMetadata).not.toHaveBeenCalled();
+    await adapter.deliver('C123', null, {
+      kind: 'chat',
+      content: { markdown: '**Bold** msg' },
     });
 
-    it('allows bot_message subtype through', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
-      await channel.connect();
+    expect(shim.postMessage).toHaveBeenCalledWith(expect.objectContaining({ channel: 'C123' }));
+  });
 
-      const event = createMessageEvent({
-        subtype: 'bot_message',
-        botId: 'B_OTHER_BOT',
-        text: 'Bot message',
-      });
-      await triggerMessageEvent(event);
+  it('extracts text from {text} content', async () => {
+    const shim = makeMockShim();
+    const adapter = createSlackAdapterWithShim(shim);
+    await adapter.setup(noopSetup);
 
-      expect(opts.onChatMetadata).toHaveBeenCalled();
+    await adapter.deliver('C123', null, {
+      kind: 'chat',
+      content: { text: 'plain' },
     });
 
-    it('skips messages with no text', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
-      await channel.connect();
+    expect(shim.postMessage).toHaveBeenCalledOnce();
+  });
 
-      const event = createMessageEvent({ text: undefined as any });
-      await triggerMessageEvent(event);
+  it('passes thread_ts when threadId provided', async () => {
+    const shim = makeMockShim();
+    const adapter = createSlackAdapterWithShim(shim);
+    await adapter.setup(noopSetup);
 
-      expect(opts.onMessage).not.toHaveBeenCalled();
+    await adapter.deliver('C123', 'T999', {
+      kind: 'chat',
+      content: 'Hello',
     });
 
-    it('detects bot messages by bot_id', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
-      await channel.connect();
+    expect(shim.postMessage).toHaveBeenCalledWith(expect.objectContaining({ channel: 'C123', threadTs: 'T999' }));
+  });
 
-      const event = createMessageEvent({
-        subtype: 'bot_message',
-        botId: 'B_MY_BOT',
-        text: 'Bot response',
-      });
-      await triggerMessageEvent(event);
+  it('queues and returns undefined on postMessage failure', async () => {
+    const shim = makeMockShim({
+      postMessage: vi.fn<BoltShim['postMessage']>().mockRejectedValue(new Error('rate limited')),
+    });
+    const adapter = createSlackAdapterWithShim(shim);
+    await adapter.setup(noopSetup);
 
-      // Has bot_id so should be marked as bot message
-      expect(opts.onMessage).toHaveBeenCalledWith(
-        'slack:C0123456789',
-        expect.objectContaining({
-          is_from_me: true,
-          is_bot_message: true,
-          sender_name: 'Jonesy',
-        }),
-      );
+    const result = await adapter.deliver('C123', null, {
+      kind: 'chat',
+      content: 'Hello',
     });
 
-    it('detects bot messages by matching bot user ID', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
-      await channel.connect();
+    expect(result).toBeUndefined();
+  });
 
-      const event = createMessageEvent({
+  it('skips when content has no text/markdown and no recognised operation', async () => {
+    const shim = makeMockShim();
+    const adapter = createSlackAdapterWithShim(shim);
+    await adapter.setup(noopSetup);
+
+    const result = await adapter.deliver('C123', null, {
+      kind: 'chat',
+      content: { someOtherField: 'no recognised text' },
+    });
+
+    expect(result).toBeUndefined();
+    expect(shim.postMessage).not.toHaveBeenCalled();
+  });
+
+  it('flushes queued messages on setup', async () => {
+    const shim = makeMockShim();
+    const adapter = createSlackAdapterWithShim(shim);
+
+    await adapter.deliver('C1', null, { kind: 'chat', content: 'first' });
+    await adapter.deliver('C2', 'T2', { kind: 'chat', content: 'second' });
+
+    expect(shim.postMessage).not.toHaveBeenCalled();
+
+    await adapter.setup(noopSetup);
+
+    expect(shim.postMessage).toHaveBeenCalledTimes(2);
+    expect(shim.postMessage).toHaveBeenNthCalledWith(1, expect.objectContaining({ channel: 'C1' }));
+    expect(shim.postMessage).toHaveBeenNthCalledWith(2, expect.objectContaining({ channel: 'C2', threadTs: 'T2' }));
+  });
+});
+
+describe('createSlackAdapterWithShim — onInbound (message events)', () => {
+  it('forwards a regular message to onInbound and onMetadata', async () => {
+    const shim = makeMockShim();
+    const setup = makeChannelSetup();
+    const handler = await setupAdapterWithMessageHandler(shim, setup);
+
+    handler(makeMessageEvent({ channel: 'C123', user: 'U1', text: 'hi' }));
+
+    expect(setup.onMetadata).toHaveBeenCalledWith('C123', undefined, true);
+    expect(setup.onInbound).toHaveBeenCalledWith(
+      'C123',
+      null,
+      expect.objectContaining({
+        id: '1701000000.000000',
+        kind: 'chat',
+        content: 'hi',
+        isMention: false,
+        isGroup: true,
+      }),
+    );
+  });
+
+  it('marks isMention=true when bot user id appears in text', async () => {
+    const shim = makeMockShim();
+    const setup = makeChannelSetup();
+    const handler = await setupAdapterWithMessageHandler(shim, setup);
+
+    handler(makeMessageEvent({ text: 'hey <@U_BOT_123> can you help?' }));
+
+    expect(setup.onInbound).toHaveBeenCalledWith(
+      expect.any(String),
+      null,
+      expect.objectContaining({ isMention: true }),
+    );
+  });
+
+  it('marks isGroup=false for direct messages (channel_type=im)', async () => {
+    const shim = makeMockShim();
+    const setup = makeChannelSetup();
+    const handler = await setupAdapterWithMessageHandler(shim, setup);
+
+    handler(makeMessageEvent({ channel_type: 'im' }));
+
+    expect(setup.onInbound).toHaveBeenCalledWith(expect.any(String), null, expect.objectContaining({ isGroup: false }));
+    expect(setup.onMetadata).toHaveBeenCalledWith(expect.any(String), undefined, false);
+  });
+
+  it('skips bot messages from onInbound but still reports onMetadata', async () => {
+    const shim = makeMockShim();
+    const setup = makeChannelSetup();
+    const handler = await setupAdapterWithMessageHandler(shim, setup);
+
+    handler(
+      makeMessageEvent({
+        channel: 'C_BOT',
+        channel_type: 'channel',
+        user: undefined,
+        bot_id: 'B1',
+      }),
+    );
+
+    expect(setup.onInbound).not.toHaveBeenCalled();
+    expect(setup.onMetadata).toHaveBeenCalledWith('C_BOT', undefined, true);
+  });
+
+  it('skips messages from the bot itself but still reports onMetadata', async () => {
+    const shim = makeMockShim();
+    const setup = makeChannelSetup();
+    const handler = await setupAdapterWithMessageHandler(shim, setup);
+
+    handler(
+      makeMessageEvent({
+        channel: 'C_SELF',
+        channel_type: 'im',
         user: 'U_BOT_123',
-        text: 'Self message',
+      }),
+    );
+
+    expect(setup.onInbound).not.toHaveBeenCalled();
+    expect(setup.onMetadata).toHaveBeenCalledWith('C_SELF', undefined, false);
+  });
+
+  it('skips messages with no text (skips both onInbound and onMetadata per v1:79 early return)', async () => {
+    const shim = makeMockShim();
+    const setup = makeChannelSetup();
+    const handler = await setupAdapterWithMessageHandler(shim, setup);
+
+    handler(makeMessageEvent({ text: undefined }));
+
+    expect(setup.onInbound).not.toHaveBeenCalled();
+    expect(setup.onMetadata).not.toHaveBeenCalled();
+  });
+
+  it('registers the message handler before starting the shim', async () => {
+    const shim = makeMockShim();
+    const adapter = createSlackAdapterWithShim(shim);
+
+    let onMessageRegistered = false;
+    let started = false;
+    (shim.onMessageEvent as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      onMessageRegistered = true;
+      if (started) {
+        throw new Error('handler registered after shim.start()');
+      }
+    });
+    (shim.start as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      started = true;
+      if (!onMessageRegistered) {
+        throw new Error('shim.start() ran before handler was registered');
+      }
+    });
+
+    await expect(adapter.setup(makeChannelSetup())).resolves.toBeUndefined();
+  });
+});
+
+describe('createSlackAdapterWithShim — v2-extension delivery (commit 3a)', () => {
+  describe('ask_question', () => {
+    it('renders Block Kit card (header + question + action buttons)', async () => {
+      const shim = makeMockShim();
+      const adapter = createSlackAdapterWithShim(shim);
+      await adapter.setup(makeChannelSetup());
+
+      await adapter.deliver('C1', null, {
+        kind: 'chat-sdk',
+        content: {
+          type: 'ask_question',
+          questionId: 'q1',
+          title: 'Pick one',
+          question: 'Which option?',
+          options: [
+            { value: 'a', label: 'Option A' },
+            { value: 'b', label: 'Option B' },
+          ],
+        },
       });
-      await triggerMessageEvent(event);
 
-      expect(opts.onMessage).toHaveBeenCalledWith(
-        'slack:C0123456789',
-        expect.objectContaining({
-          is_from_me: true,
-          is_bot_message: true,
-        }),
-      );
+      expect(shim.postMessage).toHaveBeenCalledTimes(1);
+      const callArgs = (shim.postMessage as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(callArgs.channel).toBe('C1');
+
+      // Spec: header + section + actions blocks, in that order
+      const blocks = callArgs.blocks as Array<{
+        type: string;
+        text?: { text?: string };
+        elements?: Array<{ action_id?: string; text?: { text?: string }; value?: string }>;
+      }>;
+      expect(blocks[0].type).toBe('header');
+      expect(blocks[0].text?.text).toBe('Pick one');
+      expect(blocks[1].type).toBe('section');
+      expect(blocks[1].text?.text).toBe('Which option?');
+      expect(blocks[2].type).toBe('actions');
+
+      const buttons = blocks[2].elements!;
+      expect(buttons).toHaveLength(2);
+      expect(buttons[0].action_id).toBe('ncq:q1:0');
+      expect(buttons[0].text?.text).toBe('Option A');
+      expect(buttons[0].value).toBe('0');
+      expect(buttons[1].action_id).toBe('ncq:q1:1');
+      expect(buttons[1].text?.text).toBe('Option B');
+      expect(buttons[1].value).toBe('1');
     });
 
-    it('identifies IM channel type as non-group', async () => {
-      const opts = createTestOpts({
-        registeredGroups: vi.fn(() => ({
-          'slack:D0123456789': {
-            name: 'DM',
-            folder: 'dm',
-            trigger: '@Jonesy',
-            added_at: '2024-01-01T00:00:00.000Z',
-          },
-        })),
+    it('passes thread_ts when threadId provided', async () => {
+      const shim = makeMockShim();
+      const adapter = createSlackAdapterWithShim(shim);
+      await adapter.setup(makeChannelSetup());
+
+      await adapter.deliver('C1', 'T_PARENT', {
+        kind: 'chat-sdk',
+        content: {
+          type: 'ask_question',
+          questionId: 'q1',
+          title: 't',
+          question: 'q',
+          options: [{ value: 'a', label: 'A' }],
+        },
       });
-      const channel = new SlackChannel(opts);
-      await channel.connect();
 
-      const event = createMessageEvent({
-        channel: 'D0123456789',
-        channelType: 'im',
+      expect(shim.postMessage).toHaveBeenCalledWith(expect.objectContaining({ threadTs: 'T_PARENT' }));
+    });
+
+    it('returns the platform message ts', async () => {
+      const shim = makeMockShim();
+      const adapter = createSlackAdapterWithShim(shim);
+      await adapter.setup(makeChannelSetup());
+
+      const result = await adapter.deliver('C1', null, {
+        kind: 'chat-sdk',
+        content: {
+          type: 'ask_question',
+          questionId: 'q1',
+          title: 't',
+          question: 'q',
+          options: [{ value: 'a', label: 'A' }],
+        },
       });
-      await triggerMessageEvent(event);
 
-      expect(opts.onChatMetadata).toHaveBeenCalledWith(
-        'slack:D0123456789',
-        expect.any(String),
-        undefined,
-        'slack',
-        false, // IM is not a group
-      );
+      expect(result).toBe('1234.5678');
     });
 
-    it('converts ts to ISO timestamp', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
-      await channel.connect();
+    it('button click resolves idx → option value and calls config.onAction', async () => {
+      const shim = makeMockShim();
+      const setup = makeChannelSetup();
+      const adapter = createSlackAdapterWithShim(shim);
+      await adapter.setup(setup);
 
-      const event = createMessageEvent({ ts: '1704067200.000000' });
-      await triggerMessageEvent(event);
-
-      expect(opts.onMessage).toHaveBeenCalledWith(
-        'slack:C0123456789',
-        expect.objectContaining({
-          timestamp: '2024-01-01T00:00:00.000Z',
-        }),
-      );
-    });
-
-    it('resolves user name from Slack API', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
-      await channel.connect();
-
-      const event = createMessageEvent({ user: 'U_USER_456', text: 'Hello' });
-      await triggerMessageEvent(event);
-
-      expect(currentApp().client.users.info).toHaveBeenCalledWith({
-        user: 'U_USER_456',
+      await adapter.deliver('C1', null, {
+        kind: 'chat-sdk',
+        content: {
+          type: 'ask_question',
+          questionId: 'q1',
+          title: 't',
+          question: 'q',
+          options: [
+            { value: 'yes', label: 'Yes' },
+            { value: 'no', label: 'No' },
+          ],
+        },
       });
-      expect(opts.onMessage).toHaveBeenCalledWith(
-        'slack:C0123456789',
-        expect.objectContaining({
-          sender_name: 'Alice Smith',
-        }),
-      );
+
+      // Pull the registered action handler and fire a click on the second button
+      const actionCalls = (shim.onAction as ReturnType<typeof vi.fn>).mock.calls;
+      expect(actionCalls.length).toBe(1);
+      const fireAction = actionCalls[0][0] as ActionHandler;
+
+      await fireAction({ actionId: 'ncq:q1:1', value: '1', userId: 'U_USER' });
+
+      expect(setup.onAction).toHaveBeenCalledWith('q1', 'no', 'U_USER');
     });
 
-    it('caches user names to avoid repeated API calls', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
-      await channel.connect();
+    it('button click for unknown questionId is ignored (logged, no onAction)', async () => {
+      const shim = makeMockShim();
+      const setup = makeChannelSetup();
+      const adapter = createSlackAdapterWithShim(shim);
+      await adapter.setup(setup);
+      // Note: no ask_question delivered — questionId 'unknown' is not in the map
+      void adapter;
 
-      // First message — API call
-      await triggerMessageEvent(
-        createMessageEvent({ user: 'U_USER_456', text: 'First' }),
-      );
-      // Second message — should use cache
-      await triggerMessageEvent(
-        createMessageEvent({
-          user: 'U_USER_456',
-          text: 'Second',
-          ts: '1704067201.000000',
-        }),
-      );
+      const fireAction = (shim.onAction as ReturnType<typeof vi.fn>).mock.calls[0][0] as ActionHandler;
 
-      expect(currentApp().client.users.info).toHaveBeenCalledTimes(1);
-    });
-
-    it('falls back to user ID when API fails', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
-      await channel.connect();
-
-      currentApp().client.users.info.mockRejectedValueOnce(
-        new Error('API error'),
-      );
-
-      const event = createMessageEvent({ user: 'U_UNKNOWN', text: 'Hi' });
-      await triggerMessageEvent(event);
-
-      expect(opts.onMessage).toHaveBeenCalledWith(
-        'slack:C0123456789',
-        expect.objectContaining({
-          sender_name: 'U_UNKNOWN',
-        }),
-      );
-    });
-
-    it('flattens threaded replies into channel messages', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
-      await channel.connect();
-
-      const event = createMessageEvent({
-        ts: '1704067201.000000',
-        threadTs: '1704067200.000000', // parent message ts — this is a reply
-        text: 'Thread reply',
+      await fireAction({
+        actionId: 'ncq:unknown:0',
+        value: '0',
+        userId: 'U_USER',
       });
-      await triggerMessageEvent(event);
 
-      // Threaded replies are delivered as regular channel messages
-      expect(opts.onMessage).toHaveBeenCalledWith(
-        'slack:C0123456789',
-        expect.objectContaining({
-          content: 'Thread reply',
-        }),
-      );
+      expect(setup.onAction).not.toHaveBeenCalled();
     });
 
-    it('delivers thread parent messages normally', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
-      await channel.connect();
+    it('button click with malformed action_id is ignored', async () => {
+      const shim = makeMockShim();
+      const setup = makeChannelSetup();
+      const adapter = createSlackAdapterWithShim(shim);
+      await adapter.setup(setup);
+      void adapter;
 
-      const event = createMessageEvent({
-        ts: '1704067200.000000',
-        threadTs: '1704067200.000000', // same as ts — this IS the parent
-        text: 'Thread parent',
+      const fireAction = (shim.onAction as ReturnType<typeof vi.fn>).mock.calls[0][0] as ActionHandler;
+
+      await fireAction({
+        actionId: 'malformed_id',
+        value: '0',
+        userId: 'U_USER',
       });
-      await triggerMessageEvent(event);
 
-      expect(opts.onMessage).toHaveBeenCalledWith(
-        'slack:C0123456789',
-        expect.objectContaining({
-          content: 'Thread parent',
-        }),
-      );
+      expect(setup.onAction).not.toHaveBeenCalled();
     });
 
-    it('delivers messages without thread_ts normally', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
-      await channel.connect();
+    it('skips when ask_question content is missing required fields', async () => {
+      const shim = makeMockShim();
+      const adapter = createSlackAdapterWithShim(shim);
+      await adapter.setup(makeChannelSetup());
 
-      const event = createMessageEvent({ text: 'Normal message' });
-      await triggerMessageEvent(event);
+      const result = await adapter.deliver('C1', null, {
+        kind: 'chat-sdk',
+        content: { type: 'ask_question', questionId: 'q1' },
+      });
 
-      expect(opts.onMessage).toHaveBeenCalled();
+      expect(result).toBeUndefined();
+      expect(shim.postMessage).not.toHaveBeenCalled();
     });
   });
 
-  // --- @mention translation ---
+  describe('edit operation', () => {
+    it('calls shim.editMessage with rendered blocks', async () => {
+      const shim = makeMockShim();
+      const adapter = createSlackAdapterWithShim(shim);
+      await adapter.setup(makeChannelSetup());
 
-  describe('@mention translation', () => {
-    it('prepends trigger when bot is @mentioned via Slack format', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
-      await channel.connect(); // sets botUserId to 'U_BOT_123'
-
-      const event = createMessageEvent({
-        text: 'Hey <@U_BOT_123> what do you think?',
-        user: 'U_USER_456',
+      await adapter.deliver('C1', null, {
+        kind: 'chat-sdk',
+        content: {
+          operation: 'edit',
+          messageId: '1700000000.000100',
+          markdown: '**Updated** content',
+        },
       });
-      await triggerMessageEvent(event);
 
-      expect(opts.onMessage).toHaveBeenCalledWith(
-        'slack:C0123456789',
+      expect(shim.editMessage).toHaveBeenCalledWith(
         expect.objectContaining({
-          content: '@Jonesy Hey <@U_BOT_123> what do you think?',
+          channel: 'C1',
+          ts: '1700000000.000100',
         }),
       );
+      expect(shim.postMessage).not.toHaveBeenCalled();
     });
 
-    it('does not prepend trigger when trigger pattern already matches', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
-      await channel.connect();
+    it('skips edit with missing messageId', async () => {
+      const shim = makeMockShim();
+      const adapter = createSlackAdapterWithShim(shim);
+      await adapter.setup(makeChannelSetup());
 
-      const event = createMessageEvent({
-        text: '@Jonesy <@U_BOT_123> hello',
-        user: 'U_USER_456',
+      const result = await adapter.deliver('C1', null, {
+        kind: 'chat-sdk',
+        content: { operation: 'edit', markdown: 'no id' },
       });
-      await triggerMessageEvent(event);
 
-      // Content should be unchanged since it already matches TRIGGER_PATTERN
-      expect(opts.onMessage).toHaveBeenCalledWith(
-        'slack:C0123456789',
-        expect.objectContaining({
-          content: '@Jonesy <@U_BOT_123> hello',
-        }),
-      );
+      expect(result).toBeUndefined();
+      expect(shim.editMessage).not.toHaveBeenCalled();
     });
 
-    it('does not translate mentions in bot messages', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
-      await channel.connect();
+    it('skips edit with no text/markdown', async () => {
+      const shim = makeMockShim();
+      const adapter = createSlackAdapterWithShim(shim);
+      await adapter.setup(makeChannelSetup());
 
-      const event = createMessageEvent({
-        text: 'Echo: <@U_BOT_123>',
-        subtype: 'bot_message',
-        botId: 'B_MY_BOT',
+      const result = await adapter.deliver('C1', null, {
+        kind: 'chat-sdk',
+        content: {
+          operation: 'edit',
+          messageId: '1700000000.000100',
+        },
       });
-      await triggerMessageEvent(event);
 
-      // Bot messages skip mention translation
-      expect(opts.onMessage).toHaveBeenCalledWith(
-        'slack:C0123456789',
-        expect.objectContaining({
-          content: 'Echo: <@U_BOT_123>',
-        }),
-      );
-    });
-
-    it('does not translate mentions for other users', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
-      await channel.connect();
-
-      const event = createMessageEvent({
-        text: 'Hey <@U_OTHER_USER> look at this',
-        user: 'U_USER_456',
-      });
-      await triggerMessageEvent(event);
-
-      // Mention is for a different user, not the bot
-      expect(opts.onMessage).toHaveBeenCalledWith(
-        'slack:C0123456789',
-        expect.objectContaining({
-          content: 'Hey <@U_OTHER_USER> look at this',
-        }),
-      );
+      expect(result).toBeUndefined();
+      expect(shim.editMessage).not.toHaveBeenCalled();
     });
   });
 
-  // --- sendMessage ---
+  describe('reaction operation', () => {
+    it('calls shim.addReaction with channel/timestamp/emoji', async () => {
+      const shim = makeMockShim();
+      const adapter = createSlackAdapterWithShim(shim);
+      await adapter.setup(makeChannelSetup());
 
-  describe('sendMessage', () => {
-    it('sends message as Block Kit markdown block', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
-      await channel.connect();
-
-      await channel.sendMessage('slack:C0123456789', 'Hello');
-
-      expect(currentApp().client.chat.postMessage).toHaveBeenCalledWith({
-        channel: 'C0123456789',
-        blocks: [{ type: 'section', text: { type: 'mrkdwn', text: 'Hello' } }],
-        text: 'Hello',
+      await adapter.deliver('C1', null, {
+        kind: 'chat-sdk',
+        content: {
+          operation: 'reaction',
+          messageId: '1700000000.000100',
+          emoji: 'thumbsup',
+        },
       });
-    });
 
-    it('strips slack: prefix from JID', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
-      await channel.connect();
-
-      await channel.sendMessage('slack:D9876543210', 'DM message');
-
-      expect(currentApp().client.chat.postMessage).toHaveBeenCalledWith({
-        channel: 'D9876543210',
-        blocks: [
-          { type: 'section', text: { type: 'mrkdwn', text: 'DM message' } },
-        ],
-        text: 'DM message',
+      expect(shim.addReaction).toHaveBeenCalledWith({
+        channel: 'C1',
+        timestamp: '1700000000.000100',
+        emoji: 'thumbsup',
       });
+      expect(shim.postMessage).not.toHaveBeenCalled();
     });
 
-    it('queues message when disconnected', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
+    it('skips reaction with missing messageId', async () => {
+      const shim = makeMockShim();
+      const adapter = createSlackAdapterWithShim(shim);
+      await adapter.setup(makeChannelSetup());
 
-      // Don't connect — should queue
-      await channel.sendMessage('slack:C0123456789', 'Queued message');
-
-      expect(currentApp().client.chat.postMessage).not.toHaveBeenCalled();
-    });
-
-    it('queues message on send failure', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
-      await channel.connect();
-
-      currentApp().client.chat.postMessage.mockRejectedValueOnce(
-        new Error('Network error'),
-      );
-
-      // Should not throw
-      await expect(
-        channel.sendMessage('slack:C0123456789', 'Will fail'),
-      ).resolves.toBeUndefined();
-    });
-
-    it('sends long messages as Block Kit blocks (single API call)', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
-      await channel.connect();
-
-      // Block Kit markdown blocks support up to 12,000 chars each,
-      // so a 4500-char message fits in a single block/API call
-      const longText = 'A'.repeat(4500);
-      await channel.sendMessage('slack:C0123456789', longText);
-
-      expect(currentApp().client.chat.postMessage).toHaveBeenCalledTimes(1);
-      const call = currentApp().client.chat.postMessage.mock.calls[0][0];
-      expect(call.channel).toBe('C0123456789');
-      expect(call.blocks.length).toBeGreaterThanOrEqual(1);
-      expect(call.blocks[0].type).toBe('section');
-      expect(call.text).toBe(longText.slice(0, 4000));
-    });
-
-    it('flushes queued messages on connect', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
-
-      // Queue messages while disconnected
-      await channel.sendMessage('slack:C0123456789', 'First queued');
-      await channel.sendMessage('slack:C0123456789', 'Second queued');
-
-      expect(currentApp().client.chat.postMessage).not.toHaveBeenCalled();
-
-      // Connect triggers flush
-      await channel.connect();
-
-      expect(currentApp().client.chat.postMessage).toHaveBeenCalledWith({
-        channel: 'C0123456789',
-        blocks: [
-          { type: 'section', text: { type: 'mrkdwn', text: 'First queued' } },
-        ],
-        text: 'First queued',
+      const result = await adapter.deliver('C1', null, {
+        kind: 'chat-sdk',
+        content: { operation: 'reaction', emoji: 'thumbsup' },
       });
-      expect(currentApp().client.chat.postMessage).toHaveBeenCalledWith({
-        channel: 'C0123456789',
-        blocks: [
-          { type: 'section', text: { type: 'mrkdwn', text: 'Second queued' } },
-        ],
-        text: 'Second queued',
+
+      expect(result).toBeUndefined();
+      expect(shim.addReaction).not.toHaveBeenCalled();
+    });
+
+    it('skips reaction with missing emoji', async () => {
+      const shim = makeMockShim();
+      const adapter = createSlackAdapterWithShim(shim);
+      await adapter.setup(makeChannelSetup());
+
+      const result = await adapter.deliver('C1', null, {
+        kind: 'chat-sdk',
+        content: {
+          operation: 'reaction',
+          messageId: '1700000000.000100',
+        },
       });
+
+      expect(result).toBeUndefined();
+      expect(shim.addReaction).not.toHaveBeenCalled();
     });
   });
 
-  // --- ownsJid ---
+  it('action handler is registered during setup', async () => {
+    const shim = makeMockShim();
+    const adapter = createSlackAdapterWithShim(shim);
 
-  describe('ownsJid', () => {
-    it('owns slack: JIDs', () => {
-      const channel = new SlackChannel(createTestOpts());
-      expect(channel.ownsJid('slack:C0123456789')).toBe(true);
+    expect(shim.onAction).not.toHaveBeenCalled();
+    await adapter.setup(makeChannelSetup());
+    expect(shim.onAction).toHaveBeenCalledTimes(1);
+  });
+
+  describe('not-connected gating', () => {
+    it('drops ask_question when not connected', async () => {
+      const shim = makeMockShim();
+      const adapter = createSlackAdapterWithShim(shim);
+      // Note: setup() not called — adapter is disconnected
+
+      const result = await adapter.deliver('C1', null, {
+        kind: 'chat-sdk',
+        content: {
+          type: 'ask_question',
+          questionId: 'q1',
+          title: 't',
+          question: 'q',
+          options: [{ value: 'a', label: 'A' }],
+        },
+      });
+
+      expect(result).toBeUndefined();
+      expect(shim.postMessage).not.toHaveBeenCalled();
     });
 
-    it('owns slack: DM JIDs', () => {
-      const channel = new SlackChannel(createTestOpts());
-      expect(channel.ownsJid('slack:D0123456789')).toBe(true);
+    it('drops edit when not connected', async () => {
+      const shim = makeMockShim();
+      const adapter = createSlackAdapterWithShim(shim);
+
+      const result = await adapter.deliver('C1', null, {
+        kind: 'chat-sdk',
+        content: {
+          operation: 'edit',
+          messageId: '1.0',
+          markdown: 'edited',
+        },
+      });
+
+      expect(result).toBeUndefined();
+      expect(shim.editMessage).not.toHaveBeenCalled();
     });
 
-    it('does not own WhatsApp group JIDs', () => {
-      const channel = new SlackChannel(createTestOpts());
-      expect(channel.ownsJid('12345@g.us')).toBe(false);
-    });
+    it('drops reaction when not connected', async () => {
+      const shim = makeMockShim();
+      const adapter = createSlackAdapterWithShim(shim);
 
-    it('does not own WhatsApp DM JIDs', () => {
-      const channel = new SlackChannel(createTestOpts());
-      expect(channel.ownsJid('12345@s.whatsapp.net')).toBe(false);
-    });
+      const result = await adapter.deliver('C1', null, {
+        kind: 'chat-sdk',
+        content: {
+          operation: 'reaction',
+          messageId: '1.0',
+          emoji: 'thumbsup',
+        },
+      });
 
-    it('does not own Telegram JIDs', () => {
-      const channel = new SlackChannel(createTestOpts());
-      expect(channel.ownsJid('tg:123456')).toBe(false);
+      expect(result).toBeUndefined();
+      expect(shim.addReaction).not.toHaveBeenCalled();
     });
+  });
+});
 
-    it('does not own unknown JID formats', () => {
-      const channel = new SlackChannel(createTestOpts());
-      expect(channel.ownsJid('random-string')).toBe(false);
+describe('createSlackAdapterWithShim — onReaction (D1)', () => {
+  function makeReactionEvent(overrides: Partial<ReactionAddedEvent> = {}): ReactionAddedEvent {
+    return {
+      item: { type: 'message', channel: 'C_DEFAULT', ts: '1700000000.000100' },
+      reaction: 'thumbsup',
+      user: 'U_USER',
+      event_ts: '1700000050.000200',
+      ...overrides,
+    };
+  }
+
+  async function setupAdapterWithReactionHandler(shim: BoltShim, config: ChannelSetup): Promise<ReactionHandler> {
+    const adapter = createSlackAdapterWithShim(shim);
+    await adapter.setup(config);
+    const calls = (shim.onReactionEvent as ReturnType<typeof vi.fn>).mock.calls;
+    return calls[0][0] as ReactionHandler;
+  }
+
+  it('forwards a message reaction with all Reaction fields populated', async () => {
+    const shim = makeMockShim();
+    const onReaction = vi.fn();
+    const setup = makeChannelSetup({ onReaction });
+    const handler = await setupAdapterWithReactionHandler(shim, setup);
+
+    await handler(
+      makeReactionEvent({
+        item: { type: 'message', channel: 'C_X', ts: '1700000001.000100' },
+        reaction: 'eyes',
+        user: 'U_REACTOR',
+        event_ts: '1700000002.000200',
+      }),
+    );
+
+    expect(onReaction).toHaveBeenCalledWith({
+      channelType: 'slack',
+      platformId: 'C_X',
+      threadId: null,
+      messageId: '1700000001.000100',
+      emoji: 'eyes',
+      userId: 'U_REACTOR',
+      timestamp: new Date(1700000002 * 1000 + 0).toISOString(),
     });
   });
 
-  // --- syncChannelMetadata ---
+  it('strips ::skin-tone-N modifier from emoji name (f50dd58 carry-across)', async () => {
+    const shim = makeMockShim();
+    const onReaction = vi.fn();
+    const setup = makeChannelSetup({ onReaction });
+    const handler = await setupAdapterWithReactionHandler(shim, setup);
 
-  describe('syncChannelMetadata', () => {
-    it('calls conversations.list and updates chat names', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
+    await handler(makeReactionEvent({ reaction: '+1::skin-tone-3' }));
 
-      currentApp().client.conversations.list.mockResolvedValue({
+    expect(onReaction).toHaveBeenCalledWith(expect.objectContaining({ emoji: '+1' }));
+  });
+
+  it('skips reactions on file items (item.type !== "message")', async () => {
+    const shim = makeMockShim();
+    const onReaction = vi.fn();
+    const setup = makeChannelSetup({ onReaction });
+    const handler = await setupAdapterWithReactionHandler(shim, setup);
+
+    await handler(makeReactionEvent({ item: { type: 'file' } }));
+
+    expect(onReaction).not.toHaveBeenCalled();
+  });
+
+  it('skips reactions on file_comment items', async () => {
+    const shim = makeMockShim();
+    const onReaction = vi.fn();
+    const setup = makeChannelSetup({ onReaction });
+    const handler = await setupAdapterWithReactionHandler(shim, setup);
+
+    await handler(makeReactionEvent({ item: { type: 'file_comment' } }));
+
+    expect(onReaction).not.toHaveBeenCalled();
+  });
+
+  it('does nothing when config has no onReaction (optional field)', async () => {
+    const shim = makeMockShim();
+    const setup = makeChannelSetup({ onReaction: undefined });
+    const handler = await setupAdapterWithReactionHandler(shim, setup);
+
+    await expect(handler(makeReactionEvent())).resolves.toBeUndefined();
+  });
+
+  it('catches errors thrown by onReaction (does not propagate)', async () => {
+    const shim = makeMockShim();
+    const onReaction = vi.fn().mockRejectedValue(new Error('handler boom'));
+    const setup = makeChannelSetup({ onReaction });
+    const handler = await setupAdapterWithReactionHandler(shim, setup);
+
+    await expect(handler(makeReactionEvent())).resolves.toBeUndefined();
+    expect(onReaction).toHaveBeenCalledOnce();
+  });
+
+  it('reaction handler is registered during setup', async () => {
+    const shim = makeMockShim();
+    const adapter = createSlackAdapterWithShim(shim);
+
+    expect(shim.onReactionEvent).not.toHaveBeenCalled();
+    await adapter.setup(makeChannelSetup());
+    expect(shim.onReactionEvent).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('createSlackAdapterWithShim — fetchMessageText (D2)', () => {
+  it('returns the message text when found', async () => {
+    const shim = makeMockShim({
+      fetchHistoryMessage: vi
+        .fn<BoltShim['fetchHistoryMessage']>()
+        .mockResolvedValue({ ts: '1700000000.000100', text: 'hello there' }),
+    });
+    const adapter = createSlackAdapterWithShim(shim);
+    await adapter.setup(makeChannelSetup());
+
+    const result = await adapter.fetchMessageText!('C_X', '1700000000.000100');
+
+    expect(result).toBe('hello there');
+    expect(shim.fetchHistoryMessage).toHaveBeenCalledWith({
+      channel: 'C_X',
+      ts: '1700000000.000100',
+    });
+  });
+
+  it('returns null when not connected', async () => {
+    const shim = makeMockShim();
+    const adapter = createSlackAdapterWithShim(shim);
+
+    const result = await adapter.fetchMessageText!('C_X', '1700000000.000100');
+
+    expect(result).toBeNull();
+    expect(shim.fetchHistoryMessage).not.toHaveBeenCalled();
+  });
+
+  it('returns null when shim returns no message', async () => {
+    const shim = makeMockShim({
+      fetchHistoryMessage: vi.fn<BoltShim['fetchHistoryMessage']>().mockResolvedValue(null),
+    });
+    const adapter = createSlackAdapterWithShim(shim);
+    await adapter.setup(makeChannelSetup());
+
+    const result = await adapter.fetchMessageText!('C_X', '1.0');
+    expect(result).toBeNull();
+  });
+
+  it('returns null when shim returns a different ts', async () => {
+    const shim = makeMockShim({
+      fetchHistoryMessage: vi
+        .fn<BoltShim['fetchHistoryMessage']>()
+        .mockResolvedValue({ ts: 'OTHER_TS', text: 'wrong message' }),
+    });
+    const adapter = createSlackAdapterWithShim(shim);
+    await adapter.setup(makeChannelSetup());
+
+    const result = await adapter.fetchMessageText!('C_X', '1.0');
+    expect(result).toBeNull();
+  });
+
+  it('returns null when message has no text field', async () => {
+    const shim = makeMockShim({
+      fetchHistoryMessage: vi.fn<BoltShim['fetchHistoryMessage']>().mockResolvedValue({ ts: '1.0' }),
+    });
+    const adapter = createSlackAdapterWithShim(shim);
+    await adapter.setup(makeChannelSetup());
+
+    const result = await adapter.fetchMessageText!('C_X', '1.0');
+    expect(result).toBeNull();
+  });
+
+  it('returns null when shim throws (error logged, not propagated)', async () => {
+    const shim = makeMockShim({
+      fetchHistoryMessage: vi.fn<BoltShim['fetchHistoryMessage']>().mockRejectedValue(new Error('not_in_channel')),
+    });
+    const adapter = createSlackAdapterWithShim(shim);
+    await adapter.setup(makeChannelSetup());
+
+    const result = await adapter.fetchMessageText!('C_X', '1.0');
+    expect(result).toBeNull();
+  });
+});
+
+describe('createSlackAdapterWithShim — fetchThreadReplies (D2, Q4)', () => {
+  it('returns the thread replies mapped to {id, text} shape', async () => {
+    const shim = makeMockShim({
+      fetchThreadReplies: vi.fn<BoltShim['fetchThreadReplies']>().mockResolvedValue([
+        { ts: '1700000000.000100', text: 'parent' },
+        { ts: '1700000010.000200', text: 'first reply' },
+        { ts: '1700000020.000300', text: undefined },
+      ]),
+    });
+    const adapter = createSlackAdapterWithShim(shim);
+    await adapter.setup(makeChannelSetup());
+
+    const result = await adapter.fetchThreadReplies!('C_X', '1700000000.000100');
+
+    expect(result).toEqual([
+      { id: '1700000000.000100', text: 'parent' },
+      { id: '1700000010.000200', text: 'first reply' },
+      { id: '1700000020.000300', text: null },
+    ]);
+    expect(shim.fetchThreadReplies).toHaveBeenCalledWith({
+      channel: 'C_X',
+      threadTs: '1700000000.000100',
+    });
+  });
+
+  it('returns empty array when thread has no replies', async () => {
+    const shim = makeMockShim({
+      fetchThreadReplies: vi.fn<BoltShim['fetchThreadReplies']>().mockResolvedValue([]),
+    });
+    const adapter = createSlackAdapterWithShim(shim);
+    await adapter.setup(makeChannelSetup());
+
+    const result = await adapter.fetchThreadReplies!('C_X', '1.0');
+    expect(result).toEqual([]);
+  });
+
+  it('returns null when not connected', async () => {
+    const shim = makeMockShim();
+    const adapter = createSlackAdapterWithShim(shim);
+
+    const result = await adapter.fetchThreadReplies!('C_X', '1.0');
+
+    expect(result).toBeNull();
+    expect(shim.fetchThreadReplies).not.toHaveBeenCalled();
+  });
+
+  it('returns null when shim throws', async () => {
+    const shim = makeMockShim({
+      fetchThreadReplies: vi.fn<BoltShim['fetchThreadReplies']>().mockRejectedValue(new Error('thread_not_found')),
+    });
+    const adapter = createSlackAdapterWithShim(shim);
+    await adapter.setup(makeChannelSetup());
+
+    const result = await adapter.fetchThreadReplies!('C_X', '1.0');
+    expect(result).toBeNull();
+  });
+});
+
+describe('createSlackAdapterWithShim — backfillFromCursor (D3)', () => {
+  it('converts ISO oldestTimestamp to Slack ts and calls shim', async () => {
+    const shim = makeMockShim();
+    const adapter = createSlackAdapterWithShim(shim);
+    await adapter.setup(makeChannelSetup());
+
+    await adapter.backfillFromCursor!('C_X', '2024-01-01T00:00:00.000Z');
+
+    // 2024-01-01T00:00:00.000Z = 1704067200 unix epoch seconds
+    expect(shim.fetchChannelHistory).toHaveBeenCalledWith({
+      channel: 'C_X',
+      oldestTs: '1704067200',
+      limit: 100,
+      inclusive: false,
+    });
+  });
+
+  it('maps history messages to InboundMessage[]', async () => {
+    const shim = makeMockShim({
+      fetchChannelHistory: vi.fn<BoltShim['fetchChannelHistory']>().mockResolvedValue([
+        { ts: '1704067201.500', text: 'hi', user: 'U1' },
+        {
+          ts: '1704067205.250',
+          text: 'mentioning <@U_BOT_123>',
+          user: 'U2',
+        },
+      ]),
+    });
+    const adapter = createSlackAdapterWithShim(shim);
+    await adapter.setup(makeChannelSetup());
+
+    const result = await adapter.backfillFromCursor!('C_X', '2024-01-01T00:00:00.000Z');
+
+    expect(result).toEqual([
+      {
+        id: '1704067201.500',
+        kind: 'chat',
+        content: 'hi',
+        timestamp: new Date(parseFloat('1704067201.500') * 1000).toISOString(),
+        isMention: false,
+      },
+      {
+        id: '1704067205.250',
+        kind: 'chat',
+        content: 'mentioning <@U_BOT_123>',
+        timestamp: new Date(parseFloat('1704067205.250') * 1000).toISOString(),
+        isMention: true,
+      },
+    ]);
+  });
+
+  it('filters out bot messages (bot_id present)', async () => {
+    const shim = makeMockShim({
+      fetchChannelHistory: vi.fn<BoltShim['fetchChannelHistory']>().mockResolvedValue([
+        { ts: '1.0', text: 'human', user: 'U1' },
+        { ts: '2.0', text: 'bot', bot_id: 'B1' },
+      ]),
+    });
+    const adapter = createSlackAdapterWithShim(shim);
+    await adapter.setup(makeChannelSetup());
+
+    const result = await adapter.backfillFromCursor!('C_X', '2024-01-01T00:00:00.000Z');
+
+    expect(result).toHaveLength(1);
+    expect(result![0].content).toBe('human');
+  });
+
+  it('filters out the bot self (user matches botUserId)', async () => {
+    const shim = makeMockShim({
+      fetchChannelHistory: vi.fn<BoltShim['fetchChannelHistory']>().mockResolvedValue([
+        { ts: '1.0', text: 'human', user: 'U1' },
+        { ts: '2.0', text: 'self post', user: 'U_BOT_123' },
+      ]),
+    });
+    const adapter = createSlackAdapterWithShim(shim);
+    await adapter.setup(makeChannelSetup());
+
+    const result = await adapter.backfillFromCursor!('C_X', '2024-01-01T00:00:00.000Z');
+
+    expect(result).toHaveLength(1);
+    expect(result![0].content).toBe('human');
+  });
+
+  it('filters out messages with no text', async () => {
+    const shim = makeMockShim({
+      fetchChannelHistory: vi.fn<BoltShim['fetchChannelHistory']>().mockResolvedValue([
+        { ts: '1.0', text: 'first', user: 'U1' },
+        { ts: '2.0', text: undefined, user: 'U2' },
+      ]),
+    });
+    const adapter = createSlackAdapterWithShim(shim);
+    await adapter.setup(makeChannelSetup());
+
+    const result = await adapter.backfillFromCursor!('C_X', '2024-01-01T00:00:00.000Z');
+
+    expect(result).toHaveLength(1);
+    expect(result![0].content).toBe('first');
+  });
+
+  it('returns empty array when shim returns no messages', async () => {
+    const shim = makeMockShim();
+    const adapter = createSlackAdapterWithShim(shim);
+    await adapter.setup(makeChannelSetup());
+
+    const result = await adapter.backfillFromCursor!('C_X', '2024-01-01T00:00:00.000Z');
+    expect(result).toEqual([]);
+  });
+
+  it('returns null when not connected', async () => {
+    const shim = makeMockShim();
+    const adapter = createSlackAdapterWithShim(shim);
+
+    const result = await adapter.backfillFromCursor!('C_X', '2024-01-01T00:00:00.000Z');
+
+    expect(result).toBeNull();
+    expect(shim.fetchChannelHistory).not.toHaveBeenCalled();
+  });
+
+  it('returns null when shim throws', async () => {
+    const shim = makeMockShim({
+      fetchChannelHistory: vi.fn<BoltShim['fetchChannelHistory']>().mockRejectedValue(new Error('not_in_channel')),
+    });
+    const adapter = createSlackAdapterWithShim(shim);
+    await adapter.setup(makeChannelSetup());
+
+    const result = await adapter.backfillFromCursor!('C_X', '2024-01-01T00:00:00.000Z');
+    expect(result).toBeNull();
+  });
+});
+
+describe('createSlackAdapterWithShim — syncConversations', () => {
+  it('returns ConversationInfo[] for member channels', async () => {
+    const shim = makeMockShim({
+      listConversations: vi.fn<BoltShim['listConversations']>().mockResolvedValue({
         channels: [
-          { id: 'C001', name: 'general', is_member: true },
-          { id: 'C002', name: 'random', is_member: true },
-          { id: 'C003', name: 'external', is_member: false },
+          { id: 'C1', name: 'general', is_member: true },
+          { id: 'C2', name: 'random', is_member: true },
         ],
-        response_metadata: {},
-      });
-
-      await channel.connect();
-
-      // connect() calls syncChannelMetadata internally
-      expect(updateChatName).toHaveBeenCalledWith('slack:C001', 'general');
-      expect(updateChatName).toHaveBeenCalledWith('slack:C002', 'random');
-      // Non-member channels are skipped
-      expect(updateChatName).not.toHaveBeenCalledWith('slack:C003', 'external');
+      }),
     });
+    const adapter = createSlackAdapterWithShim(shim);
+    await adapter.setup(makeChannelSetup());
 
-    it('handles API errors gracefully', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
+    const result = await adapter.syncConversations!();
 
-      currentApp().client.conversations.list.mockRejectedValue(
-        new Error('API error'),
-      );
-
-      // Should not throw
-      await expect(channel.connect()).resolves.toBeUndefined();
-    });
+    expect(result).toEqual([
+      { platformId: 'C1', name: 'general', isGroup: true },
+      { platformId: 'C2', name: 'random', isGroup: true },
+    ]);
   });
 
-  // --- setTyping ---
-
-  describe('setTyping', () => {
-    it('resolves without error (no-op)', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
-
-      // Should not throw — Slack has no bot typing indicator API
-      await expect(
-        channel.setTyping('slack:C0123456789', true),
-      ).resolves.toBeUndefined();
+  it('paginates through cursor', async () => {
+    const shim = makeMockShim();
+    let callCount = 0;
+    (shim.listConversations as ReturnType<typeof vi.fn>).mockImplementation(async (opts) => {
+      callCount++;
+      if (callCount === 1) {
+        return {
+          channels: [{ id: 'C1', name: 'first', is_member: true }],
+          nextCursor: 'CURSOR_2',
+        };
+      }
+      if (callCount === 2 && opts.cursor === 'CURSOR_2') {
+        return {
+          channels: [{ id: 'C2', name: 'second', is_member: true }],
+        };
+      }
+      throw new Error('unexpected call');
     });
 
-    it('accepts false without error', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
+    const adapter = createSlackAdapterWithShim(shim);
+    await adapter.setup(makeChannelSetup());
 
-      await expect(
-        channel.setTyping('slack:C0123456789', false),
-      ).resolves.toBeUndefined();
-    });
+    const result = await adapter.syncConversations!();
+
+    expect(callCount).toBe(2);
+    expect(result).toHaveLength(2);
+    expect(result[0].platformId).toBe('C1');
+    expect(result[1].platformId).toBe('C2');
   });
 
-  // --- Constructor error handling ---
-
-  describe('constructor', () => {
-    it('throws when SLACK_BOT_TOKEN is missing', () => {
-      vi.mocked(readEnvFile).mockReturnValueOnce({
-        SLACK_BOT_TOKEN: '',
-        SLACK_APP_TOKEN: 'xapp-test-token',
-      });
-
-      expect(() => new SlackChannel(createTestOpts())).toThrow(
-        'SLACK_BOT_TOKEN and SLACK_APP_TOKEN must be set in .env',
-      );
+  it('skips channels where bot is not a member', async () => {
+    const shim = makeMockShim({
+      listConversations: vi.fn<BoltShim['listConversations']>().mockResolvedValue({
+        channels: [
+          { id: 'C1', name: 'general', is_member: true },
+          { id: 'C2', name: 'private-other', is_member: false },
+        ],
+      }),
     });
+    const adapter = createSlackAdapterWithShim(shim);
+    await adapter.setup(makeChannelSetup());
 
-    it('throws when SLACK_APP_TOKEN is missing', () => {
-      vi.mocked(readEnvFile).mockReturnValueOnce({
-        SLACK_BOT_TOKEN: 'xoxb-test-token',
-        SLACK_APP_TOKEN: '',
-      });
-
-      expect(() => new SlackChannel(createTestOpts())).toThrow(
-        'SLACK_BOT_TOKEN and SLACK_APP_TOKEN must be set in .env',
-      );
-    });
+    const result = await adapter.syncConversations!();
+    expect(result).toEqual([{ platformId: 'C1', name: 'general', isGroup: true }]);
   });
 
-  // --- syncChannelMetadata pagination ---
-
-  describe('syncChannelMetadata pagination', () => {
-    it('paginates through multiple pages of channels', async () => {
-      const opts = createTestOpts();
-      const channel = new SlackChannel(opts);
-
-      // First page returns a cursor; second page returns no cursor
-      currentApp()
-        .client.conversations.list.mockResolvedValueOnce({
-          channels: [{ id: 'C001', name: 'general', is_member: true }],
-          response_metadata: { next_cursor: 'cursor_page2' },
-        })
-        .mockResolvedValueOnce({
-          channels: [{ id: 'C002', name: 'random', is_member: true }],
-          response_metadata: {},
-        });
-
-      await channel.connect();
-
-      // Should have called conversations.list twice (once per page)
-      expect(currentApp().client.conversations.list).toHaveBeenCalledTimes(2);
-      expect(currentApp().client.conversations.list).toHaveBeenNthCalledWith(
-        2,
-        expect.objectContaining({ cursor: 'cursor_page2' }),
-      );
-
-      // Both channels from both pages stored
-      expect(updateChatName).toHaveBeenCalledWith('slack:C001', 'general');
-      expect(updateChatName).toHaveBeenCalledWith('slack:C002', 'random');
+  it('skips channels missing id or name', async () => {
+    const shim = makeMockShim({
+      listConversations: vi.fn<BoltShim['listConversations']>().mockResolvedValue({
+        channels: [
+          { id: 'C1', name: 'good', is_member: true },
+          { id: undefined, name: 'no-id', is_member: true },
+          { id: 'C3', name: undefined, is_member: true },
+        ],
+      }),
     });
+    const adapter = createSlackAdapterWithShim(shim);
+    await adapter.setup(makeChannelSetup());
+
+    const result = await adapter.syncConversations!();
+    expect(result).toEqual([{ platformId: 'C1', name: 'good', isGroup: true }]);
   });
 
-  // --- Channel properties ---
-
-  describe('channel properties', () => {
-    it('has name "slack"', () => {
-      const channel = new SlackChannel(createTestOpts());
-      expect(channel.name).toBe('slack');
+  it('returns empty array on shim error', async () => {
+    const shim = makeMockShim({
+      listConversations: vi.fn<BoltShim['listConversations']>().mockRejectedValue(new Error('rate_limited')),
     });
+    const adapter = createSlackAdapterWithShim(shim);
+    await adapter.setup(makeChannelSetup());
+
+    const result = await adapter.syncConversations!();
+    expect(result).toEqual([]);
+  });
+});
+
+describe('createSlackAdapterWithShim — setTyping', () => {
+  it('is a no-op (Slack has no typing-indicator API)', async () => {
+    const shim = makeMockShim();
+    const adapter = createSlackAdapterWithShim(shim);
+    await adapter.setup(makeChannelSetup());
+
+    await expect(adapter.setTyping!('C1', null)).resolves.toBeUndefined();
+  });
+});
+
+describe('createSlackAdapter (factory + registry)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('returns null when SLACK_BOT_TOKEN is missing', () => {
+    vi.stubEnv('SLACK_BOT_TOKEN', '');
+    vi.stubEnv('SLACK_APP_TOKEN', 'xapp-something');
+
+    expect(createSlackAdapter()).toBeNull();
+  });
+
+  it('returns null when SLACK_APP_TOKEN is missing', () => {
+    vi.stubEnv('SLACK_BOT_TOKEN', 'xoxb-something');
+    vi.stubEnv('SLACK_APP_TOKEN', '');
+
+    expect(createSlackAdapter()).toBeNull();
+  });
+
+  it('returns a ChannelAdapter when both tokens are present', () => {
+    vi.stubEnv('SLACK_BOT_TOKEN', 'xoxb-something');
+    vi.stubEnv('SLACK_APP_TOKEN', 'xapp-something');
+
+    const adapter = createSlackAdapter();
+    expect(adapter).not.toBeNull();
+    expect(adapter!.channelType).toBe('slack');
+    expect(adapter!.supportsThreads).toBe(true);
+  });
+
+  it('module import registers "slack" with the channel registry', () => {
+    expect(getRegisteredChannelNames()).toContain('slack');
   });
 });

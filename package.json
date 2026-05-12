@@ -1,8 +1,9 @@
 {
   "name": "nanoclaw",
-  "version": "1.2.99",
+  "version": "2.0.14",
   "description": "Personal Claude assistant. Lightweight, secure, customizable.",
   "type": "module",
+  "packageManager": "pnpm@10.33.0",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
@@ -14,40 +15,52 @@
     "format:check": "prettier --check \"src/**/*.ts\"",
     "prepare": "husky",
     "setup": "tsx setup/index.ts",
+    "setup:auto": "tsx setup/auto.ts",
+    "chat": "tsx scripts/chat.ts",
     "auth": "tsx src/whatsapp-auth.ts",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
     "test": "vitest run",
     "test:watch": "vitest",
     "pipeline-e2e": "tsx scripts/pipeline-e2e/index.ts",
+    "migrate-v1": "tsx scripts/migrate-from-v1.ts",
     "build:webui": "tsc -p webui/tsconfig.json && node webui/scripts/validate-templates.mjs && rm -rf dist/webui/public && cp -r webui/public dist/webui/public",
     "webui": "node dist/webui/start.js",
     "webui:dev": "tsx webui/start.ts"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.28.0",
+    "@anthropic-ai/sdk": "^0.82.0",
+    "@clack/core": "^1.2.0",
+    "@clack/prompts": "^1.2.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@onecli-sh/sdk": "^0.3.1",
     "@slack/bolt": "^4.6.0",
-    "@whiskeysockets/baileys": "^7.0.0-rc.9",
-    "better-sqlite3": "^11.8.1",
-    "cron-parser": "^5.5.0",
-    "pino": "^9.6.0",
-    "pino-pretty": "^13.0.0",
-    "qrcode": "^1.5.4",
-    "qrcode-terminal": "^0.12.0",
-    "yaml": "^2.8.3",
-    "zod": "^4.3.6"
+    "@slack/types": "^2.20.0",
+    "better-sqlite3": "11.10.0",
+    "chat": "^4.24.0",
+    "cron-parser": "5.5.0",
+    "kleur": "^4.1.5",
+    "yaml": "^2.8.3"
   },
   "devDependencies": {
+    "@eslint/js": "^9.35.0",
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.10.0",
-    "@types/qrcode-terminal": "^0.12.0",
-    "@vitest/coverage-v8": "^4.0.18",
-    "@vue/compiler-dom": "^3.5.32",
+    "eslint": "^9.35.0",
+    "eslint-plugin-no-catch-all": "^1.1.0",
+    "globals": "^15.12.0",
     "husky": "^9.1.7",
+    "lint-staged": "^16.4.0",
     "prettier": "^3.8.1",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
+    "typescript-eslint": "^8.35.0",
     "vitest": "^4.0.18"
   },
   "engines": {
     "node": ">=20"
+  },
+  "lint-staged": {
+    "src/**/*.ts": "prettier --write"
   }
 }

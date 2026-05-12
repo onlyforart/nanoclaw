@@ -1,19 +1,28 @@
 #!/usr/bin/env bash
 #
-# NanoClaw site-specific backup
+# NanoClaw site-specific backup (v2)
 #
 # Creates a compressed archive of everything needed to rebuild this
-# installation on a new machine: secrets, database, auth credentials,
-# certificates, configuration, and systemd service files.
+# installation on a new machine: secrets, central + per-session DBs,
+# WhatsApp auth (if installed), TLS certificates, configuration, and
+# systemd service files.
 #
 # Usage:
 #   ./scripts/backup.sh                  # backup to default location
 #   ./scripts/backup.sh /mnt/usb/        # backup to specific directory
 #   ./scripts/backup.sh --include-logs   # include application logs
 #
-# The archive preserves file permissions (important for mode-600 secrets).
-# SQLite is backed up via .backup to guarantee consistency even while
-# nanoclaw is running.
+# v2 storage layout vs v1:
+#   - Central DB:     data/v2.db                (was: store/messages.db)
+#   - Per-session:    data/v2-sessions/<id>/    (new — paired inbound/outbound DBs)
+#   - TLS:            data/tls/                 (unchanged)
+#   - Config:         data/*.json + data/install-id
+#   - WhatsApp auth:  store/auth/               (still v1 path — channels-branch
+#                                                 adapter writes there)
+#
+# OneCLI vault is out of scope. OneCLI is configured via ONECLI_URL +
+# ONECLI_API_KEY in .env; the vault itself is a separate daemon's state
+# and ships its own backup mechanism.
 
 set -euo pipefail
 
@@ -62,46 +71,66 @@ copy_dir_if_exists() {
   fi
 }
 
+sqlite_backup_if_exists() {
+  local src="$1" dest_subdir="$2"
+  if [ -f "$src" ]; then
+    mkdir -p "${DEST}/${dest_subdir}"
+    sqlite3 "$src" ".backup '${DEST}/${dest_subdir}/$(basename "$src")'"
+    echo "  + ${dest_subdir}/$(basename "$src") (sqlite3 .backup)"
+  fi
+}
+
 # --- 1. Secrets & environment ---
 
 echo "Secrets & environment:"
 copy_if_exists "${NANOCLAW_DIR}/.env" "."
 copy_if_exists "${NANOCLAW_DIR}/.gitleaks-local.toml" "."
 
-# --- 2. Database (consistent snapshot via sqlite3 .backup) ---
+# --- 2. Central database (consistent snapshot via sqlite3 .backup) ---
 
-echo "Database:"
-DB="${NANOCLAW_DIR}/store/messages.db"
-if [ -f "$DB" ]; then
-  mkdir -p "${DEST}/store"
-  sqlite3 "$DB" ".backup '${DEST}/store/messages.db'"
-  echo "  + store/messages.db (sqlite3 .backup)"
-else
-  echo "  ! store/messages.db not found — skipping"
+echo "Central database:"
+sqlite_backup_if_exists "${NANOCLAW_DIR}/data/v2.db" "data"
+
+# --- 3. Per-session databases ---
+# Layout: data/v2-sessions/<agent_group_id>/<session_id>/{inbound,outbound}.db
+
+echo "Per-session databases:"
+if [ -d "${NANOCLAW_DIR}/data/v2-sessions" ]; then
+  for agent_group_dir in "${NANOCLAW_DIR}"/data/v2-sessions/*/; do
+    [ -d "$agent_group_dir" ] || continue
+    agent_group_id="$(basename "$agent_group_dir")"
+    for session_dir in "${agent_group_dir}"*/; do
+      [ -d "$session_dir" ] || continue
+      session_id="$(basename "$session_dir")"
+      rel="data/v2-sessions/${agent_group_id}/${session_id}"
+      sqlite_backup_if_exists "${session_dir}inbound.db"  "$rel"
+      sqlite_backup_if_exists "${session_dir}outbound.db" "$rel"
+    done
+  done
 fi
 
-# --- 3. WhatsApp auth ---
+# --- 4. WhatsApp auth (channels-branch adapter writes here) ---
 
-echo "WhatsApp auth:"
+echo "WhatsApp auth (if installed):"
 copy_dir_if_exists "${NANOCLAW_DIR}/store/auth" "store"
 copy_if_exists "${NANOCLAW_DIR}/store/auth-status.txt" "store"
 
-# --- 4. TLS certificates ---
+# --- 5. TLS certificates ---
 
 echo "TLS certificates:"
 copy_dir_if_exists "${NANOCLAW_DIR}/data/tls" "data"
 
-# --- 5. Site-specific configuration ---
+# --- 6. Site-specific configuration ---
 
 echo "Configuration:"
-# Back up all site-specific JSON config files in data/
 for cfg in "${NANOCLAW_DIR}"/data/*.json; do
   [ -f "$cfg" ] || continue
   copy_if_exists "$cfg" "data"
 done
+copy_if_exists "${NANOCLAW_DIR}/data/install-id" "data"
 copy_dir_if_exists "${NANOCLAW_DIR}/data/env" "data"
 
-# --- 6. Gitignored group files (OLLAMA.md, SLACK.md, etc.) ---
+# --- 7. Gitignored group files (OLLAMA.md, SLACK.md, etc.) ---
 
 echo "Group-specific files (gitignored):"
 cd "$NANOCLAW_DIR"
@@ -115,7 +144,7 @@ git ls-files --others --ignored --exclude-standard -- groups/ \
       echo "  + $f"
     done
 
-# --- 7. PagePilot run history (small, useful for continuity) ---
+# --- 8. PagePilot run history (small, useful for continuity) ---
 
 echo "PagePilot run history:"
 for pp_dir in "${NANOCLAW_DIR}"/groups/*/.pagepilot; do
@@ -124,7 +153,7 @@ for pp_dir in "${NANOCLAW_DIR}"/groups/*/.pagepilot; do
   copy_dir_if_exists "$pp_dir" "$(dirname "$rel")"
 done
 
-# --- 8. Systemd service files ---
+# --- 9. Systemd service files ---
 
 echo "Systemd services:"
 SYSTEMD_DIR="${HOME}/.config/systemd/user"
@@ -137,7 +166,7 @@ if [ -d "$SYSTEMD_DIR" ]; then
   done
 fi
 
-# --- 9. Logs (optional) ---
+# --- 10. Logs (optional) ---
 
 if [ "$INCLUDE_LOGS" = true ]; then
   echo "Logs:"
@@ -154,7 +183,7 @@ else
   echo "Logs: skipped (use --include-logs to include)"
 fi
 
-# --- 10. Create archive ---
+# --- 11. Create archive ---
 
 mkdir -p "$BACKUP_DIR"
 ARCHIVE="${BACKUP_DIR}/nanoclaw-backup-${TIMESTAMP}.tar.gz"
@@ -164,12 +193,12 @@ SIZE=$(du -sh "$ARCHIVE" | cut -f1)
 echo ""
 echo "Backup complete: $ARCHIVE ($SIZE)"
 
-# --- 11. Verify archive ---
+# --- 12. Verify archive ---
 
 FILE_COUNT=$(tar tzf "$ARCHIVE" | wc -l)
 echo "Archive contains $FILE_COUNT files"
 
-# --- 12. Prune old backups (keep last 5) ---
+# --- 13. Prune old backups (keep last 5) ---
 
 KEPT=0
 for old in $(ls -t "${BACKUP_DIR}"/nanoclaw-backup-*.tar.gz 2>/dev/null); do

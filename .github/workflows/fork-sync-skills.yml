@@ -36,10 +36,14 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
 
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
+          cache: pnpm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.12
 
       - name: Configure git
         run: |
@@ -49,18 +53,15 @@ jobs:
       - name: Sync with upstream main
         id: sync
         run: |
-          # Add upstream remote
           git remote add upstream https://github.com/qwibitai/nanoclaw.git
           git fetch upstream main
 
-          # Check if upstream has new commits
           if git merge-base --is-ancestor upstream/main HEAD; then
             echo "Already up to date with upstream main."
             echo "synced=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # Merge upstream main into fork's main
           if ! git merge upstream/main --no-edit; then
             echo "::error::Failed to merge upstream/main into fork main — conflicts detected"
             git merge --abort
@@ -69,18 +70,35 @@ jobs:
             exit 0
           fi
 
-          # Validate build
-          npm ci
-          if ! npm run build; then
-            echo "::error::Build failed after merging upstream/main"
+          pnpm install --frozen-lockfile
+          (cd container/agent-runner && bun install --frozen-lockfile)
+
+          if ! pnpm run build; then
+            echo "::error::Host build failed after merging upstream/main"
             git reset --hard "origin/main"
             echo "synced=false" >> "$GITHUB_OUTPUT"
             echo "sync_failed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          if ! npm test 2>/dev/null; then
-            echo "::error::Tests failed after merging upstream/main"
+          if ! pnpm exec tsc -p container/agent-runner/tsconfig.json --noEmit; then
+            echo "::error::Container typecheck failed after merging upstream/main"
+            git reset --hard "origin/main"
+            echo "synced=false" >> "$GITHUB_OUTPUT"
+            echo "sync_failed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! pnpm test 2>/dev/null; then
+            echo "::error::Host tests failed after merging upstream/main"
+            git reset --hard "origin/main"
+            echo "synced=false" >> "$GITHUB_OUTPUT"
+            echo "sync_failed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! (cd container/agent-runner && bun test) 2>/dev/null; then
+            echo "::error::Container tests failed after merging upstream/main"
             git reset --hard "origin/main"
             echo "synced=false" >> "$GITHUB_OUTPUT"
             echo "sync_failed=true" >> "$GITHUB_OUTPUT"
@@ -90,25 +108,34 @@ jobs:
           git push origin main
           echo "synced=true" >> "$GITHUB_OUTPUT"
 
-      - name: Merge main into skill branches
+      - name: Merge main into skill + long-lived branches
         id: merge
         run: |
-          # Re-fetch to pick up any changes pushed since job start
           git fetch origin
 
           FAILED=""
           SUCCEEDED=""
 
-          # List all remote skill branches
+          # Skill branches (origin/skill/*) plus the v2 long-lived
+          # sibling branches `channels` and `providers`.
           SKILL_BRANCHES=$(git branch -r --list 'origin/skill/*' | sed 's|origin/||' | xargs)
+          LONG_LIVED="channels providers"
 
-          if [ -z "$SKILL_BRANCHES" ]; then
-            echo "No skill branches found."
+          ALL_BRANCHES="$SKILL_BRANCHES"
+          for B in $LONG_LIVED; do
+            if git rev-parse --verify "origin/$B" >/dev/null 2>&1; then
+              ALL_BRANCHES="$ALL_BRANCHES $B"
+            fi
+          done
+          ALL_BRANCHES=$(echo "$ALL_BRANCHES" | xargs)
+
+          if [ -z "$ALL_BRANCHES" ]; then
+            echo "No skill or long-lived branches found."
             exit 0
           fi
 
-          for BRANCH in $SKILL_BRANCHES; do
-            SKILL_NAME=$(echo "$BRANCH" | sed 's|skill/||')
+          for BRANCH in $ALL_BRANCHES; do
+            SHORT_NAME=$(echo "$BRANCH" | sed 's|skill/||')
             echo ""
             echo "=== Processing $BRANCH ==="
 
@@ -117,35 +144,35 @@ jobs:
             if ! git merge main --no-edit; then
               echo "::warning::Merge conflict in $BRANCH"
               git merge --abort
-              FAILED="$FAILED $SKILL_NAME"
+              FAILED="$FAILED $SHORT_NAME"
               continue
             fi
 
-            # Check if there's anything new to push
             if git diff --quiet "origin/$BRANCH"; then
               echo "$BRANCH is already up to date with main."
-              SUCCEEDED="$SUCCEEDED $SKILL_NAME"
+              SUCCEEDED="$SUCCEEDED $SHORT_NAME"
               continue
             fi
 
-            npm ci
+            pnpm install --frozen-lockfile
+            (cd container/agent-runner && bun install --frozen-lockfile) || true
 
-            if ! npm run build; then
-              echo "::warning::Build failed for $BRANCH"
+            if ! pnpm run build; then
+              echo "::warning::Host build failed for $BRANCH"
               git reset --hard "origin/$BRANCH"
-              FAILED="$FAILED $SKILL_NAME"
+              FAILED="$FAILED $SHORT_NAME"
               continue
             fi
 
-            if ! npm test 2>/dev/null; then
-              echo "::warning::Tests failed for $BRANCH"
+            if ! pnpm test 2>/dev/null; then
+              echo "::warning::Host tests failed for $BRANCH"
               git reset --hard "origin/$BRANCH"
-              FAILED="$FAILED $SKILL_NAME"
+              FAILED="$FAILED $SHORT_NAME"
               continue
             fi
 
             git push origin "$BRANCH"
-            SUCCEEDED="$SUCCEEDED $SKILL_NAME"
+            SUCCEEDED="$SUCCEEDED $SHORT_NAME"
             echo "$BRANCH merged and pushed successfully."
           done
 
@@ -176,28 +203,29 @@ jobs:
                 'git fetch upstream main',
                 'git merge upstream/main',
                 '# resolve conflicts',
-                'npm run build && npm test',
+                'pnpm install --frozen-lockfile',
+                'pnpm run build && pnpm test',
                 'git push',
                 '```',
               ].join('\n'),
               labels: ['upstream-sync']
             });
 
-      - name: Open issue for failed skill merges
+      - name: Open issue for failed branch merges
         if: steps.merge.outputs.failed != ''
         uses: actions/github-script@v7
         with:
           script: |
             const failed = '${{ steps.merge.outputs.failed }}'.trim().split(/\s+/);
             const body = [
-              `The merge-forward workflow failed to merge \`main\` into the following skill branches:`,
+              `The merge-forward workflow failed to merge \`main\` into the following branches:`,
               '',
-              ...failed.map(s => `- \`skill/${s}\`: merge conflict, build failure, or test failure`),
+              ...failed.map(s => `- \`${s}\`: merge conflict, build failure, or test failure`),
               '',
               'Please resolve manually:',
               '```bash',
               ...failed.map(s => [
-                `git checkout skill/${s}`,
+                `git checkout ${s}`,
                 `git merge main`,
                 `# resolve conflicts, then: git push`,
                 ''
@@ -208,7 +236,7 @@ jobs:
             await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: `Merge-forward failed for ${failed.length} skill branch(es)`,
+              title: `Merge-forward failed for ${failed.length} branch(es)`,
               body,
               labels: ['skill-maintenance']
             });

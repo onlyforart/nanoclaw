@@ -1,9 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, mock, beforeEach, spyOn, setSystemTime } from 'bun:test';
 
-const mockChat = vi.fn();
-const mockList = vi.fn().mockResolvedValue({ models: [] });
+const mockChat = mock();
+const mockList = mock().mockResolvedValue({ models: [] });
 
-vi.mock('ollama', () => {
+mock.module('ollama', () => {
   class MockOllama {
     chat = mockChat;
     list = mockList;
@@ -35,7 +35,7 @@ function baseOptions(overrides?: Partial<Parameters<typeof runOllamaChat>[1]>) {
     timeoutMs: 300_000,
     tools: [],
     toolNameMap: new Map(),
-    executeTool: vi.fn(),
+    executeTool: mock(),
     ...overrides,
   };
 }
@@ -108,7 +108,7 @@ describe('runOllamaChat', () => {
   });
 
   it('executes tool calls and loops back to model', async () => {
-    const executeTool = vi.fn().mockResolvedValue('tool result text');
+    const executeTool = mock().mockResolvedValue('tool result text');
 
     const toolNameMap = new Map([
       ['server__my_tool', { mcpTool: 'mcp__server__my_tool', serverName: 'server' }],
@@ -141,7 +141,7 @@ describe('runOllamaChat', () => {
   });
 
   it('logs tool result to stderr', async () => {
-    const executeTool = vi.fn().mockResolvedValue('the tool output data');
+    const executeTool = mock().mockResolvedValue('the tool output data');
     const toolNameMap = new Map([
       ['server__my_tool', { mcpTool: 'mcp__server__my_tool', serverName: 'server' }],
     ]);
@@ -159,7 +159,7 @@ describe('runOllamaChat', () => {
       message: { role: 'assistant', content: 'done' },
     }));
 
-    const stderrSpy = vi.spyOn(console, 'error');
+    const stderrSpy = spyOn(console, 'error');
     await runOllamaChat('test', baseOptions({ executeTool, toolNameMap }));
 
     const resultLog = stderrSpy.mock.calls.find(
@@ -172,7 +172,7 @@ describe('runOllamaChat', () => {
 
   it('truncates long tool results in log', async () => {
     const longResult = 'x'.repeat(3000);
-    const executeTool = vi.fn().mockResolvedValue(longResult);
+    const executeTool = mock().mockResolvedValue(longResult);
     const toolNameMap = new Map([
       ['server__my_tool', { mcpTool: 'mcp__server__my_tool', serverName: 'server' }],
     ]);
@@ -190,7 +190,7 @@ describe('runOllamaChat', () => {
       message: { role: 'assistant', content: 'done' },
     }));
 
-    const stderrSpy = vi.spyOn(console, 'error');
+    const stderrSpy = spyOn(console, 'error');
     await runOllamaChat('test', baseOptions({ executeTool, toolNameMap }));
 
     const resultLog = stderrSpy.mock.calls.find(
@@ -204,7 +204,7 @@ describe('runOllamaChat', () => {
   });
 
   it('handles tool execution errors gracefully', async () => {
-    const executeTool = vi.fn().mockRejectedValue(new Error('connection refused'));
+    const executeTool = mock().mockRejectedValue(new Error('connection refused'));
 
     // Model calls a tool
     mockChat.mockResolvedValueOnce(streamOf({
@@ -247,7 +247,7 @@ describe('runOllamaChat', () => {
     }));
 
     let callCount = 0;
-    const executeTool = vi.fn().mockImplementation(async () => `result-${++callCount}`);
+    const executeTool = mock().mockImplementation(async () => `result-${++callCount}`);
 
     const result = await runOllamaChat('loop', baseOptions({
       maxIterations: 3,
@@ -260,16 +260,14 @@ describe('runOllamaChat', () => {
   });
 
   it('stops at timeout', async () => {
-    // Simulate time passing by making chat take a long time
-    vi.useFakeTimers();
-    const realDateNow = Date.now;
+    // Simulate time passing by advancing system time after the first chat round
+    const startMs = Date.now();
 
     let callCount = 0;
     mockChat.mockImplementation(async () => {
       callCount++;
-      // After first call, advance time past timeout
       if (callCount === 1) {
-        vi.setSystemTime(realDateNow() + 400_000);
+        setSystemTime(new Date(startMs + 400_000));
       }
       return streamOf({
         message: {
@@ -280,7 +278,7 @@ describe('runOllamaChat', () => {
       });
     });
 
-    const executeTool = vi.fn().mockResolvedValue('ok');
+    const executeTool = mock().mockResolvedValue('ok');
 
     const result = await runOllamaChat('test', baseOptions({
       timeoutMs: 300_000,
@@ -290,7 +288,7 @@ describe('runOllamaChat', () => {
     expect(result.timedOut).toBe(true);
     expect(result.response).toBe('partial');
 
-    vi.useRealTimers();
+    setSystemTime();
   });
 
   it('returns empty string when model produces null content', async () => {
@@ -303,7 +301,7 @@ describe('runOllamaChat', () => {
   });
 
   it('calls onStatus callback during execution', async () => {
-    const onStatus = vi.fn();
+    const onStatus = mock();
 
     mockChat.mockResolvedValueOnce(streamOf({
       message: { role: 'assistant', content: 'done' },
@@ -316,7 +314,7 @@ describe('runOllamaChat', () => {
 
   describe('argument normalization', () => {
     it('passes object arguments directly to executeTool', async () => {
-      const executeTool = vi.fn().mockResolvedValue('ok');
+      const executeTool = mock().mockResolvedValue('ok');
       const toolNameMap = new Map([
         ['srv__tool', { mcpTool: 'mcp__srv__tool', serverName: 'srv' }],
       ]);
@@ -340,7 +338,7 @@ describe('runOllamaChat', () => {
     });
 
     it('parses string arguments (double-encoded JSON from model)', async () => {
-      const executeTool = vi.fn().mockResolvedValue('ok');
+      const executeTool = mock().mockResolvedValue('ok');
       const toolNameMap = new Map([
         ['srv__tool', { mcpTool: 'mcp__srv__tool', serverName: 'srv' }],
       ]);
@@ -365,7 +363,7 @@ describe('runOllamaChat', () => {
     });
 
     it('falls back to empty object for unparseable string arguments', async () => {
-      const executeTool = vi.fn().mockResolvedValue('ok');
+      const executeTool = mock().mockResolvedValue('ok');
 
       mockChat.mockResolvedValueOnce(streamOf({
         message: {
@@ -386,7 +384,7 @@ describe('runOllamaChat', () => {
     });
 
     it('falls back to empty object for null/undefined arguments', async () => {
-      const executeTool = vi.fn().mockResolvedValue('ok');
+      const executeTool = mock().mockResolvedValue('ok');
 
       mockChat.mockResolvedValueOnce(streamOf({
         message: {
@@ -410,7 +408,7 @@ describe('runOllamaChat', () => {
 
 describe('text-only response after tool calls', () => {
   it('treats text-only response as final even when it contains warning keywords', async () => {
-    const executeTool = vi.fn().mockResolvedValue('ok');
+    const executeTool = mock().mockResolvedValue('ok');
     const toolNameMap = new Map([
       ['srv__check', { mcpTool: 'mcp__srv__check', serverName: 'srv' }],
     ]);
@@ -445,7 +443,7 @@ describe('text-only response after tool calls', () => {
   });
 
   it('treats text-only response as final when result mentions 0 anomalies', async () => {
-    const executeTool = vi.fn().mockResolvedValue('ok');
+    const executeTool = mock().mockResolvedValue('ok');
     const toolNameMap = new Map([
       ['srv__check', { mcpTool: 'mcp__srv__check', serverName: 'srv' }],
     ]);
@@ -479,7 +477,7 @@ describe('text-only response after tool calls', () => {
 
 describe('lazy skill injection', () => {
   it('injects skill content as system message on first tool call from a server', async () => {
-    const executeTool = vi.fn().mockResolvedValue('{"pods": []}');
+    const executeTool = mock().mockResolvedValue('{"pods": []}');
     const toolNameMap = new Map([
       ['eks-kubectl__list_pods', { mcpTool: 'mcp__eks-kubectl__list_pods', serverName: 'eks-kubectl' }],
     ]);
@@ -521,7 +519,7 @@ describe('lazy skill injection', () => {
   });
 
   it('does not inject skill content more than once for the same server', async () => {
-    const executeTool = vi.fn().mockResolvedValue('ok');
+    const executeTool = mock().mockResolvedValue('ok');
     const toolNameMap = new Map([
       ['eks-kubectl__list_pods', { mcpTool: 'mcp__eks-kubectl__list_pods', serverName: 'eks-kubectl' }],
     ]);
@@ -569,7 +567,7 @@ describe('lazy skill injection', () => {
   });
 
   it('does not inject any skill when serverSkills is not provided', async () => {
-    const executeTool = vi.fn().mockResolvedValue('ok');
+    const executeTool = mock().mockResolvedValue('ok');
     const toolNameMap = new Map([
       ['eks-kubectl__list_pods', { mcpTool: 'mcp__eks-kubectl__list_pods', serverName: 'eks-kubectl' }],
     ]);
@@ -602,7 +600,7 @@ describe('lazy skill injection', () => {
   });
 
   it('injects skill before tool result so model has context for interpretation', async () => {
-    const executeTool = vi.fn().mockResolvedValue('{"pods": []}');
+    const executeTool = mock().mockResolvedValue('{"pods": []}');
     const toolNameMap = new Map([
       ['eks-kubectl__list_pods', { mcpTool: 'mcp__eks-kubectl__list_pods', serverName: 'eks-kubectl' }],
     ]);
@@ -645,7 +643,7 @@ describe('lazy skill injection', () => {
 
 describe('repeated tool failure detection', () => {
   it('breaks out early when same tool returns same result 3 times in a row', async () => {
-    const executeTool = vi.fn().mockResolvedValue('HTTP 404 Not Found');
+    const executeTool = mock().mockResolvedValue('HTTP 404 Not Found');
     const toolNameMap = new Map([
       ['web-fetch__web_fetch', { mcpTool: 'mcp__web-fetch__web_fetch', serverName: 'web-fetch' }],
     ]);
@@ -677,7 +675,7 @@ describe('repeated tool failure detection', () => {
 
   it('does not break when same tool returns different results each time', async () => {
     let callNum = 0;
-    const executeTool = vi.fn().mockImplementation(async () => {
+    const executeTool = mock().mockImplementation(async () => {
       callNum++;
       return `Result ${callNum}`;
     });
@@ -714,7 +712,7 @@ describe('repeated tool failure detection', () => {
   });
 
   it('does not break when different tools return the same result', async () => {
-    const executeTool = vi.fn().mockResolvedValue('HTTP 404 Not Found');
+    const executeTool = mock().mockResolvedValue('HTTP 404 Not Found');
     const toolNameMap = new Map([
       ['srv__tool_a', { mcpTool: 'mcp__srv__tool_a', serverName: 'srv' }],
       ['srv__tool_b', { mcpTool: 'mcp__srv__tool_b', serverName: 'srv' }],
@@ -750,7 +748,7 @@ describe('repeated tool failure detection', () => {
   });
 
   it('resets streak when a different tool is called mid-streak', async () => {
-    const executeTool = vi.fn().mockResolvedValue('HTTP 404 Not Found');
+    const executeTool = mock().mockResolvedValue('HTTP 404 Not Found');
     const toolNameMap = new Map([
       ['srv__fetch', { mcpTool: 'mcp__srv__fetch', serverName: 'srv' }],
       ['srv__other', { mcpTool: 'mcp__srv__other', serverName: 'srv' }],
@@ -813,7 +811,7 @@ describe('thinking model support', () => {
       },
     }));
 
-    const executeTool = vi.fn().mockResolvedValue('{"status":"ok"}');
+    const executeTool = mock().mockResolvedValue('{"status":"ok"}');
     const toolNameMap = new Map([
       ['srv__check', { mcpTool: 'mcp__srv__check', serverName: 'srv' }],
     ]);
@@ -849,7 +847,7 @@ describe('thinking model support', () => {
       },
     }));
 
-    const executeTool = vi.fn().mockResolvedValue('ok');
+    const executeTool = mock().mockResolvedValue('ok');
     const toolNameMap = new Map([
       ['srv__check', { mcpTool: 'mcp__srv__check', serverName: 'srv' }],
     ]);
@@ -877,7 +875,7 @@ describe('thinking model support', () => {
   });
 
   it('calls onThinking callback each round with thinking content', async () => {
-    const onThinking = vi.fn();
+    const onThinking = mock();
 
     // Round 1: thinking with tool call
     mockChat.mockResolvedValueOnce(streamOf({
@@ -897,7 +895,7 @@ describe('thinking model support', () => {
       },
     }));
 
-    const executeTool = vi.fn().mockResolvedValue('ok');
+    const executeTool = mock().mockResolvedValue('ok');
     const toolNameMap = new Map([
       ['srv__check', { mcpTool: 'mcp__srv__check', serverName: 'srv' }],
     ]);
@@ -918,7 +916,7 @@ describe('thinking model support', () => {
   });
 
   it('does not call onThinking when model returns no thinking', async () => {
-    const onThinking = vi.fn();
+    const onThinking = mock();
 
     mockChat.mockResolvedValueOnce(streamOf({
       message: { role: 'assistant', content: 'Just a normal response' },
@@ -938,7 +936,7 @@ describe('thinking model support', () => {
       },
     }));
 
-    const onThinking = vi.fn();
+    const onThinking = mock();
     const result = await runOllamaChat('test', baseOptions({ onThinking }));
 
     expect(result.response).toBe('The actual answer');

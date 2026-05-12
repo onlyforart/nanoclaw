@@ -71,18 +71,14 @@ describe('markdownToBlocks', () => {
   });
 
   it('handles mixed content', () => {
-    const md =
-      '## Title\n\nSome text.\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\nMore text.';
+    const md = '## Title\n\nSome text.\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\nMore text.';
     const blocks = markdownToBlocks(md);
     expect(blocks.length).toBeGreaterThanOrEqual(3);
     expect(blocks[0].type).toBe('header');
   });
 
   it('respects 50-block limit', () => {
-    const lines = Array.from(
-      { length: 100 },
-      (_, i) => `## Heading ${i}\n\nPara ${i}`,
-    ).join('\n\n');
+    const lines = Array.from({ length: 100 }, (_, i) => `## Heading ${i}\n\nPara ${i}`).join('\n\n');
     const blocks = markdownToBlocks(lines);
     expect(blocks.length).toBeLessThanOrEqual(50);
   });
@@ -129,19 +125,16 @@ describe('tableToCodeBlock', () => {
     expect(result).toMatch(/\n```$/);
     expect(result).toContain('NAME');
     expect(result).toContain('VALUE');
-    // Data rows unchanged
     expect(result).toContain('BB');
-    // No separator row of dashes
     expect(result).not.toMatch(/^-+\s+-+$/m);
   });
 
   it('strips markdown separator rows', () => {
     const table = '| H1 | H2 |\n|:---|---:|\n| a | b |';
     const result = tableToCodeBlock(table);
-    // No markdown-style separator (|---|---| or alignment markers)
     expect(result).not.toMatch(/[-:]{3,}/);
     const lines = result.split('\n').filter((l) => l.trim());
-    expect(lines.length).toBe(4); // ```, header, data, ```
+    expect(lines.length).toBe(4);
   });
 });
 
@@ -151,9 +144,7 @@ describe('convertInlineFormatting', () => {
   });
 
   it('converts [text](url) to <url|text>', () => {
-    expect(convertInlineFormatting('[click](https://example.com)')).toBe(
-      '<https://example.com|click>',
-    );
+    expect(convertInlineFormatting('[click](https://example.com)')).toBe('<https://example.com|click>');
   });
 
   it('converts ~~strike~~ to ~strike~', () => {
