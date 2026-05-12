@@ -361,12 +361,13 @@ export function createTask(task: {
 }
 
 export function getTasksByGroup(groupFolder: string): TaskRow[] {
-  // pipeline_scheduled_tasks: tasks owned by the pipeline plugin running for
-  // this group. Both pipeline:* system tasks and any user-scheduled rows are
-  // included so the agent-group detail page is a complete view of "tasks
-  // running here."
+  // pipeline_scheduled_tasks: user-scheduled host-pipeline rows for this group.
+  // pipeline:* system tasks (sanitiser, monitor, etc.) are excluded — they
+  // belong on the Pipeline overview page, not on the operator's chat group page.
   const pipelineRows = db
-    .prepare(`${TASK_SELECT} WHERE group_folder = ? ORDER BY next_run`)
+    .prepare(
+      `${TASK_SELECT} WHERE group_folder = ? AND id NOT LIKE 'pipeline:%' ORDER BY next_run`,
+    )
     .all(groupFolder) as TaskRow[];
 
   // Container-mode tasks live in per-session inbound.db `messages_in` rows
@@ -511,10 +512,7 @@ export function getTaskById(id: string): TaskRow | undefined {
     .prepare(`${TASK_SELECT} WHERE id = ?`)
     .get(id) as TaskRow | undefined;
   if (pipelineRow) return pipelineRow;
-  // Container task — definition lives in a session inbound.db. Resolve the
-  // owning agent group via v1's series convention (id == series_id at row
-  // creation, then the row id passed here may be a recurrence instance —
-  // try matching either way).
+  // Container task — definition lives in a session inbound.db.
   return findContainerTaskById(id);
 }
 
